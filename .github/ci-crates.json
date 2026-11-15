@@ -61,6 +61,11 @@
     "clippy": true
   },
   {
+    "crate": "atlas-gh",
+    "clippy": true,
+    "cross": true
+  },
+  {
     "crate": "atlas-git",
     "clippy": true,
     "cross": true

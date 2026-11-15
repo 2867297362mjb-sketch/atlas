@@ -28,10 +28,10 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, SystemTime};
 
+use atlas_gh::{GhCommand, GhError, GhOutput, Intent};
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
-use super::gh::classify_no_response;
 use super::model::PrError;
 
 /// A local `git` step: a worktree added or removed, a ref read.
@@ -153,6 +153,12 @@ pub(super) fn batch_ssh_command(configured: Option<&str>) -> String {
     }
 }
 
+/// What keeps `git` from asking a terminal nobody can see, here and under
+/// the `git` that `gh pr checkout` runs. The second is Git Credential
+/// Manager's own prompt, which ignores the first.
+const GIT_NO_PROMPT: [(&str, &str); 2] =
+    [("GIT_TERMINAL_PROMPT", "0"), ("GCM_INTERACTIVE", "never")];
+
 /// Run `program` in `cwd`, killed past `timeout`. Async process handling:
 /// the child is killed on drop, so the timeout dropping the future is the
 /// kill.
@@ -166,16 +172,25 @@ pub(super) async fn run(
 }
 
 /// [`run`] for a step that talks to the remote: ssh is told not to prompt
-/// ([`batch_ssh_command`]). A user who set `GIT_SSH` (a program, not a
-/// command line) keeps it as it is.
+/// ([`ssh_command`]).
 pub(super) async fn run_networked(
     cwd: &Path,
     program: &str,
     args: &[&str],
     timeout: Duration,
 ) -> Result<String, RunError> {
+    match ssh_command(cwd).await {
+        Some(ssh) => run_with_env(cwd, program, args, timeout, &[("GIT_SSH_COMMAND", &ssh)]).await,
+        None => run(cwd, program, args, timeout).await,
+    }
+}
+
+/// The `GIT_SSH_COMMAND` a step that talks to the remote runs under
+/// ([`batch_ssh_command`]). `None` for a user who set `GIT_SSH` (a program,
+/// not a command line), who keeps it as it is.
+async fn ssh_command(cwd: &Path) -> Option<String> {
     if std::env::var_os("GIT_SSH").is_some() {
-        return run(cwd, program, args, timeout).await;
+        return None;
     }
     let configured = match std::env::var("GIT_SSH_COMMAND") {
         Ok(command) => Some(command),
@@ -189,8 +204,7 @@ pub(super) async fn run_networked(
         .ok()
         .map(|s| s.trim().to_string()),
     };
-    let ssh = batch_ssh_command(configured.as_deref());
-    run_with_env(cwd, program, args, timeout, &[("GIT_SSH_COMMAND", &ssh)]).await
+    Some(batch_ssh_command(configured.as_deref()))
 }
 
 async fn run_with_env(
@@ -203,11 +217,7 @@ async fn run_with_env(
     let mut cmd = atlas_process::async_command(program);
     cmd.args(args)
         .current_dir(cwd)
-        .env("GH_PROMPT_DISABLED", "1")
-        .env("GH_NO_UPDATE_NOTIFIER", "1")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        // Git Credential Manager's own prompt, which ignores the above.
-        .env("GCM_INTERACTIVE", "never")
+        .envs(GIT_NO_PROMPT)
         .env("NO_COLOR", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -252,28 +262,39 @@ pub(super) async fn git(cwd: &Path, args: &[&str]) -> Result<String, RunError> {
         .map(|s| s.trim_end().to_string())
 }
 
-/// A failed `gh pr checkout`, as the frontend tells them apart: a signed-out
-/// `gh` asks the user to sign in, not to try again.
-pub(super) fn checkout_error(error: &RunError) -> PrError {
-    match error {
-        RunError::NotInstalled => PrError::NotInstalled,
-        RunError::TimedOut => PrError::Network {
-            message: "gh took too long to check out the pull request.".into(),
-        },
-        RunError::Failed { exit, stderr } => match classify_no_response(*exit, stderr) {
-            e @ (PrError::NotAuthenticated | PrError::RateLimited { .. }) => e,
-            _ => PrError::failed(format!(
-                "gh could not check out the pull request: {}",
-                error.line()
-            )),
-        },
+/// A `gh pr checkout` that did not succeed, as the frontend tells them
+/// apart: a signed-out `gh` asks the user to sign in, not to try again.
+pub(super) fn checkout_error(result: Result<GhOutput, GhError>) -> PrError {
+    let output = match result {
+        Ok(output) => output,
+        // The one network failure with no output is the timeout.
+        Err(GhError::Network { .. }) => {
+            return PrError::Network {
+                message: "gh took too long to check out the pull request.".into(),
+            }
+        }
+        Err(e) => return e.into(),
+    };
+    match output.failure() {
+        e @ (GhError::NotAuthenticated | GhError::RateLimited { .. }) => e.into(),
+        // `gh` hands over to `git`, whose reason is the last line it wrote,
+        // after its progress.
+        _ => PrError::failed(format!(
+            "gh could not check out the pull request: {}",
+            output
+                .stderr
+                .lines()
+                .map(str::trim)
+                .rfind(|l| !l.is_empty())
+                .unwrap_or("failed")
+        )),
     }
 }
 
 /// What kind of failure a `gh` step was, for a log line: never its stderr,
 /// which can carry a branch or repository name.
-fn failure_kind(error: &RunError) -> &'static str {
-    match checkout_error(error) {
+fn failure_kind(error: &PrError) -> &'static str {
+    match error {
         PrError::NotInstalled => "not-installed",
         PrError::NotAuthenticated => "not-authenticated",
         PrError::RateLimited { .. } => "rate-limited",
@@ -393,15 +414,27 @@ pub(super) fn checkout_slug(root: &Path) -> String {
     format!("{name}-{hash:08x}")
 }
 
-async fn gh_checkout(cwd: &Path, number: u64, branch: &str) -> Result<String, RunError> {
+/// `gh pr checkout` in `cwd`. It runs for as long as the fetch does, so it
+/// holds none of the API's permits, and neither `gh` nor the `git` under it
+/// can prompt.
+async fn gh_checkout(cwd: &Path, number: u64, branch: &str) -> Result<(), PrError> {
     let n = number.to_string();
-    run_networked(
+    let mut command = GhCommand::new(
         cwd,
-        "gh",
-        &["pr", "checkout", &n, "--branch", branch],
-        NETWORK_TIMEOUT,
+        ["pr", "checkout", &n, "--branch", branch],
+        Intent::LongWrite,
     )
-    .await
+    .timeout(NETWORK_TIMEOUT);
+    for (key, value) in GIT_NO_PROMPT {
+        command = command.env(key, value);
+    }
+    if let Some(ssh) = ssh_command(cwd).await {
+        command = command.env("GIT_SSH_COMMAND", ssh);
+    }
+    match command.output().await {
+        Ok(output) if output.success() => Ok(()),
+        other => Err(checkout_error(other)),
+    }
 }
 
 async fn prepare(
@@ -481,7 +514,7 @@ async fn prepare(
     if let Err(e) = gh_checkout(&dir, number, &branch).await {
         let _ = git(&root, &["worktree", "remove", "--force", &dir_str]).await;
         let _ = std::fs::remove_dir_all(&dir);
-        return Err(checkout_error(&e));
+        return Err(e);
     }
     let dir = canonical(&dir);
     let cwd = dir.to_string_lossy().into_owned();
@@ -561,9 +594,7 @@ async fn prepare_in_place(
     if !status.trim().is_empty() {
         return Err(PrError::invalid(DIRTY_TREE_MESSAGE));
     }
-    gh_checkout(&root, number, &branch)
-        .await
-        .map_err(|e| checkout_error(&e))?;
+    gh_checkout(&root, number, &branch).await?;
     Ok(PrCheckout {
         branch,
         worktree_path: None,
@@ -761,26 +792,34 @@ mod tests {
 
     #[test]
     fn a_signed_out_gh_reads_as_not_authenticated() {
-        let signed_out = RunError::Failed {
-            exit: Some(4),
-            stderr: "To get started with GitHub CLI, please run:  gh auth login\n".into(),
+        let exited = |exit, stderr: &str| {
+            Ok(GhOutput {
+                exit: Some(exit),
+                stdout: Vec::new(),
+                stderr: stderr.into(),
+            })
         };
-        assert_eq!(checkout_error(&signed_out), PrError::NotAuthenticated);
+        let signed_out = checkout_error(exited(
+            4,
+            "To get started with GitHub CLI, please run:  gh auth login\n",
+        ));
+        assert_eq!(signed_out, PrError::NotAuthenticated);
         assert_eq!(failure_kind(&signed_out), "not-authenticated");
         assert_eq!(
-            checkout_error(&RunError::NotInstalled),
+            checkout_error(Err(GhError::NotInstalled)),
             PrError::NotInstalled
         );
-        assert!(matches!(
-            checkout_error(&RunError::TimedOut),
-            PrError::Network { .. }
+        let timed_out = checkout_error(Err(GhError::Network {
+            message: "GitHub did not answer in time.".into(),
+        }));
+        assert_eq!(failure_kind(&timed_out), "timed-out");
+        // git's reason is the last line, after its progress.
+        let other = checkout_error(exited(
+            1,
+            "Cloning into 'x'...\nfatal: couldn't find remote ref refs/heads/x\n",
         ));
-        let other = RunError::Failed {
-            exit: Some(1),
-            stderr: "fatal: couldn't find remote ref refs/heads/x\n".into(),
-        };
         assert_eq!(
-            checkout_error(&other),
+            other,
             PrError::failed(
                 "gh could not check out the pull request: fatal: couldn't find remote ref refs/heads/x"
             )

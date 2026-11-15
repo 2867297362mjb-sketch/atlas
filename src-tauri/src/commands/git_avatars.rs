@@ -1,7 +1,7 @@
 //! GitHub avatars for a repository's commit authors, read through the user's
-//! GitHub CLI — for the same reasons as [`super::git_pr`]: `gh` already holds
-//! the user's credentials (so private repositories work) and knows which
-//! GitHub repository the checkout's remote points at.
+//! GitHub CLI (`atlas_gh`): `gh` already holds the user's credentials (so
+//! private repositories work) and knows which GitHub repository the
+//! checkout's remote points at.
 //!
 //! A commit's email says nothing GitHub-shaped on its own; only GitHub knows
 //! which account an email belongs to. One `gh api` call for the newest
@@ -10,18 +10,21 @@
 //! repository. A branch GitHub does not have (unpushed, detached HEAD) costs a
 //! second call, for the default branch, whose authors mostly overlap.
 //!
-//! The result says why there is nothing, from `git_pr`'s outcome:
+//! The result says why there is nothing, from how the `gh` run ended:
 //! [`RepoAvatars::Unavailable`] stops the caller asking for the session,
 //! [`RepoAvatars::Failed`] is about this repository now. Neither is an `Err`:
 //! the caller falls back to Gravatar, and no avatar is worth a toast.
 
 use std::collections::BTreeMap;
-use std::ffi::OsStr;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
+use atlas_gh::{GhCommand, GhError, Intent};
 use serde::{Deserialize, Serialize};
 
-use super::git_pr::{run_gh, GhOutcome, GH_PERMITS, GH_TIMEOUT};
+/// How long one `gh` read gets. Nobody is waiting on an avatar, and a
+/// captive portal or a dead VPN would otherwise hold a permit for as long
+/// as the TCP stack cares to wait.
+const TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Only an avatar served from here is passed on: it is the one image origin
 /// the webview's CSP admits for GitHub.
@@ -60,35 +63,33 @@ pub async fn git_repo_avatars(path: String) -> Result<RepoAvatars, String> {
     if path.trim().is_empty() {
         return Ok(RepoAvatars::Failed);
     }
-    let Ok(_permit) = GH_PERMITS.acquire().await else {
-        return Ok(RepoAvatars::Failed);
+    // A background read: refused, not queued, while GitHub has the API
+    // paused.
+    let read = |on_branch: bool| {
+        GhCommand::new(&path, gh_api_args(on_branch), Intent::BackgroundRead)
+            .timeout(TIMEOUT)
+            .run()
     };
-    let run = tokio::task::spawn_blocking(move || {
-        let gh = OsStr::new("gh");
-        let started = Instant::now();
-        match run_gh(gh, &path, &gh_api_args(true), GH_TIMEOUT) {
-            // The branch may not exist on GitHub; its default branch does.
-            // A run that used its whole timeout was offline or stuck, not
-            // missing a branch — a second one would hold the shared permit
-            // (and stall the PR badges) for nothing.
-            GhOutcome::Failed(_) if started.elapsed() < GH_TIMEOUT => {
-                run_gh(gh, &path, &gh_api_args(false), GH_TIMEOUT)
-            }
-            other => other,
+    let started = Instant::now();
+    let run = match read(true).await {
+        // The branch may not exist on GitHub; its default branch does.
+        // A run that used its whole timeout was offline or stuck, not
+        // missing a branch — a second one would hold a permit (and stall
+        // the reads behind it) for nothing.
+        Err(GhError::Network { .. } | GhError::Unsupported { .. } | GhError::Failed { .. })
+            if started.elapsed() < TIMEOUT =>
+        {
+            read(false).await
         }
-    })
-    .await;
+        other => other,
+    };
     Ok(match run {
-        Ok(GhOutcome::Output(stdout)) => match parse_by_email(&stdout) {
+        Ok(stdout) => match parse_by_email(&stdout) {
             Some(by_email) => RepoAvatars::Ok { by_email },
             None => RepoAvatars::Failed,
         },
-        Ok(GhOutcome::Missing | GhOutcome::AuthRequired) => RepoAvatars::Unavailable,
-        Ok(GhOutcome::Failed(_)) => RepoAvatars::Failed,
-        Err(e) => {
-            tracing::warn!(error = %e, "gh api commits task failed");
-            RepoAvatars::Failed
-        }
+        Err(GhError::NotInstalled | GhError::NotAuthenticated) => RepoAvatars::Unavailable,
+        Err(_) => RepoAvatars::Failed,
     })
 }
 
