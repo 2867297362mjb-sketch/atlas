@@ -140,6 +140,35 @@ describe("pick", () => {
     expect(session().acpCurrentMode).toBe("full-access");
   });
 
+  it("goes back to the last pick the agent took, not to the one before the refusal", async () => {
+    open("codex", { acpCurrentMode: "auto" });
+    const outs = [held(), held(), held()];
+    answer = () => outs[pushes.length - 1]!.promise;
+
+    const first = configuration.pick(TAB, KNOBS.acpMode, "read-only");
+    const second = configuration.pick(TAB, KNOBS.acpMode, "full-access");
+    const third = configuration.pick(TAB, KNOBS.acpMode, "auto");
+    // The answers come back out of order.
+    outs[1]!.reject("busy");
+    outs[0]!.resolve();
+    outs[2]!.reject("busy");
+
+    expect(await Promise.all([first, second, third])).toEqual(["applied", "refused", "refused"]);
+    expect(session().acpCurrentMode).toBe("read-only");
+    expect(refusals).toHaveLength(2);
+  });
+
+  it("a refused first pick shows nothing again, when nothing was showing", async () => {
+    open("codex");
+    answer = async () => {
+      throw "no";
+    };
+
+    await configuration.pick(TAB, KNOBS.model, "opus");
+
+    expect(session().acpCurrentModel).toBeUndefined();
+  });
+
   it("answers `kept-for-bind` for a pick with no session to push to", async () => {
     open("codex", {}, false);
 

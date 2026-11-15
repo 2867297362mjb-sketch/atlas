@@ -53,8 +53,9 @@ export interface Knob<V> {
     read: (session: ChatSession) => V | undefined;
     /** The user picked `value`. */
     pick: (session: ChatSession, value: V) => void;
-    /** The agent refused the pick: back to `value`. */
-    restore: (session: ChatSession, value: V) => void;
+    /** The agent refused the pick: back to `value`, the last one it holds
+     *  (`undefined` when it held none the composer knew of). */
+    restore: (session: ChatSession, value: V | undefined) => void;
   };
   /** Does this session offer the knob, and this value of it? */
   offers: (session: ChatSession, value: V) => boolean;
@@ -90,7 +91,7 @@ const claudeMode: Knob<ClaudePermissionMode> = {
       session.unrestoredModeId = undefined;
     },
     restore: (session, mode) => {
-      session.claudePermissionMode = mode;
+      session.claudePermissionMode = mode ?? "default";
     },
   },
   offers: (session) => session.agentType === "claude-code",
@@ -109,7 +110,9 @@ const claudeMode: Knob<ClaudePermissionMode> = {
  * alone.
  */
 const planExitMode: Knob<ClaudePermissionMode> = {
-  name: "plan-exit mode",
+  // The same name as `claudeMode`: they write the same pill, so their pushes
+  // are one sequence (see `Flight`).
+  name: claudeMode.name,
   mirror: {
     read: claudeMode.mirror!.read,
     pick: (session, mode) => {
@@ -253,7 +256,28 @@ const keyOf = (session: ChatSession): SessionKey | null =>
     ? { agent_id: session.acpAgentId, session_id: session.acpSessionId }
     : null;
 
+/**
+ * The picks of one knob on one tab that the agent has not answered yet.
+ *
+ * A refusal has to put the composer back on what the agent HOLDS, and with
+ * two picks out that is not "what showed before this pick": the pick before
+ * may itself be refused. So the value is taken once, when the first pick goes
+ * out (nothing was in flight, the composer showed the agent's), and moves only
+ * when the agent accepts one.
+ */
+interface Flight {
+  /** The latest pick's number. Only that pick's refusal touches the composer. */
+  latest: number;
+  /** Pushes not yet answered. At zero the entry is dropped. */
+  out: number;
+  /** What the agent holds, and the pick that put it there (0: none of these). */
+  held: unknown;
+  heldBy: number;
+}
+
 export function createSessionConfiguration(deps: SessionConfigurationDeps): SessionConfiguration {
+  const flights = new Map<string, Flight>();
+
   async function pick<V>(tabId: string, knob: Knob<V>, value: V): Promise<PickOutcome> {
     const session = deps.sessions.get(tabId);
     if (!session) return "refused";
@@ -261,14 +285,25 @@ export function createSessionConfiguration(deps: SessionConfigurationDeps): Sess
     if (!key && knob.unbound === "refused") return "refused";
 
     const { mirror } = knob;
-    const previous = mirror?.read(session);
+    const shown = mirror?.read(session);
     if (mirror) deps.sessions.update(tabId, (s) => mirror.pick(s, value));
     knob.remember?.(deps.prefs, session, value);
     if (!key) return "kept-for-bind";
     if (!knob.offers(session, value)) return "refused";
 
+    const flightKey = `${tabId}\u0000${knob.name}`;
+    const flight = flights.get(flightKey) ?? { latest: 0, out: 0, held: shown, heldBy: 0 };
+    flights.set(flightKey, flight);
+    const mine = ++flight.latest;
+    flight.out += 1;
     try {
       await knob.push(deps.agents, key, value);
+      // Pushes reach the agent in order, so the latest accepted one is what
+      // it holds, whichever answer came back first.
+      if (mine > flight.heldBy) {
+        flight.held = value;
+        flight.heldBy = mine;
+      }
       return "applied";
     } catch (err) {
       console.warn(`setting the ${knob.name} failed:`, err);
@@ -276,16 +311,26 @@ export function createSessionConfiguration(deps: SessionConfigurationDeps): Sess
       // The pick is already showing. Leaving it there is the composer lying:
       // the native agent refuses a mid-turn mode switch precisely because the
       // running turn keeps the permissions it started with (#61). Roll it
-      // back, unless the user has picked something else since, and say why.
-      if (mirror && previous !== undefined) {
+      // back and say why, unless something newer is showing: a later pick, or
+      // a change the agent reported.
+      if (mirror && mine === flight.latest) {
+        const held = flight.held as V | undefined;
         deps.sessions.update(tabId, (s) => {
-          if (mirror.read(s) === value) mirror.restore(s, previous);
+          if (Object.is(mirror.read(s), value)) mirror.restore(s, held);
         });
       }
       deps.report.refused(typeof err === "string" ? err : String(err));
       return "refused";
+    } finally {
+      flight.out -= 1;
+      if (flight.out === 0 && flights.get(flightKey) === flight) flights.delete(flightKey);
     }
   }
 
-  return { pick, reset() {} };
+  return {
+    pick,
+    reset() {
+      flights.clear();
+    },
+  };
 }

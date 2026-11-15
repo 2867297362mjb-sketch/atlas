@@ -106,8 +106,6 @@ interface Knob {
     refusedPickRemembered?: true;
     /** A refusal is only logged: the composer keeps the pick, nobody is told. */
     refusalSilent?: true;
-    /** Two refusals in a row leave the composer on a pick the agent refused. */
-    afterTwoRefusals?: "first" | "second";
     /** A pick the session does not offer is shown, or even pushed. */
     unoffered?: "shown" | "pushed";
   };
@@ -135,7 +133,7 @@ const KNOBS: Knob[] = [
       arrange: () => actions().switchChatAgent(TAB, "codex"),
       pick: () => actions().setClaudePermissionMode(TAB, "plan"),
     },
-    today: { refusedPickRemembered: true, afterTwoRefusals: "first", unoffered: "shown" },
+    today: { refusedPickRemembered: true, unoffered: "shown" },
   },
   {
     name: "ACP mode",
@@ -154,7 +152,7 @@ const KNOBS: Knob[] = [
     unbound: "kept-for-bind",
     reported: (mode_id) => delta({ kind: "mode_changed", mode_id }),
     unoffered: { arrange: () => {}, pick: () => actions().setAcpMode(TAB, "yolo") },
-    today: { refusedPickRemembered: true, afterTwoRefusals: "first", unoffered: "shown" },
+    today: { refusedPickRemembered: true, unoffered: "shown" },
   },
   {
     name: "model",
@@ -173,7 +171,7 @@ const KNOBS: Knob[] = [
     unbound: "kept-for-bind",
     reported: (model_id) => delta({ kind: "model_changed", model_id }),
     unoffered: { arrange: () => {}, pick: () => actions().setAcpModel(TAB, "") },
-    today: { afterTwoRefusals: "first", unoffered: "shown" },
+    today: { unoffered: "shown" },
   },
   {
     name: "reasoning effort",
@@ -201,7 +199,6 @@ const KNOBS: Knob[] = [
     today: {
       refusedPickRemembered: true,
       refusalSilent: true,
-      afterTwoRefusals: "second",
       unoffered: "shown",
     },
   },
@@ -328,8 +325,10 @@ describe.each(KNOBS)("picking a session's $name", (knob) => {
     second.reject("no");
     await flush();
 
-    const stuck = knob.today.afterTwoRefusals;
-    expect(knob.shown()).toBe(stuck ? knob[stuck] : knob.before);
+    // Effort keeps a refused pick for a different reason, until the next fix.
+    expect(knob.shown()).toBe(
+      knob.today.refusalSilent && knob.optimistic ? knob.second : knob.before,
+    );
     expect(knob.remembered()).toBe(knob.today.refusedPickRemembered ? knob.second : null);
   });
 
