@@ -71,6 +71,25 @@ impl PrError {
     }
 }
 
+/// A `gh` run that produced no answer, as this surface reports it. The kinds
+/// are the same; only "unsupported" is reworded, since `gh`'s own line for it
+/// is about remotes and flags the user never typed.
+impl From<atlas_gh::GhError> for PrError {
+    fn from(error: atlas_gh::GhError) -> Self {
+        use atlas_gh::GhError;
+        match error {
+            GhError::NotInstalled => PrError::NotInstalled,
+            GhError::NotAuthenticated => PrError::NotAuthenticated,
+            GhError::RateLimited { retry_at } => PrError::RateLimited { retry_at },
+            GhError::Network { message } => PrError::Network { message },
+            GhError::Unsupported { .. } => PrError::Unsupported {
+                message: "This checkout's remote is not a GitHub repository.".into(),
+            },
+            GhError::Failed { message } => PrError::Failed { message },
+        }
+    }
+}
+
 impl Serialize for PrError {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let (kind, message, retry_at): (&str, Option<String>, Option<Option<i64>>) = match self {

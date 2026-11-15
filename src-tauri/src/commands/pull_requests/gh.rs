@@ -2,8 +2,9 @@
 //! makes is one `gh api -i …` process, under the user's own `gh` login.
 //!
 //! Atlas never holds a token. `gh` signs the request and picks the host from
-//! the checkout's remote; this module only shapes the request, bounds the
-//! process (a timeout, a shared permit pool) and reads the answer back. `-i`
+//! the checkout's remote. Running the process is `atlas_gh`'s (its
+//! environment, timeout, permit pool and pause); this module shapes the
+//! request and reads the answer back. `-i`
 //! makes `gh` print the status line and headers before the body, on success
 //! and failure alike, so the answer is read here as an HTTP response — which
 //! is what lets a refusal be told apart (rate limit, not found, refused
@@ -13,53 +14,36 @@
 //!
 //! - **Rate limits.** [`is_rate_limited`] reads a refusal the way GitHub
 //!   documents it (a 429, an exhausted quota, a secondary-limit 403, or a
-//!   GraphQL `RATE_LIMITED` with HTTP 200). A refusal pauses that quota until
+//!   GraphQL `RATE_LIMITED` with HTTP 200). A refusal pauses the API
+//!   (`atlas_gh`'s one pause, which every `gh` caller in Atlas honours) until
 //!   the time GitHub named, or a doubling cool-down when it named none, and a
 //!   background read stops while less than a tenth of a quota is left so that
 //!   what the user does next still has room.
 //! - **Conditional reads.** A REST read can revalidate its last answer with
 //!   `If-None-Match`; GitHub answers an unchanged resource with a 304, which
 //!   costs no quota, and the cached body is reused.
-//! - **Concurrency.** [`PR_PERMITS`] bounds how many `gh` run at once for
-//!   the API; images have their own [`IMAGE_PERMITS`], so a page of avatars
-//!   never queues ahead of the reads the user is waiting on.
+//! - **Concurrency.** `atlas_gh`'s permit pool bounds how many `gh` run at
+//!   once for the API; images have their own [`IMAGE_PERMITS`], so a page of
+//!   avatars never queues ahead of the reads the user is waiting on.
 
 use std::collections::{HashMap, VecDeque};
-use std::ffi::{OsStr, OsString};
-use std::process::Stdio;
+use std::ffi::OsString;
 use std::sync::LazyLock;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
+use atlas_gh::{GhCommand, GhOutput, Intent};
 use parking_lot::Mutex;
 use serde_json::Value;
-use tokio::io::AsyncWriteExt;
 use tokio::sync::Semaphore;
 
 use super::model::PrError;
 
-/// How many `gh` processes the pull-request surface runs at once. Opening a
-/// pull request reads four things side by side (detail, activity, the first
-/// page of files, viewed state); the two permits the sidebar's badges share
-/// (`git_pr::GH_PERMITS`) would queue those behind each other and behind every
-/// badge. GitHub's secondary limits punish bursts of concurrent requests, so
-/// this stays a small pool of its own rather than an open door: four here plus
-/// the badges' two is still under the eight concurrent requests GitHub treats
-/// as polite, and each permit is a whole process, not a pooled connection.
-pub(crate) static PR_PERMITS: Semaphore = Semaphore::const_new(4);
-
 /// How many image fetches run at once. A comment thread can name dozens of
 /// avatars and screenshots; they wait on each other here rather than on the
-/// detail, activity and diff reads behind [`PR_PERMITS`]. They are not API
-/// requests, so GitHub's concurrency guidance for the API does not count them.
-pub(crate) static IMAGE_PERMITS: Semaphore = Semaphore::const_new(3);
-
-/// The permit pool a request of `resource` waits in.
-pub(crate) fn permits_for(resource: Resource) -> &'static Semaphore {
-    match resource {
-        Resource::Unmetered => &IMAGE_PERMITS,
-        Resource::Core | Resource::Graphql => &PR_PERMITS,
-    }
-}
+/// detail, activity and diff reads behind `atlas_gh`'s API permits. They are
+/// not API requests, so GitHub's concurrency guidance for the API does not
+/// count them.
+static IMAGE_PERMITS: Semaphore = Semaphore::const_new(3);
 
 /// A read the user is waiting on. Longer than the sidebar's five seconds: a
 /// detail read is one large GraphQL document.
@@ -72,9 +56,6 @@ pub(crate) const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 /// Past this a response is refused rather than read: a large pull request's
 /// page of files can run to megabytes, but nothing honest needs more.
 const MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
-
-/// `gh`'s documented exit code for "authentication required".
-const GH_EXIT_AUTH_REQUIRED: i32 = 4;
 
 /// The quota a request spends, as GitHub's `x-ratelimit-resource` names it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -114,20 +95,6 @@ impl HttpResponse {
     pub fn body_text(&self) -> String {
         String::from_utf8_lossy(&self.body).into_owned()
     }
-}
-
-/// How one `gh` process ended, before anything is decided about it.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum RunOutcome {
-    /// `gh` reached GitHub and printed an answer (any status).
-    Http(HttpResponse),
-    /// `gh` exited without an HTTP answer: offline, not signed in, not a
-    /// GitHub checkout. Its exit code and stderr say which.
-    NoResponse { exit: Option<i32>, stderr: String },
-    /// The binary could not be started.
-    Missing,
-    /// It ran past its timeout and was killed.
-    TimedOut,
 }
 
 /// Parse `gh api -i` output: a status line, headers, a blank line, the body.
@@ -180,85 +147,6 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
 }
 
-/// One `gh` invocation.
-#[derive(Debug, Clone)]
-pub(crate) struct GhCall {
-    pub args: Vec<String>,
-    pub stdin: Option<Vec<u8>>,
-    pub timeout: Duration,
-}
-
-/// Run `program` with `call` in `cwd`. Async process handling: the child is
-/// killed on drop, so the timeout dropping the future is the kill.
-pub(crate) async fn run(program: &OsStr, cwd: &str, call: &GhCall) -> RunOutcome {
-    // A directory that is gone (a removed worktree) fails the spawn with the
-    // same NotFound as a missing binary; it must not read as "no `gh`".
-    if !std::path::Path::new(cwd).is_dir() {
-        return RunOutcome::NoResponse {
-            exit: None,
-            stderr: "not a git repository".into(),
-        };
-    }
-    let mut cmd = atlas_process::async_command(program);
-    cmd.args(&call.args)
-        .current_dir(cwd)
-        .env("GH_PROMPT_DISABLED", "1")
-        .env("GH_NO_UPDATE_NOTIFIER", "1")
-        .env("NO_COLOR", "1")
-        .env("GH_PAGER", "")
-        .stdin(if call.stdin.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    let mut child = match cmd.spawn() {
-        Ok(child) => child,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return RunOutcome::Missing,
-        Err(e) => {
-            return RunOutcome::NoResponse {
-                exit: None,
-                stderr: e.to_string(),
-            }
-        }
-    };
-    let stdin = child.stdin.take();
-    let input = call.stdin.clone();
-    let work = async move {
-        if let (Some(mut pipe), Some(bytes)) = (stdin, input) {
-            // A child that exits early closes the pipe; its own answer says why.
-            let _ = pipe.write_all(&bytes).await;
-            drop(pipe);
-        }
-        child.wait_with_output().await
-    };
-    let output = match tokio::time::timeout(call.timeout, work).await {
-        Ok(Ok(output)) => output,
-        Ok(Err(e)) => {
-            return RunOutcome::NoResponse {
-                exit: None,
-                stderr: e.to_string(),
-            }
-        }
-        Err(_) => return RunOutcome::TimedOut,
-    };
-    if output.stdout.len() > MAX_RESPONSE_BYTES {
-        return RunOutcome::NoResponse {
-            exit: output.status.code(),
-            stderr: "response too large".into(),
-        };
-    }
-    match parse_http(&output.stdout) {
-        Some(response) => RunOutcome::Http(response),
-        None => RunOutcome::NoResponse {
-            exit: output.status.code(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        },
-    }
-}
-
 // ── rate limits ──────────────────────────────────────────────────────────
 
 /// What remains of a quota is read from every answer; under a tenth of it a
@@ -279,33 +167,27 @@ struct Quota {
 #[derive(Debug, Default)]
 struct Limits {
     quotas: HashMap<&'static str, Quota>,
-    /// Paused until (epoch ms), and how many refusals in a row led here.
-    paused: HashMap<&'static str, (i64, u32)>,
+    /// How many refusals in a row each quota has met: what the fallback
+    /// cool-down doubles by. The pause itself is `atlas_gh`'s.
+    refusals: HashMap<&'static str, u32>,
 }
 
 static LIMITS: LazyLock<Mutex<Limits>> = LazyLock::new(|| Mutex::new(Limits::default()));
 
-pub(crate) fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
-}
+pub(crate) use atlas_gh::now_ms;
 
-/// Refuse up front while the quota is paused, or (for a background read)
-/// while it is down to its reserve.
+/// Refuse up front while the API is paused, or (for a background read)
+/// while the quota is down to its reserve.
 fn admit(resource: Resource, allow_reserve: bool, now: i64) -> Result<(), PrError> {
     if resource == Resource::Unmetered {
         return Ok(());
     }
-    let limits = LIMITS.lock();
-    if let Some(&(until, _)) = limits.paused.get(resource.key()) {
-        if until > now {
-            return Err(PrError::RateLimited {
-                retry_at: Some(until),
-            });
-        }
+    if let Some(until) = atlas_gh::paused_until(now) {
+        return Err(PrError::RateLimited {
+            retry_at: Some(until),
+        });
     }
+    let limits = LIMITS.lock();
     if let Some(quota) = limits.quotas.get(resource.key()) {
         if quota.reset_at_ms > now {
             let floor = if allow_reserve {
@@ -363,44 +245,49 @@ fn observe(headers: &HashMap<String, String>) {
     );
 }
 
+/// Pause the API for a refusal: until the time GitHub named, else a
+/// cool-down that doubles with each refusal in a row of this quota. A pause
+/// already in force for longer stands.
 fn record_rate_limit(resource: Resource, retry_at: Option<i64>, now: i64) -> i64 {
     let key = match resource {
         Resource::Unmetered => "core",
         other => other.key(),
     };
-    let mut limits = LIMITS.lock();
-    let attempt = limits.paused.get(key).map(|&(_, n)| n + 1).unwrap_or(1);
+    let attempt = {
+        let mut limits = LIMITS.lock();
+        let attempt = limits.refusals.entry(key).or_insert(0);
+        *attempt += 1;
+        *attempt
+    };
     let until = retry_at.unwrap_or_else(|| {
         now + (FALLBACK_COOLDOWN_MS * 2_i64.pow(attempt.saturating_sub(1).min(10)))
             .min(MAX_FALLBACK_COOLDOWN_MS)
     });
-    limits.paused.insert(key, (until, attempt));
+    let until = atlas_gh::paused_until(now).map_or(until, |held| held.max(until));
+    atlas_gh::pause_until(until);
     until
 }
 
-/// Until when GitHub itself paused a quota (epoch ms), if it has: a refusal
+/// Until when GitHub itself paused the API (epoch ms), if it has: a refusal
 /// it sent, as opposed to a read held back at the reserve.
 pub(crate) fn quota_paused_until(now: i64) -> Option<i64> {
-    LIMITS
-        .lock()
-        .paused
-        .values()
-        .map(|&(until, _)| until)
-        .filter(|until| *until > now)
-        .max()
+    atlas_gh::paused_until(now)
 }
 
+/// An answered request ends its quota's run of refusals. The pause is left
+/// to run out: another quota's refusal may be what set it.
 fn record_success(resource: Resource) {
     if resource == Resource::Unmetered {
         return;
     }
-    LIMITS.lock().paused.remove(resource.key());
+    LIMITS.lock().refusals.remove(resource.key());
 }
 
 /// Test seam: forget every quota and pause.
 #[cfg(test)]
 pub(crate) fn reset_limits_for_tests() {
     *LIMITS.lock() = Limits::default();
+    atlas_gh::pause_until(0);
 }
 
 /// Test seam: the quota state is process-wide, so the tests that set it run
@@ -496,46 +383,6 @@ pub(crate) fn rest_error_messages(body: &str) -> Vec<String> {
         }
     }
     out
-}
-
-/// What a `gh` run that printed no HTTP answer means, from its exit and
-/// stderr. Only the classification leaves this function, never the text of a
-/// command line.
-pub(crate) fn classify_no_response(exit: Option<i32>, stderr: &str) -> PrError {
-    let lower = stderr.to_ascii_lowercase();
-    if exit == Some(GH_EXIT_AUTH_REQUIRED)
-        || lower.contains("gh auth login")
-        || lower.contains("not logged in")
-        || lower.contains("authentication required")
-    {
-        return PrError::NotAuthenticated;
-    }
-    if lower.contains("rate limit") {
-        return PrError::RateLimited { retry_at: None };
-    }
-    if lower.contains("none of the git remotes")
-        || lower.contains("not a git repository")
-        || lower.contains("no git remotes")
-        || lower.contains("could not determine")
-        || lower.contains("not a github")
-    {
-        return PrError::Unsupported {
-            message: "This checkout's remote is not a GitHub repository.".into(),
-        };
-    }
-    if lower.contains("too large") {
-        return PrError::Failed {
-            message: "GitHub's answer was too large to read.".into(),
-        };
-    }
-    let first = stderr
-        .lines()
-        .map(str::trim)
-        .find(|l| !l.is_empty())
-        .unwrap_or("gh could not reach GitHub");
-    PrError::Network {
-        message: first.trim_start_matches("gh: ").to_string(),
-    }
 }
 
 /// Decide what one REST answer means. A 304 is an answer only when the
@@ -635,6 +482,32 @@ fn classify_graphql_with(
         })
 }
 
+/// What a finished `gh api -i` run answered. `gh` prints the answer and
+/// still exits non-zero for a 304 or a refusal, so the exit code is not
+/// asked; a run that printed no answer is classified by `atlas_gh`.
+fn answer(output: GhOutput) -> Result<HttpResponse, PrError> {
+    if output.stdout.len() > MAX_RESPONSE_BYTES {
+        return Err(PrError::failed("GitHub's answer was too large to read."));
+    }
+    match parse_http(&output.stdout) {
+        Some(response) => {
+            observe(&response.headers);
+            Ok(response)
+        }
+        None => Err(output.failure().into()),
+    }
+}
+
+/// What a read tells `atlas_gh` it is: one that may spend a quota's reserve
+/// is one the user is waiting on.
+fn read_intent(allow_reserve: bool) -> Intent {
+    if allow_reserve {
+        Intent::InteractiveRead
+    } else {
+        Intent::BackgroundRead
+    }
+}
+
 // ── conditional reads ────────────────────────────────────────────────────
 
 /// The last ETag and body of each REST read, so an unchanged answer comes
@@ -723,29 +596,20 @@ impl Gh {
         }
     }
 
-    /// One `gh` run through the permit pool, classified into an HTTP answer
-    /// or the reason there is none. The quota gate ([`admit`]) is the
-    /// caller's, ahead of [`Self::settle`]: a read held back at the reserve
-    /// is not GitHub refusing it, and must not pause the quota for the user's
-    /// own reads.
-    async fn send(&self, call: GhCall, resource: Resource) -> Result<HttpResponse, PrError> {
-        let _permit = permits_for(resource)
-            .acquire()
-            .await
-            .map_err(|_| PrError::Failed {
-                message: "Atlas is shutting down.".into(),
-            })?;
-        match run(&self.program, &self.cwd, &call).await {
-            RunOutcome::Http(response) => {
-                observe(&response.headers);
-                Ok(response)
-            }
-            RunOutcome::Missing => Err(PrError::NotInstalled),
-            RunOutcome::TimedOut => Err(PrError::Network {
-                message: "GitHub did not answer in time.".into(),
-            }),
-            RunOutcome::NoResponse { exit, stderr } => Err(classify_no_response(exit, &stderr)),
-        }
+    /// One `gh api -i` invocation in this checkout.
+    fn command(&self, args: Vec<String>, intent: Intent, timeout: Duration) -> GhCommand {
+        GhCommand::new(&self.cwd, args, intent)
+            .program(&self.program)
+            .timeout(timeout)
+    }
+
+    /// Run `command` and read what it printed as an HTTP answer, or the
+    /// reason there is none. The quota gate ([`admit`]) is the caller's,
+    /// ahead of [`Self::settle`]: a read held back at the reserve is not
+    /// GitHub refusing it, and must not pause the API for the user's own
+    /// reads.
+    async fn send(&self, command: GhCommand) -> Result<HttpResponse, PrError> {
+        answer(command.output().await?)
     }
 
     fn settle<T>(&self, resource: Resource, result: Result<T, PrError>) -> Result<T, PrError> {
@@ -802,19 +666,18 @@ impl Gh {
                 .map_err(|e| PrError::Failed {
                     message: e.to_string(),
                 })?;
-        let call = GhCall {
-            args: vec![
-                "api".into(),
-                "-i".into(),
-                "graphql".into(),
-                "--input".into(),
-                "-".into(),
-            ],
-            stdin: Some(body),
-            timeout,
-        };
+        let args = vec![
+            "api".into(),
+            "-i".into(),
+            "graphql".into(),
+            "--input".into(),
+            "-".into(),
+        ];
+        let command = self
+            .command(args, read_intent(allow_reserve), timeout)
+            .stdin(body);
         let result = self
-            .send(call, Resource::Graphql)
+            .send(command)
             .await
             .and_then(|r| classify_graphql_with(&r, now_ms(), keep_partial));
         self.settle(Resource::Graphql, result)
@@ -830,23 +693,20 @@ impl Gh {
         allow_reserve: bool,
     ) -> Result<Value, PrError> {
         admit(Resource::Graphql, allow_reserve, now_ms())?;
-        let call = GhCall {
-            args: vec![
-                "api".into(),
-                "-i".into(),
-                "graphql".into(),
-                "-F".into(),
-                "owner={owner}".into(),
-                "-F".into(),
-                "name={repo}".into(),
-                "-f".into(),
-                format!("query={query}"),
-            ],
-            stdin: None,
-            timeout: READ_TIMEOUT,
-        };
+        let args = vec![
+            "api".into(),
+            "-i".into(),
+            "graphql".into(),
+            "-F".into(),
+            "owner={owner}".into(),
+            "-F".into(),
+            "name={repo}".into(),
+            "-f".into(),
+            format!("query={query}"),
+        ];
+        let command = self.command(args, read_intent(allow_reserve), READ_TIMEOUT);
         let result = self
-            .send(call, Resource::Graphql)
+            .send(command)
             .await
             .and_then(|r| classify_graphql(&r, now_ms()));
         self.settle(Resource::Graphql, result)
@@ -879,12 +739,8 @@ impl Gh {
             args.push(format!("If-None-Match: {etag}"));
         }
         args.push(path.to_string());
-        let call = GhCall {
-            args,
-            stdin: None,
-            timeout,
-        };
-        let result = match self.send(call, Resource::Core).await {
+        let command = self.command(args, read_intent(allow_reserve), timeout);
+        let result = match self.send(command).await {
             Ok(response) => {
                 let now = now_ms();
                 classify_rest(&response, previous.is_some(), now).map(|()| {
@@ -925,36 +781,26 @@ impl Gh {
                 args.push("--allow-escape-sequences".into());
             }
             args.push(path.to_string());
-            let call = GhCall {
-                args,
-                stdin: None,
-                timeout,
-            };
-            let outcome =
-                {
-                    let _permit = permits_for(Resource::Core).acquire().await.map_err(|_| {
-                        PrError::Failed {
-                            message: "Atlas is shutting down.".into(),
-                        }
-                    })?;
-                    run(&self.program, &self.cwd, &call).await
-                };
-            result = match outcome {
-                RunOutcome::NoResponse { stderr, .. }
-                    if allow_escapes && stderr.contains("unknown flag") =>
-                {
-                    continue
+            let output = match self
+                .command(args, Intent::InteractiveRead, timeout)
+                .output()
+                .await
+            {
+                Ok(output) => output,
+                Err(e) => {
+                    result = Err(e.into());
+                    break;
                 }
-                RunOutcome::Http(response) => {
-                    observe(&response.headers);
-                    classify_rest(&response, false, now_ms()).map(|()| response.body)
-                }
-                RunOutcome::Missing => Err(PrError::NotInstalled),
-                RunOutcome::TimedOut => Err(PrError::Network {
-                    message: "GitHub did not answer in time.".into(),
-                }),
-                RunOutcome::NoResponse { exit, stderr } => Err(classify_no_response(exit, &stderr)),
             };
+            if allow_escapes
+                && !output.stdout.starts_with(b"HTTP/")
+                && output.stderr.contains("unknown flag")
+            {
+                continue;
+            }
+            result = answer(output).and_then(|response| {
+                classify_rest(&response, false, now_ms()).map(|()| response.body)
+            });
             break;
         }
         self.settle(Resource::Core, result)
@@ -981,13 +827,12 @@ impl Gh {
             None => None,
         };
         args.push(path.to_string());
-        let call = GhCall {
-            args,
-            stdin,
-            timeout: WRITE_TIMEOUT,
-        };
+        let mut command = self.command(args, Intent::Write, WRITE_TIMEOUT);
+        if let Some(bytes) = stdin {
+            command = command.stdin(bytes);
+        }
         let result = self
-            .send(call, Resource::Core)
+            .send(command)
             .await
             .and_then(|r| classify_rest(&r, false, now_ms()).map(|()| r.body));
         self.settle(Resource::Core, result)
@@ -996,18 +841,20 @@ impl Gh {
     /// A GET of an absolute URL, with no API quota behind it (the image
     /// proxy). The caller has already checked the URL against its allowlist.
     pub async fn fetch_url(&self, url: &str, timeout: Duration) -> Result<HttpResponse, PrError> {
-        let call = GhCall {
-            args: vec![
-                "api".into(),
-                "-i".into(),
-                "--method".into(),
-                "GET".into(),
-                url.into(),
-            ],
-            stdin: None,
-            timeout,
-        };
-        let response = self.send(call, Resource::Unmetered).await?;
+        let args = vec![
+            "api".into(),
+            "-i".into(),
+            "--method".into(),
+            "GET".into(),
+            url.into(),
+        ];
+        let _permit = IMAGE_PERMITS
+            .acquire()
+            .await
+            .map_err(|_| PrError::failed("Atlas is shutting down."))?;
+        let response = self
+            .send(self.command(args, Intent::Unmetered, timeout))
+            .await?;
         classify_rest(&response, false, now_ms())?;
         Ok(response)
     }
@@ -1251,42 +1098,50 @@ mod tests {
     }
 
     #[test]
-    fn images_wait_in_a_pool_of_their_own() {
-        assert!(std::ptr::eq(
-            permits_for(Resource::Unmetered),
-            &IMAGE_PERMITS
-        ));
-        assert!(std::ptr::eq(permits_for(Resource::Graphql), &PR_PERMITS));
-        assert!(std::ptr::eq(permits_for(Resource::Core), &PR_PERMITS));
-    }
-
-    #[test]
-    fn runs_without_an_answer_are_classified_by_exit_and_stderr() {
-        assert_eq!(classify_no_response(Some(4), ""), PrError::NotAuthenticated);
+    fn a_run_with_no_answer_is_what_atlas_gh_says_it_is() {
+        let no_answer = |exit, stderr: &str| {
+            answer(GhOutput {
+                exit: Some(exit),
+                stdout: Vec::new(),
+                stderr: stderr.into(),
+            })
+        };
+        assert_eq!(no_answer(4, ""), Err(PrError::NotAuthenticated));
         assert_eq!(
-            classify_no_response(
-                Some(1),
-                "To get started with GitHub CLI, please run:  gh auth login"
-            ),
-            PrError::NotAuthenticated
+            no_answer(1, "none of the git remotes configured for this repository point to a known GitHub host"),
+            Err(PrError::Unsupported {
+                message: "This checkout's remote is not a GitHub repository.".into()
+            })
         );
-        assert!(matches!(
-            classify_no_response(Some(1), "none of the git remotes configured for this repository point to a known GitHub host"),
-            PrError::Unsupported { .. }
-        ));
         assert_eq!(
-            classify_no_response(
-                Some(1),
+            no_answer(
+                1,
                 "error connecting to api.github.com\ncheck your internet connection"
             ),
-            PrError::Network {
+            Err(PrError::Network {
                 message: "error connecting to api.github.com".into()
-            }
+            })
+        );
+        // Unrecognised is a failure with gh's own first line, not "offline".
+        assert_eq!(
+            no_answer(1, "gh: unknown command\n"),
+            Err(PrError::failed("unknown command"))
         );
     }
 
     #[test]
-    fn a_paused_quota_refuses_until_its_time_and_the_reserve_holds_background_reads() {
+    fn an_answer_is_read_whatever_the_exit_code() {
+        let response = answer(GhOutput {
+            exit: Some(1),
+            stdout: b"HTTP/2.0 304 Not Modified\r\nEtag: \"x\"\r\n\r\n".to_vec(),
+            stderr: "gh: HTTP 304\n".into(),
+        })
+        .unwrap();
+        assert_eq!(response.status, 304);
+    }
+
+    #[test]
+    fn a_pause_refuses_until_its_time_and_the_reserve_holds_background_reads() {
         let _serial = LIMITS_SERIAL.lock();
         reset_limits_for_tests();
         let until = record_rate_limit(Resource::Graphql, Some(50_000), 1_000);
@@ -1297,9 +1152,20 @@ mod tests {
                 retry_at: Some(50_000)
             })
         );
-        // Another quota is untouched, and the pause lifts at its time.
-        assert_eq!(admit(Resource::Core, false, 2_000), Ok(()));
+        // The pause is the whole API's, images aside, and lifts at its time.
+        assert_eq!(
+            admit(Resource::Core, true, 2_000),
+            Err(PrError::RateLimited {
+                retry_at: Some(50_000)
+            })
+        );
+        assert_eq!(admit(Resource::Unmetered, false, 2_000), Ok(()));
         assert_eq!(admit(Resource::Graphql, true, 50_001), Ok(()));
+        // A shorter refusal never cuts a pause short.
+        assert_eq!(
+            record_rate_limit(Resource::Core, Some(40_000), 1_000),
+            50_000
+        );
 
         reset_limits_for_tests();
         let reset = (now_ms() / 1000 + 3600).to_string();
@@ -1342,112 +1208,5 @@ mod tests {
         assert!(etag_get(&key(ETAG_CAPACITY + 4), ETAG_TTL_MS + 1).is_none());
         etag_touch(&key(ETAG_CAPACITY + 4), ETAG_TTL_MS);
         assert!(etag_get(&key(ETAG_CAPACITY + 4), ETAG_TTL_MS + 1).is_some());
-    }
-
-    #[cfg(unix)]
-    mod runner {
-        use super::super::*;
-        use std::path::PathBuf;
-
-        /// A fake `gh` run through `/bin/sh`, so a freshly written script
-        /// cannot hit ETXTBSY when another test thread forks mid-write.
-        fn fake_gh(body: &str) -> (tempfile::TempDir, PathBuf) {
-            let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().join("gh");
-            std::fs::write(&path, format!("{body}\n")).unwrap();
-            (dir, path)
-        }
-
-        fn call(script: &std::path::Path, stdin: Option<&str>, timeout: Duration) -> GhCall {
-            GhCall {
-                args: vec![script.to_string_lossy().into_owned()],
-                stdin: stdin.map(|s| s.as_bytes().to_vec()),
-                timeout,
-            }
-        }
-
-        fn cwd() -> String {
-            std::env::temp_dir().to_string_lossy().into_owned()
-        }
-
-        #[tokio::test]
-        async fn an_http_answer_is_parsed_whatever_the_exit_code() {
-            let (_d, gh) = fake_gh(
-                r#"printf 'HTTP/2.0 304 Not Modified\r\nEtag: "x"\r\n\r\n'; echo 'gh: HTTP 304' >&2; exit 1"#,
-            );
-            let outcome = run(
-                OsStr::new("/bin/sh"),
-                &cwd(),
-                &call(&gh, None, READ_TIMEOUT),
-            )
-            .await;
-            let RunOutcome::Http(response) = outcome else {
-                panic!("expected an answer");
-            };
-            assert_eq!(response.status, 304);
-        }
-
-        #[tokio::test]
-        async fn stdin_reaches_the_process() {
-            let (_d, gh) = fake_gh(r#"printf 'HTTP/2.0 200 OK\r\n\r\n'; cat"#);
-            let outcome = run(
-                OsStr::new("/bin/sh"),
-                &cwd(),
-                &call(&gh, Some(r#"{"query":"q"}"#), READ_TIMEOUT),
-            )
-            .await;
-            let RunOutcome::Http(response) = outcome else {
-                panic!("expected an answer");
-            };
-            assert_eq!(response.body, br#"{"query":"q"}"#);
-        }
-
-        #[tokio::test]
-        async fn no_answer_keeps_exit_and_stderr() {
-            let (_d, gh) = fake_gh("echo 'error connecting to api.github.com' >&2; exit 1");
-            assert_eq!(
-                run(
-                    OsStr::new("/bin/sh"),
-                    &cwd(),
-                    &call(&gh, None, READ_TIMEOUT)
-                )
-                .await,
-                RunOutcome::NoResponse {
-                    exit: Some(1),
-                    stderr: "error connecting to api.github.com\n".into()
-                }
-            );
-        }
-
-        #[tokio::test]
-        async fn a_missing_binary_is_missing() {
-            let dir = tempfile::tempdir().unwrap();
-            let missing = dir.path().join("gh");
-            let call = GhCall {
-                args: vec![],
-                stdin: None,
-                timeout: READ_TIMEOUT,
-            };
-            assert_eq!(
-                run(missing.as_os_str(), &cwd(), &call).await,
-                RunOutcome::Missing
-            );
-        }
-
-        #[tokio::test]
-        async fn a_run_past_its_timeout_is_killed() {
-            let (_d, gh) = fake_gh("exec sleep 30");
-            let started = std::time::Instant::now();
-            assert_eq!(
-                run(
-                    OsStr::new("/bin/sh"),
-                    &cwd(),
-                    &call(&gh, None, Duration::from_millis(200))
-                )
-                .await,
-                RunOutcome::TimedOut
-            );
-            assert!(started.elapsed() < Duration::from_secs(10));
-        }
     }
 }
