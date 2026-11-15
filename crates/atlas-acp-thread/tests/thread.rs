@@ -1,7 +1,6 @@
 //! Thread-model tests. They drive a `StubAgentConnection` through plain method
 //! calls, so the assertions are about behaviour rather than rendering.
 
-use std::any::Any;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -60,10 +59,6 @@ impl AgentConnection for StubAgentConnection {
 
     fn cancel(&self, _session_id: &acp::SessionId) {
         self.cancel_count.fetch_add(1, Ordering::SeqCst);
-    }
-
-    fn into_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
-        self
     }
 }
 

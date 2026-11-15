@@ -80,9 +80,6 @@ impl AgentConnection for Stub {
         async { Ok(acp::PromptResponse::new(acp::StopReason::EndTurn)) }.boxed()
     }
     fn cancel(&self, _session_id: &acp::SessionId) {}
-    fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
-        self
-    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

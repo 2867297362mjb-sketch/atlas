@@ -33,6 +33,7 @@ pub mod approvals;
 pub mod auth;
 pub mod catalog;
 pub mod catalog_cache;
+mod catalogue_refresh;
 pub mod commands;
 pub mod config;
 pub mod connection;

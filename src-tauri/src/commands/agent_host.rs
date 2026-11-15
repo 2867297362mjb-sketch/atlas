@@ -1040,18 +1040,10 @@ impl AgentHost {
             supports_logout: connection.supports_logout(),
             supports_load_session: connection.supports_load_session(),
             supports_session_list: connection.session_list().is_some(),
-            // ACP has no fork, but the native engine does (`thread/fork`) —
-            // the capability is "is this the native connection", exactly the
-            // downcast `fork_session` performs.
-            supports_fork: connection
-                .clone()
-                .downcast::<atlas_native_agent::EngineConnection>()
-                .is_some(),
-            // Asked of the connection, not inferred from its concrete type.
-            // `supports_fork` above still downcasts, and that is exactly the
-            // identity check ADR-0002 rules out — a second one would entrench
-            // it. Any connection that answers true here is offered the
-            // affordance, native or not.
+            // Both asked of the connection, never inferred from which agent
+            // it is (ADR-0002): any connection that answers true is offered
+            // the affordance, native or not.
+            supports_fork: connection.supports_fork(),
             supports_rewind: connection.supports_rewind(),
         }
     }
@@ -1207,135 +1199,95 @@ impl AgentHost {
         self.forget_sessions_of(&Agent::Native);
     }
 
-    /// Re-fetch the native agent's model catalogue from the gateway
-    /// (ADR-0007): the picker's Refresh.
+    /// Re-fetch an agent's model catalogue (ADR-0007): the picker's Refresh.
     ///
-    /// The fetcher is the app's — the gateway, over the registered token and
-    /// org sources. [`Self::refresh_native_models_with`] is the same routine
-    /// with the fetcher supplied, so a test can drive it against a fake.
-    pub async fn refresh_native_models(&self) -> Result<NativeModelsRefresh> {
-        use atlas_native_agent::engine::config::GATEWAY_BASE_URL;
-        use atlas_native_agent::engine::GatewayCatalogueFetcher;
-        let fetcher = GatewayCatalogueFetcher::registered(GATEWAY_BASE_URL);
-        self.refresh_native_models_with(&fetcher).await
-    }
-
-    /// See [`Self::refresh_native_models`].
+    /// The policy is the agent's, behind one capability call
+    /// ([`atlas_acp_thread::AgentModelCatalogue`]): a running agent is asked
+    /// through its connection, one that is not running through its launcher.
+    /// What comes back says what the new list means, and the only part left
+    /// here is the one only the host can do — taking a connection down:
     ///
-    /// Three outcomes, decided by comparing what the gateway now says with
-    /// what the live engine loaded at connect:
-    ///
-    /// - **No live engine**: the cache is rewritten and the next spawn reads
-    ///   it. Nothing to reconcile.
-    /// - **Same fingerprint** (same slugs and context windows): labels swap
-    ///   into the live connection. No teardown.
-    /// - **Different fingerprint**: the engine loaded rows it will not reload,
-    ///   and a slug it does not know gets invented metadata the gateway
-    ///   `400`s. So the connection is dropped, exactly as sign-out drops it,
-    ///   and every open native session is told so; the next spawn reconnects
-    ///   on the fresh cache without a network round trip. A running turn
-    ///   blocks this — the cache is already written, so nothing is lost by
-    ///   asking the user to stop first.
-    pub async fn refresh_native_models_with(
-        &self,
-        fetcher: &dyn atlas_native_agent::engine::CatalogueFetcher,
-    ) -> Result<NativeModelsRefresh> {
-        use atlas_native_agent::engine::catalog_cache::{project, refresh_now};
-        use atlas_native_agent::engine::{EngineConnection, EngineHome, SystemClock};
-
-        let home = EngineHome::under_config_dir(&self.config_dir);
-        let cache = refresh_now(home.path(), fetcher, &SystemClock)
-            .await
-            .map_err(|err| HostError::classified(format!("could not refresh models: {err}")))?;
-        let Some(projected) = project(&cache) else {
-            // Written anyway: the next connect will refuse on the same
-            // grounds, honestly, rather than run on the previous list.
+    /// - **Stored** (nothing was running) or **Applied** (the live connection
+    ///   took it in place): nothing to do.
+    /// - **Reconnect required**: the connection is dropped, exactly as
+    ///   sign-out drops the native one, and every open session on it is told
+    ///   so; the next spawn reconnects on the list the agent just stored. A
+    ///   running turn blocks this — the list is already stored, so nothing is
+    ///   lost by asking the user to stop first.
+    pub async fn refresh_models(&self, plugin_id: &str) -> Result<NativeModelsRefresh> {
+        let agent = self.installed_agent(plugin_id)?;
+        let live = self.manager.connected(&agent);
+        let catalogue = match &live {
+            Some(connection) => connection.model_catalogue(),
+            None => self
+                .manager
+                .server_for(&agent)
+                .ok()
+                .and_then(|server| server.model_catalogue()),
+        };
+        let Some(catalogue) = catalogue else {
             return Err(HostError::new(
-                "the gateway lists no models this organization may use",
+                "this agent's model list cannot be refreshed",
                 ErrorClass::Fatal,
             ));
         };
-        let models: Vec<SessionModeInfo> = projected
-            .picker
+        let refreshed = catalogue.refresh().await.map_err(|err| {
+            if err.is::<atlas_acp_thread::ModelCatalogueEmpty>() {
+                HostError::new(
+                    "the gateway lists no models this organization may use",
+                    ErrorClass::Fatal,
+                )
+            } else {
+                HostError::from(err)
+            }
+        })?;
+        let models: Vec<SessionModeInfo> = refreshed
+            .models
             .iter()
             .map(SessionModeInfo::from_model)
             .collect();
-        let default_model = projected.default_model.clone();
+        let default_model = refreshed.default_model.as_str().to_string();
 
-        let live = self
-            .manager
-            .connected(&Agent::Native)
-            .and_then(<dyn AgentConnection>::downcast::<EngineConnection>);
-        let Some(live) = live else {
-            return Ok(NativeModelsRefresh {
-                models,
-                default_model,
-                changed: true,
-                reconnected: false,
-            });
+        use atlas_acp_thread::ModelCatalogueOutcome;
+        let changed = match refreshed.outcome {
+            ModelCatalogueOutcome::Stored => true,
+            ModelCatalogueOutcome::Applied { changed } => changed,
+            ModelCatalogueOutcome::ReconnectRequired => {
+                let sessions: Vec<String> = lock(&self.sessions)
+                    .iter()
+                    .filter(|(_, record)| record.agent == agent)
+                    .map(|(id, _)| id.clone())
+                    .collect();
+                let running = sessions.iter().any(|id| {
+                    self.thread(id)
+                        .is_ok_and(|handle| lock_thread(&handle).is_generating())
+                });
+                if running {
+                    return Err(HostError::new(
+                        "A turn is running. Stop it, then refresh models again — the new list applies at the next restart.",
+                        ErrorClass::Fatal,
+                    ));
+                }
+                for id in &sessions {
+                    self.projector.note_agent_disconnected(
+                        &acp::SessionId::new(id.as_str()),
+                        "the model list changed; restart to continue",
+                    );
+                }
+                self.kill_agent(plugin_id, &agent);
+                return Ok(NativeModelsRefresh {
+                    models,
+                    default_model,
+                    changed: true,
+                    reconnected: true,
+                });
+            }
         };
-
-        let before = live.catalogue_snapshot();
-        if before.fingerprint == projected.fingerprint {
-            let next = atlas_native_agent::engine::connection::LiveCatalogue {
-                picker: projected.picker,
-                default_model: projected.default_model,
-                fingerprint: projected.fingerprint,
-                fetched_at: cache.fetched_at,
-                stale: false,
-            };
-            live.replace_catalogue_metadata(next)
-                .map_err(HostError::from)?;
-            let before_labels: Vec<(String, Option<String>)> = before
-                .picker
-                .iter()
-                .map(|m| {
-                    (
-                        m.name.to_string(),
-                        m.description.as_deref().map(str::to_string),
-                    )
-                })
-                .collect();
-            let after_labels: Vec<(String, Option<String>)> = models
-                .iter()
-                .map(|m| (m.name.clone(), m.description.clone()))
-                .collect();
-            let changed = before_labels != after_labels;
-            return Ok(NativeModelsRefresh {
-                models,
-                default_model,
-                changed,
-                reconnected: false,
-            });
-        }
-
-        let native_sessions: Vec<String> = lock(&self.sessions)
-            .iter()
-            .filter(|(_, record)| record.agent == Agent::Native)
-            .map(|(id, _)| id.clone())
-            .collect();
-        let running = native_sessions.iter().any(|id| {
-            self.thread(id)
-                .is_ok_and(|handle| lock_thread(&handle).is_generating())
-        });
-        if running {
-            return Err(HostError::new(
-                "A turn is running. Stop it, then refresh models again — the new list applies at the next restart.",
-                ErrorClass::Fatal,
-            ));
-        }
-        for id in &native_sessions {
-            self.projector.note_agent_disconnected(
-                &acp::SessionId::new(id.as_str()),
-                "the model list changed; restart to continue",
-            );
-        }
-        self.drop_native_connection();
         Ok(NativeModelsRefresh {
             models,
             default_model,
-            changed: true,
-            reconnected: true,
+            changed,
+            reconnected: false,
         })
     }
 
@@ -2029,7 +1981,9 @@ impl AgentHost {
     //
     // Mode, model and config options are steering verbs (`steering.rs`).
 
-    /// Reasoning effort — a native-agent-only knob.
+    /// Reasoning effort, for an agent whose connection offers the knob
+    /// ([`atlas_acp_thread::AgentSessionEffort`]). ACP has no word for it,
+    /// so today that is the native agent alone.
     ///
     /// Accepted by the engine, and **inert against the Atlas gateway**: the
     /// gateway's forwarded allowlist carries no reasoning parameter, so the
@@ -2040,8 +1994,10 @@ impl AgentHost {
         // while someone else drives, the owner's composer is refused whole.
         self.seat(&key.session_id, &Origin::Local)?;
         let session_id = acp::SessionId::new(key.session_id.as_str());
-        let native = self.native_connection(&key.session_id)?;
-        let control = native.session_effort(&session_id).ok_or_else(|| {
+        let connection = lock_thread(&self.thread(&key.session_id)?)
+            .connection()
+            .clone();
+        let control = connection.session_effort(&session_id).ok_or_else(|| {
             HostError::new("this session has no effort control", ErrorClass::Fatal)
         })?;
         control
@@ -2058,28 +2014,31 @@ impl AgentHost {
     /// the frontend's `supportsFork` hides the affordance for those, so this
     /// answer is a belt over braces, not a user-facing error.
     pub async fn fork_session(&self, key: &SessionKey) -> Result<Option<String>> {
-        let Ok(native) = self.native_connection(&key.session_id) else {
+        let Ok(thread) = self.thread(&key.session_id) else {
             return Ok(None);
         };
+        let connection = lock_thread(&thread).connection().clone();
         let session_id = acp::SessionId::new(key.session_id.as_str());
-        let forked = native
-            .fork_thread(&session_id)
+        // Through the seam: an agent that grows a fork gets this for free.
+        let Some(fork) = connection.fork(&session_id) else {
+            return Ok(None);
+        };
+        let forked = fork
+            .run()
             .await
             .map_err(|e| HostError::classified(e.to_string()))?;
         // Lineage: the branch remembers where it came from, so the session
         // context overlay can show the parent and the forks.
         if let Some(history) = self.history() {
-            history
-                .store()
-                .record_session_fork(&acp::SessionId::new(forked.as_str()), &session_id);
+            history.store().record_session_fork(&forked, &session_id);
         }
-        Ok(Some(forked))
+        Ok(Some(forked.to_string()))
     }
 
     /// Drop the last exchange and return the prompt that started it.
     ///
     /// The rewind half of a retry. `None` means "not retryable here" — either
-    /// the agent is not the native one (no ACP agent has a rewind verb; the
+    /// the agent offers no rewind (no ACP agent has a rewind verb; the
     /// capability record in schema 1.5.0 has `fork`, `resume`, `list`,
     /// `delete` and `close`, and nothing that forgets turns) or the thread has
     /// no exchange left to drop. Callers re-send the returned text through the
@@ -2099,21 +2058,6 @@ impl AgentHost {
             .run()
             .await
             .map_err(|e| HostError::classified(e.to_string()))
-    }
-
-    fn native_connection(
-        &self,
-        session_id: &str,
-    ) -> Result<Arc<atlas_native_agent::EngineConnection>> {
-        let connection = lock_thread(&self.thread(session_id)?).connection().clone();
-        connection
-            .downcast::<atlas_native_agent::EngineConnection>()
-            .ok_or_else(|| {
-                HostError::new(
-                    "this control is only available on the native agent",
-                    ErrorClass::Fatal,
-                )
-            })
     }
 
     // ---- permissions and elicitations ------------------------------------
@@ -4678,10 +4622,6 @@ mod tests {
         ) -> Option<Arc<dyn atlas_acp_thread::AgentModelSelector>> {
             Some(Arc::new(FakeSelector))
         }
-
-        fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
-            self
-        }
     }
 
     impl RebindingNative {
@@ -4787,10 +4727,6 @@ mod tests {
         }
 
         fn cancel(&self, _session_id: &acp::SessionId) {}
-
-        fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
-            self
-        }
     }
 
     impl AgentServer for LiveNative {
@@ -5113,128 +5049,537 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A scripted gateway for the model-list refresh (ADR-0007).
-    struct FakeCatalogue {
-        rows: Vec<(&'static str, bool)>,
-        error: Option<atlas_native_agent::engine::FetchError>,
+    /// What a [`CapabilityAgent`] advertises. Everything defaults to "no",
+    /// which is what a connection that says nothing gets from the seam.
+    #[derive(Clone, Default)]
+    struct Advertised {
+        /// Forks into this session id.
+        fork: Option<&'static str>,
+        /// Records every effort level it is handed.
+        effort: Option<Arc<std::sync::Mutex<Vec<Option<String>>>>>,
+        /// What the launcher answers a refresh with — nothing is running.
+        stored_catalogue: Option<ScriptedCatalogue>,
+        /// What the connection answers a refresh with.
+        live_catalogue: Option<ScriptedCatalogue>,
+        /// Parks every prompt until notified, so a turn stays running.
+        hold_turns: Option<Arc<tokio::sync::Notify>>,
     }
 
-    impl atlas_native_agent::engine::CatalogueFetcher for FakeCatalogue {
-        fn fetch(
+    /// An agent that is whatever it advertises and nothing else: its id is a
+    /// parameter, so a test can show the host reading capabilities off the
+    /// connection rather than off which agent it is (ADR-0002).
+    struct CapabilityAgent {
+        id: &'static str,
+        session_id: &'static str,
+        advertised: Advertised,
+    }
+
+    impl CapabilityAgent {
+        fn new(id: &'static str, session_id: &'static str, advertised: Advertised) -> Arc<Self> {
+            Arc::new(Self {
+                id,
+                session_id,
+                advertised,
+            })
+        }
+    }
+
+    /// A refresh that answers what the test scripted, and counts the asks.
+    #[derive(Clone)]
+    struct ScriptedCatalogue {
+        answer: std::result::Result<atlas_acp_thread::ModelCatalogueOutcome, ScriptedFailure>,
+        asked: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[derive(Clone, Copy)]
+    enum ScriptedFailure {
+        Empty,
+        Unauthorized,
+    }
+
+    impl ScriptedCatalogue {
+        fn answering(outcome: atlas_acp_thread::ModelCatalogueOutcome) -> Self {
+            Self {
+                answer: Ok(outcome),
+                asked: Arc::default(),
+            }
+        }
+
+        fn failing(failure: ScriptedFailure) -> Self {
+            Self {
+                answer: Err(failure),
+                asked: Arc::default(),
+            }
+        }
+
+        fn asked(&self) -> usize {
+            self.asked.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    impl atlas_acp_thread::AgentModelCatalogue for ScriptedCatalogue {
+        fn refresh(
             &self,
-        ) -> futures::future::BoxFuture<
-            '_,
-            std::result::Result<
-                atlas_native_agent::engine::catalog_cache::GatewayCatalogue,
-                atlas_native_agent::engine::FetchError,
-            >,
-        > {
-            use atlas_native_agent::engine::catalog_cache::{GatewayCatalogue, GatewayRow};
-            use futures::FutureExt;
-            let answer = match &self.error {
-                Some(err) => Err(err.clone()),
-                None => Ok(GatewayCatalogue {
-                    has_grant: true,
-                    rows: self
-                        .rows
-                        .iter()
-                        .map(|(id, entitled)| GatewayRow {
-                            id: id.to_string(),
-                            entitled: *entitled,
-                            ..GatewayRow::default()
+        ) -> BoxFuture<'static, anyhow::Result<atlas_acp_thread::ModelCatalogueRefresh>> {
+            self.asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let answer = match self.answer {
+                Ok(outcome) => Ok(atlas_acp_thread::ModelCatalogueRefresh {
+                    models: ["model-a", "model-b"]
+                        .into_iter()
+                        .map(|id| atlas_acp_thread::AgentModelInfo {
+                            id: atlas_acp_thread::AgentModelId::new(id),
+                            name: id.into(),
+                            description: None,
+                            icon: None,
+                            is_latest: false,
+                            cost: None,
+                            disabled: None,
+                            provider: None,
+                            legacy: false,
                         })
                         .collect(),
+                    default_model: atlas_acp_thread::AgentModelId::new("model-a"),
+                    outcome,
                 }),
+                Err(ScriptedFailure::Empty) => Err(atlas_acp_thread::ModelCatalogueEmpty.into()),
+                // The native agent's own words for a refused token.
+                Err(ScriptedFailure::Unauthorized) => Err(anyhow::anyhow!(
+                    "could not refresh models: the gateway rejected the account token (unauthorized)"
+                )),
             };
             async move { answer }.boxed()
         }
+    }
 
-        fn org(&self) -> Option<String> {
-            Some("org_1".to_string())
+    struct ScriptedFork(&'static str);
+
+    impl atlas_acp_thread::AgentSessionFork for ScriptedFork {
+        fn run(&self) -> BoxFuture<'static, anyhow::Result<acp::SessionId>> {
+            let forked = acp::SessionId::new(self.0);
+            async move { Ok(forked) }.boxed()
         }
     }
 
-    /// ADR-0007: the picker's Refresh rewrites the cache the next connect
-    /// reads and answers with the list — with no engine open, that is the
-    /// whole job, and the next spawn picks the rows up without a request.
+    struct RecordedEffort(Arc<std::sync::Mutex<Vec<Option<String>>>>);
+
+    impl atlas_acp_thread::AgentSessionEffort for RecordedEffort {
+        fn set_effort(&self, level: Option<String>) -> anyhow::Result<()> {
+            self.0.lock().unwrap().push(level);
+            Ok(())
+        }
+    }
+
+    impl AgentConnection for CapabilityAgent {
+        fn agent_id(&self) -> atlas_acp_thread::AgentId {
+            atlas_acp_thread::AgentId::new(self.id)
+        }
+
+        fn telemetry_id(&self) -> Arc<str> {
+            self.id.into()
+        }
+
+        fn new_session(
+            self: Arc<Self>,
+            work_dirs: Vec<PathBuf>,
+        ) -> BoxFuture<'static, anyhow::Result<AcpThreadHandle>> {
+            let thread = Arc::new(std::sync::Mutex::new(AcpThread::new(
+                acp::SessionId::new(self.session_id),
+                self.clone() as Arc<dyn AgentConnection>,
+                work_dirs,
+                None,
+                atlas_acp_thread::event_channel().0,
+            )));
+            async move { Ok(thread) }.boxed()
+        }
+
+        fn auth_methods(&self) -> &[acp::AuthMethod] {
+            &[]
+        }
+
+        fn authenticate(
+            &self,
+            _method: acp::AuthMethodId,
+        ) -> BoxFuture<'static, anyhow::Result<()>> {
+            async { Ok(()) }.boxed()
+        }
+
+        fn prompt(
+            &self,
+            _params: acp::PromptRequest,
+        ) -> BoxFuture<'static, anyhow::Result<acp::PromptResponse>> {
+            let hold = self.advertised.hold_turns.clone();
+            async move {
+                if let Some(hold) = hold {
+                    hold.notified().await;
+                }
+                Ok(acp::PromptResponse::new(acp::StopReason::EndTurn))
+            }
+            .boxed()
+        }
+
+        fn cancel(&self, _session_id: &acp::SessionId) {}
+
+        fn supports_fork(&self) -> bool {
+            self.advertised.fork.is_some()
+        }
+
+        fn fork(
+            &self,
+            _session_id: &acp::SessionId,
+        ) -> Option<Arc<dyn atlas_acp_thread::AgentSessionFork>> {
+            let forked = self.advertised.fork?;
+            Some(Arc::new(ScriptedFork(forked)))
+        }
+
+        fn session_effort(
+            &self,
+            _session_id: &acp::SessionId,
+        ) -> Option<Arc<dyn atlas_acp_thread::AgentSessionEffort>> {
+            let levels = self.advertised.effort.clone()?;
+            Some(Arc::new(RecordedEffort(levels)))
+        }
+
+        fn model_catalogue(&self) -> Option<Arc<dyn atlas_acp_thread::AgentModelCatalogue>> {
+            let catalogue = self.advertised.live_catalogue.clone()?;
+            Some(Arc::new(catalogue))
+        }
+    }
+
+    impl AgentServer for CapabilityAgent {
+        fn agent_id(&self) -> atlas_acp_thread::AgentId {
+            atlas_acp_thread::AgentId::new(self.id)
+        }
+
+        fn connect(
+            &self,
+            _delegate: AgentServerDelegate,
+            _options: ConnectOptions,
+        ) -> BoxFuture<'static, anyhow::Result<Arc<dyn AgentConnection>>> {
+            let connection =
+                CapabilityAgent::new(self.id, self.session_id, self.advertised.clone());
+            async move { Ok(connection as Arc<dyn AgentConnection>) }.boxed()
+        }
+
+        fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
+            self
+        }
+
+        fn model_catalogue(&self) -> Option<Arc<dyn atlas_acp_thread::AgentModelCatalogue>> {
+            let catalogue = self.advertised.stored_catalogue.clone()?;
+            Some(Arc::new(catalogue))
+        }
+    }
+
+    /// Install `agent` as an EXTERNAL agent and connect it: one installed-map
+    /// entry, as the Marketplace writes it, and a connection the manager
+    /// holds under the agent's own key. The host then meets it exactly as it
+    /// meets any ACP agent.
+    async fn connect_external(host: &Arc<AgentHost>, agent: Arc<CapabilityAgent>) -> AgentId {
+        let plugin_id = agent.id;
+        let mut settings = atlas_agent_store::AllAgentServersSettings::default();
+        settings.0.insert(
+            plugin_id.to_string(),
+            atlas_agent_store::AgentServerSettings::custom("/bin/echo", vec!["acp".into()]),
+        );
+        host.store().set_settings(settings).await;
+        let key = Agent::Custom {
+            id: atlas_acp_thread::AgentId::new(plugin_id),
+        };
+        let entry = host.manager().request_connection(key, agent);
+        let connecting = lock(&entry).wait_for_connection();
+        if let Err(err) = connecting.await {
+            panic!("the scripted agent connects: {err}");
+        }
+        host.spawn(plugin_id).await.expect("spawn").agent_id
+    }
+
+    /// ADR-0002, at the three places the host used to ask "is this the native
+    /// agent": an EXTERNAL agent whose connection advertises fork and effort
+    /// is forkable and takes an effort level, with no host change.
     #[tokio::test]
-    async fn refreshing_models_rewrites_the_cache_the_next_connect_reads() {
-        use atlas_native_agent::engine::catalog_cache::load_cache;
-        let native = Arc::new(RebindingNative { fresh_id: "s-1" });
+    async fn an_external_agent_that_advertises_fork_and_effort_gets_both() {
+        let (host, dir) = fresh_host();
+        let levels: Arc<std::sync::Mutex<Vec<Option<String>>>> = Arc::default();
+        let agent = CapabilityAgent::new(
+            "some-agent",
+            "s-capable",
+            Advertised {
+                fork: Some("s-branch"),
+                effort: Some(levels.clone()),
+                ..Advertised::default()
+            },
+        );
+        let agent_id = connect_external(&host, agent).await;
+        tokio::task::yield_now().await;
+
+        assert!(
+            host.capabilities("some-agent").supports_fork,
+            "the catalogue reads fork off the connection, whichever agent it is",
+        );
+
+        let init = host
+            .new_session(agent_id, PathBuf::from("/tmp/atlas"), Vec::new())
+            .await
+            .expect("a session opens");
+
+        host.set_effort(&init.key, "high".to_string())
+            .expect("an agent that offers the knob takes a level");
+        assert_eq!(*levels.lock().unwrap(), [Some("high".to_string())]);
+
+        let forked = host.fork_session(&init.key).await.expect("fork");
+        assert_eq!(forked.as_deref(), Some("s-branch"));
+        let history = host.history().expect("a fresh host has history");
+        assert_eq!(
+            history
+                .store()
+                .session_forks()
+                .get(&acp::SessionId::new("s-branch")),
+            Some(&acp::SessionId::new("s-capable")),
+            "the branch remembers where it came from",
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The other half: holding the NATIVE agent's id buys nothing. A
+    /// connection in the native slot that advertises neither is not
+    /// forkable and has no effort control.
+    #[tokio::test]
+    async fn the_native_slot_without_the_capabilities_gets_neither() {
+        let native = CapabilityAgent::new(ATLAS_AGENT_ID, "s-plain", Advertised::default());
+        let (host, dir) = fresh_host_with_native(native);
+        let agent_id = host.spawn(ATLAS_AGENT_ID).await.expect("spawn").agent_id;
+        tokio::task::yield_now().await;
+
+        assert!(!host.capabilities(ATLAS_AGENT_ID).supports_fork);
+
+        let init = host
+            .new_session(agent_id, PathBuf::from("/tmp/atlas"), Vec::new())
+            .await
+            .expect("a session opens");
+
+        assert_eq!(
+            host.fork_session(&init.key).await.expect("not an error"),
+            None,
+            "an agent that cannot fork answers None, as the frontend expects",
+        );
+        let Err(refused) = host.set_effort(&init.key, "high".to_string()) else {
+            panic!("no effort control was offered");
+        };
+        assert_eq!(refused.class, ErrorClass::Fatal);
+        assert!(refused.message.contains("no effort control"), "{refused}");
+
+        // A session the host does not know is not forkable either, and not
+        // an error: the affordance was never offered.
+        let unknown = SessionKey {
+            session_id: "s-unknown".to_string(),
+            ..init.key.clone()
+        };
+        assert_eq!(
+            host.fork_session(&unknown).await.expect("not an error"),
+            None
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ADR-0007's Refresh with nothing running: the launcher is asked, the
+    /// list comes back, and no connection is made to get it.
+    #[tokio::test]
+    async fn refreshing_models_with_nothing_running_asks_the_launcher() {
+        let stored = ScriptedCatalogue::answering(atlas_acp_thread::ModelCatalogueOutcome::Stored);
+        let live = ScriptedCatalogue::answering(
+            atlas_acp_thread::ModelCatalogueOutcome::ReconnectRequired,
+        );
+        let native = CapabilityAgent::new(
+            ATLAS_AGENT_ID,
+            "s-1",
+            Advertised {
+                stored_catalogue: Some(stored.clone()),
+                live_catalogue: Some(live.clone()),
+                ..Advertised::default()
+            },
+        );
         let (host, dir) = fresh_host_with_native(native);
 
         let refreshed = host
-            .refresh_native_models_with(&FakeCatalogue {
-                rows: vec![
-                    ("model-a", true),
-                    ("model-locked", false),
-                    ("model-b", true),
-                ],
-                error: None,
-            })
+            .refresh_models(ATLAS_AGENT_ID)
             .await
-            .expect("the gateway answered");
+            .expect("the agent answered");
 
         let ids: Vec<&str> = refreshed.models.iter().map(|m| m.id.as_str()).collect();
-        assert_eq!(ids, ["model-a", "model-b"], "entitled rows, gateway order");
+        assert_eq!(ids, ["model-a", "model-b"], "the agent's list, its order");
         assert_eq!(refreshed.default_model, "model-a");
         assert!(refreshed.changed);
         assert!(
             !refreshed.reconnected,
             "nothing was open, so nothing was torn down"
         );
-
-        let home = atlas_native_agent::engine::EngineHome::under_config_dir(&dir);
-        let cache = load_cache(home.path())
-            .await
-            .expect("the cache was written");
-        assert_eq!(
-            cache.org.as_deref(),
-            Some("org_1"),
-            "keyed by the org it was fetched for"
-        );
-        assert_eq!(
-            cache.rows.len(),
-            3,
-            "the gateway's rows verbatim, locked one included"
+        assert_eq!((stored.asked(), live.asked()), (1, 0));
+        assert!(
+            host.manager().connected(&Agent::Native).is_none(),
+            "a refresh does not start the agent",
         );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A refresh the gateway refuses reaches the frontend classified, so a
+    /// A refresh the running connection took in place leaves it running, and
+    /// reports whether anything visible changed as the agent said.
+    #[tokio::test]
+    async fn a_refresh_the_live_connection_applied_tears_nothing_down() {
+        let live = ScriptedCatalogue::answering(atlas_acp_thread::ModelCatalogueOutcome::Applied {
+            changed: false,
+        });
+        let native = CapabilityAgent::new(
+            ATLAS_AGENT_ID,
+            "s-applied",
+            Advertised {
+                live_catalogue: Some(live.clone()),
+                ..Advertised::default()
+            },
+        );
+        let (host, dir) = fresh_host_with_native(native);
+        let agent_id = host.spawn(ATLAS_AGENT_ID).await.expect("spawn").agent_id;
+        tokio::task::yield_now().await;
+        host.new_session(agent_id, PathBuf::from("/tmp/atlas"), Vec::new())
+            .await
+            .expect("a session opens");
+
+        let refreshed = host
+            .refresh_models(ATLAS_AGENT_ID)
+            .await
+            .expect("the agent answered");
+
+        assert!(!refreshed.changed, "same labels: nothing to redraw");
+        assert!(!refreshed.reconnected);
+        assert_eq!(live.asked(), 1, "the running connection is the one asked");
+        assert!(host.manager().connected(&Agent::Native).is_some());
+        assert!(lock(&host.sessions).contains_key("s-applied"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A list the running connection cannot take: the host drops it and
+    /// forgets its sessions, so each tab rebinds on its next send — unless a
+    /// turn is running, which is never interrupted for a model list.
+    #[tokio::test]
+    async fn a_refresh_that_needs_a_reconnect_waits_for_a_running_turn() {
+        let live = ScriptedCatalogue::answering(
+            atlas_acp_thread::ModelCatalogueOutcome::ReconnectRequired,
+        );
+        let hold = Arc::new(tokio::sync::Notify::new());
+        let native = CapabilityAgent::new(
+            ATLAS_AGENT_ID,
+            "s-reconnect",
+            Advertised {
+                live_catalogue: Some(live.clone()),
+                hold_turns: Some(hold.clone()),
+                ..Advertised::default()
+            },
+        );
+        let (host, dir) = fresh_host_with_native(native);
+        let agent_id = host.spawn(ATLAS_AGENT_ID).await.expect("spawn").agent_id;
+        tokio::task::yield_now().await;
+        let init = host
+            .new_session(agent_id, PathBuf::from("/tmp/atlas"), Vec::new())
+            .await
+            .expect("a session opens");
+
+        host.submit(
+            &init.key,
+            Prompt::default(),
+            Origin::Local,
+            SubmitPolicy::Now,
+        )
+        .expect("send");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !host.agent_turn_running(ATLAS_AGENT_ID) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the turn never started"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        let Err(busy) = host.refresh_models(ATLAS_AGENT_ID).await else {
+            panic!("a running turn blocks the teardown");
+        };
+        assert_eq!(busy.class, ErrorClass::Fatal);
+        assert!(busy.message.contains("A turn is running"), "{busy}");
+        assert!(
+            host.manager().connected(&Agent::Native).is_some(),
+            "and the connection it runs on is left alone",
+        );
+
+        hold.notify_one();
+        while host.agent_turn_running(ATLAS_AGENT_ID) {
+            assert!(std::time::Instant::now() < deadline, "the turn never ended");
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        let refreshed = host
+            .refresh_models(ATLAS_AGENT_ID)
+            .await
+            .expect("nothing is running now");
+        assert!(refreshed.changed);
+        assert!(refreshed.reconnected);
+        assert!(
+            host.manager().connected(&Agent::Native).is_none(),
+            "the connection went, so the next spawn loads the new list",
+        );
+        assert!(
+            !lock(&host.sessions).contains_key("s-reconnect"),
+            "and its sessions with it, so each tab rebinds",
+        );
+        assert_eq!(live.asked(), 2);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A refresh the agent refuses reaches the frontend classified, so a
     /// credential failure routes to sign-in and an empty grant reads as the
-    /// setup problem it is — never as "the button did nothing".
+    /// setup problem it is — never as "the button did nothing". An agent
+    /// with no catalogue to refresh says that, rather than nothing.
     #[tokio::test]
     async fn a_refused_refresh_is_classified_for_the_frontend() {
-        let native = Arc::new(RebindingNative { fresh_id: "s-1" });
-        let (host, dir) = fresh_host_with_native(native);
+        let refused = |failure| {
+            let native = CapabilityAgent::new(
+                ATLAS_AGENT_ID,
+                "s-1",
+                Advertised {
+                    stored_catalogue: Some(ScriptedCatalogue::failing(failure)),
+                    ..Advertised::default()
+                },
+            );
+            fresh_host_with_native(native)
+        };
 
-        let Err(denied) = host
-            .refresh_native_models_with(&FakeCatalogue {
-                rows: vec![],
-                error: Some(atlas_native_agent::engine::FetchError::Unauthorized(
-                    String::new(),
-                )),
-            })
-            .await
-        else {
+        let (host, dir) = refused(ScriptedFailure::Unauthorized);
+        let Err(denied) = host.refresh_models(ATLAS_AGENT_ID).await else {
             panic!("a 401 is a refusal");
         };
         assert!(matches!(denied.class, ErrorClass::Auth), "{denied:?}");
+        let _ = std::fs::remove_dir_all(&dir);
 
-        let Err(nothing) = host
-            .refresh_native_models_with(&FakeCatalogue {
-                rows: vec![("model-locked", false)],
-                error: None,
-            })
-            .await
-        else {
+        let (host, dir) = refused(ScriptedFailure::Empty);
+        let Err(nothing) = host.refresh_models(ATLAS_AGENT_ID).await else {
             panic!("a list with nothing entitled is no list");
         };
         assert!(matches!(nothing.class, ErrorClass::Fatal), "{nothing:?}");
         assert!(nothing.message.contains("no models"), "{}", nothing.message);
+        let _ = std::fs::remove_dir_all(&dir);
 
+        let silent = CapabilityAgent::new(ATLAS_AGENT_ID, "s-1", Advertised::default());
+        let (host, dir) = fresh_host_with_native(silent);
+        let Err(unsupported) = host.refresh_models(ATLAS_AGENT_ID).await else {
+            panic!("no catalogue was advertised");
+        };
+        assert!(matches!(unsupported.class, ErrorClass::Fatal));
+        assert!(
+            unsupported.message.contains("cannot be refreshed"),
+            "{unsupported}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -5321,8 +5666,7 @@ mod tests {
         let caps = host.capabilities(ATLAS_AGENT_ID);
         assert!(caps.auth_kinds.is_empty());
         assert!(!caps.supports_logout);
-        // `session/fork` has no equivalent on the seam, so this is
-        // false for every agent rather than optimistically true.
+        // Fork is the connection's to advertise, and there is none yet.
         assert!(!caps.supports_fork);
 
         let _ = std::fs::remove_dir_all(&dir);

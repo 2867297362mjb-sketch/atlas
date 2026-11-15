@@ -1389,10 +1389,6 @@ mod tests {
         fn cancel(&self, _session_id: &acp::SessionId) {
             self.release.notify_one();
         }
-
-        fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
-            self
-        }
     }
 
     struct GatedServer(Arc<GatedNative>);
