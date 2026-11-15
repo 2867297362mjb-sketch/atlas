@@ -51,9 +51,6 @@ export async function switchOrg(id: string): Promise<void> {
   if (!target) return;
 
   switchingOrg = true;
-  // From here on the desktop's choice is pushed by THIS path; the boot
-  // reconciliation must not fire a competing, unordered push after it.
-  markOrgReconciled();
 
   // Running agents die with the outgoing org's teardown — never silently.
   // Warn first (before the overlay, so the dialog is readable); "Go back"
@@ -71,6 +68,12 @@ export async function switchOrg(id: string): Promise<void> {
       return;
     }
   }
+
+  // The switch is going ahead: from here on the desktop's choice is pushed by
+  // THIS path, and the boot reconciliation must not fire a competing,
+  // unordered push after it. Not before the prompt above: a declined switch
+  // pushes nothing, and the boot push is then still owed.
+  markOrgReconciled();
 
   orgActions.setSwitching(true);
   const startedAt = Date.now();

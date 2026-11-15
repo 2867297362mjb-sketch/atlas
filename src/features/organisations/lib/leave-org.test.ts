@@ -72,7 +72,8 @@ const state = {
 };
 vi.mock("../stores/org-store", () => ({ useOrgStore: { getState: () => state } }));
 
-const { leaveOrgAndData } = await import("./org-switch");
+const { leaveOrgAndData, switchOrg } = await import("./org-switch");
+const { isOrgReconciled } = await import("./org-reconciliation");
 
 const org = (id: string, remoteId?: string): Organisation => ({
   id,
@@ -152,5 +153,22 @@ describe("leaveOrgAndData", () => {
     state.organisations = [org("local-a"), org("local-b", "org_b")];
     await expect(leaveOrgAndData("local-a")).rejects.toMatch(/isn't synced/);
     expect(leaveOrg).not.toHaveBeenCalled();
+  });
+});
+
+describe("switchOrg", () => {
+  it("leaves the boot push of the active org pending when the switch is declined", async () => {
+    // Nothing was pushed to Rust: "Go back" on the running-agents prompt
+    // aborts before any of it. Marking the launch reconciled here used to
+    // cancel the boot push for good, leaving chat and billing on whichever
+    // org Rust had stored.
+    state.organisations = [org("local-a", "org_a"), org("local-b", "org_b")];
+    state.activeOrganisationId = "local-a";
+    agents.busy = 1;
+
+    await switchOrg("local-b");
+
+    expect(invoke).not.toHaveBeenCalledWith("auth_set_active_org", expect.anything());
+    expect(isOrgReconciled()).toBe(false);
   });
 });
