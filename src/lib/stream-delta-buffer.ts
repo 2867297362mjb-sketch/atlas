@@ -1,13 +1,13 @@
 /**
  * rAF-coalesced text-delta buffer for token streams — the same shape as the
- * agent-chat batcher in App.tsx, extracted for the side chats (Model Chat,
+ * agent delta stream (`frame-coalesced-stream.ts`), extracted for the side chats (Model Chat,
  * Memory Chat, Session Chat). Those stores used to apply one zustand `set()`
  * (full Record spread + subscriber notification + panel render + virtualizer
  * measure) PER STREAMED TOKEN: 100+ render/measure cycles a second at fast
  * providers, where the main chat caps at one per frame.
  *
  * Deltas accumulate per key (stream id) and flush in ONE call per animation
- * frame. The `setTimeout` backstop mirrors App.tsx: WebKit pauses rAF whenever
+ * frame. The `setTimeout` backstop mirrors that stream: WebKit pauses rAF whenever
  * the window isn't frontmost — not just when hidden — and without the timer a
  * background window's stream would buffer forever and land as one giant catch-
  * up batch on wake.

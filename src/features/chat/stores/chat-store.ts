@@ -666,7 +666,7 @@ interface ChatActions {
      * is the single bridge between the Rust SessionState and the chat-store —
      * status/turn lifecycle, text/thinking chunks, tool-call upserts, plan
      * updates, mode/model changes, available_commands. Permission requests
-     * flow through `pushPermission` from the App.tsx listener.
+     * flow through `pushPermission` from the agent event router.
      */
     applyAgentDelta: (env: AgentDelta) => void;
     /**
@@ -686,7 +686,7 @@ interface ChatActions {
      * and 60 `MessagesList` re-renders with `measureElement` work.
      * Batching collapses that to 1 immer pass + 1 re-render per frame.
      *
-     * The caller (App.tsx::listenAgents) is expected to:
+     * The caller (`agent-event-router.ts`) is expected to:
      *  - Dedupe `tool_call_upserted` by `(session, tool_call.id)` so
      *    only the latest state for each tool call lands.
      *  - Pass text/thought as merged-per-session strings (same as the
@@ -1959,7 +1959,7 @@ export const useChatStore = createSelectors(
           set((s) => {
             // Single immer pass for everything buffered in this frame.
             // Order is: text → thoughts → deltas. Within deltas, wire
-            // order is preserved by the caller (App.tsx's RAF flush);
+            // order is preserved by the caller (`agent-delta-batch.ts`);
             // `tool_call_upserted` events are deduped there before
             // arriving so we never apply the same tool-call id twice.
             for (const { sessionId, text } of texts) {

@@ -3,7 +3,7 @@
  * sibling of `isTypingHot()` (chat-input-idle-lag lesson: gate heavy work on
  * input activity).
  *
- * Consumer: the agent-delta rAF flush in App.tsx. Applying a streaming batch
+ * Consumer: the agent delta stream's hold (`agent-event-router.ts`). Applying a streaming batch
  * re-renders ChatPanel → Transcript → a reconcile over every mounted row, and
  * when that lands in the middle of a momentum-scroll frame WKWebView misses
  * its tile deadline — the viewport shows unpainted (black) stretches. Holding
