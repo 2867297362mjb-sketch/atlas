@@ -85,7 +85,7 @@ export interface SessionBindDeps {
   };
 }
 
-/** A panel's handle on its tab's in-flight attempt — see `epoch` in `attach`. */
+/** A panel's handle on its tab's in-flight attempt — see `TabBind.epoch`. */
 export interface BindControl {
   /** Restart: abandon the attempt in flight and start a new one, with the
    *  tab+agent's failure history cleared. */
@@ -106,9 +106,23 @@ export interface BindAttachment extends BindControl {
 export interface SessionBind {
   /** Hold `tabId`'s bind for one mounted panel. Nothing runs until `kick`. */
   attach(tabId: string): BindAttachment;
-  /** Forget every tab+agent's failure history. For tests that share the
-   *  app's instance. */
+  /** Forget every tab+agent's failure history and drop every attempt in
+   *  flight. For tests that share the app's instance. */
   reset(): void;
+}
+
+/** One tab's bind, for as long as a panel holds it. */
+interface TabBind {
+  /** Mounted panels attached to the tab. At zero nobody wants the bind. */
+  holders: number;
+  /** An attempt is in flight. */
+  pending: boolean;
+  /** Attempt generation. `retry`/`abandon` bump it, which makes the
+   *  in-flight attempt stale: its later steps bail, and its `finally` no
+   *  longer owns `pending`. That is what lets a Restart start a NEW attempt
+   *  while the hung one is still parked on the backend, and what lets Stop
+   *  free the tab so the next send binds again. */
+  epoch: number;
 }
 
 export function createSessionBind(deps: SessionBindDeps): SessionBind {
@@ -140,6 +154,8 @@ export function createSessionBind(deps: SessionBindDeps): SessionBind {
    *  Cleared alongside `reportedBindFailures` when a bind finally succeeds, so a
    *  genuine re-auth later in the session still gets the dialog. */
   const signInAttempted = new Set<string>();
+  /** The bind each tab's mounted panels share. Gone with its last panel. */
+  const tabs = new Map<string, TabBind>();
 
   /** Await a bind hop, logging once if it stalls. The hop itself is untouched —
    *  the deadline that actually ends it is `withDeadline`. */
@@ -161,20 +177,20 @@ export function createSessionBind(deps: SessionBindDeps): SessionBind {
   }
 
   function attach(tabId: string): BindAttachment {
-    let cancelled = false;
-    let pending = false;
-    // Attempt generation. `retry`/`abandon` (below) bump it, which makes the
-    // in-flight attempt stale: its later steps bail, and its `finally` no
-    // longer owns `pending`. That is what lets a Restart start a NEW attempt
-    // while the hung one is still parked on the backend, and what lets Stop
-    // free the tab so the next send binds again.
-    let epoch = 0;
+    // The attempt belongs to the TAB, not to this mount: every panel holding
+    // the tab shares one. Each used to keep its own `pending`, so two panels
+    // on one tab (the layout has three places that mount a chat panel) each
+    // ran `session/new`, and the second binding orphaned the first session.
+    const tab: TabBind = tabs.get(tabId) ?? { holders: 0, pending: false, epoch: 0 };
+    tabs.set(tabId, tab);
+    tab.holders += 1;
+    let detached = false;
 
     const ensureBound = async () => {
-      if (cancelled || pending) return;
-      pending = true;
-      const myEpoch = ++epoch;
-      const stale = () => cancelled || myEpoch !== epoch;
+      if (tab.holders === 0 || tab.pending) return;
+      tab.pending = true;
+      const myEpoch = ++tab.epoch;
+      const stale = () => myEpoch !== tab.epoch;
       try {
         // Bind to THIS session's chosen agent (Claude by default, or Codex),
         // not a single global default — so per-tab agents run in parallel.
@@ -499,14 +515,19 @@ export function createSessionBind(deps: SessionBindDeps): SessionBind {
       } finally {
         // A superseded attempt does not release the flag: the attempt that
         // replaced it owns `pending` now.
-        if (myEpoch === epoch) pending = false;
+        if (myEpoch === tab.epoch) tab.pending = false;
       }
+    };
+
+    /** Make the attempt in flight stale and free the tab for the next one. */
+    const supersede = () => {
+      tab.epoch += 1;
+      tab.pending = false;
     };
 
     return {
       retry: () => {
-        epoch += 1;
-        pending = false;
+        supersede();
         const at = deps.chat().sessions[tabId]?.agentType;
         const key = `${tabId}:${pluginIdForAgent(at)}`;
         reportedBindFailures.delete(key);
@@ -514,13 +535,17 @@ export function createSessionBind(deps: SessionBindDeps): SessionBind {
         retriedBinds.delete(key);
         void ensureBound();
       },
-      abandon: () => {
-        epoch += 1;
-        pending = false;
-      },
+      abandon: supersede,
       kick: () => void ensureBound(),
       detach: () => {
-        cancelled = true;
+        if (detached) return;
+        detached = true;
+        tab.holders -= 1;
+        if (tab.holders > 0) return;
+        // Nobody is waiting for it any more: whatever the attempt answers is
+        // dropped. A panel that mounts later starts from a clean entry.
+        supersede();
+        if (tabs.get(tabId) === tab) tabs.delete(tabId);
       },
     };
   }
@@ -528,6 +553,8 @@ export function createSessionBind(deps: SessionBindDeps): SessionBind {
   return {
     attach,
     reset() {
+      for (const tab of tabs.values()) tab.epoch += 1;
+      tabs.clear();
       reportedBindFailures.clear();
       retriedBinds.clear();
       signInAttempted.clear();

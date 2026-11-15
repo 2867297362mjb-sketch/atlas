@@ -238,6 +238,30 @@ describe("a new session", () => {
     expect(count("agents_spawn")).toBe(2);
   });
 
+  it("two panels on the same session bind once", async () => {
+    mountPanel();
+    mountPanel();
+    await flush();
+
+    expect(count("agents_new_session")).toBe(1);
+    expect(session().acpSessionId).toBe("sess-1");
+  });
+
+  it("two panels: the bind outlives the panel whose kick started it", async () => {
+    const spawn = deferred<typeof AGENT>();
+    tauri.handleRaw({ agents_spawn: () => spawn.promise });
+    const first = mountPanel();
+    mountPanel();
+    await flush();
+    expect(count("agents_spawn")).toBe(1);
+
+    first.unmount();
+    spawn.resolve(AGENT);
+    await flush();
+    expect(count("agents_new_session")).toBe(1);
+    expect(session().acpSessionId).toBe("sess-1");
+  });
+
   it("coalesces a kick and a composer focus into the attempt already running", async () => {
     const spawn = deferred<typeof AGENT>();
     tauri.handleRaw({ agents_spawn: () => spawn.promise });
