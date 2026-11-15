@@ -3,6 +3,7 @@ import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { walkAll } from "./support/walk";
 
 /**
  * Apache-2.0 obligations for the engine (issue #44, spec D11 / Phase 1).
@@ -154,16 +155,9 @@ function computeModifiedVendoredFiles(): string[] {
     .map((abs) => path.relative(REPO_ROOT, abs).split(path.sep).join("/"));
 }
 
-/** Every file under `dir`, `target/` excluded, as repo-relative paths. */
+/** Every file under `dir`, `target/` excluded, sorted. */
 function walk(dir: string): string[] {
-  const out: string[] = [];
-  for (const e of readdirSync(dir, { withFileTypes: true })) {
-    const p = path.join(dir, e.name);
-    if (e.isDirectory()) {
-      if (e.name !== "target") out.push(...walk(p));
-    } else out.push(p);
-  }
-  return out.sort();
+  return walkAll(dir, { skip: ["target"] }).sort();
 }
 
 /**

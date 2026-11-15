@@ -3,6 +3,7 @@ import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { walk } from "./support/walk";
 
 /**
  * Keeps the engine quarantined (issue #42, spec D2 / Phase 1).
@@ -76,13 +77,10 @@ function atlasManifests(): string[] {
 /** Engine crate directories (recursive — some live under `ext/` and `utils/`). */
 function vendoredManifests(dir = VENDOR): string[] {
   if (!existsSync(dir)) return [];
-  const out: string[] = [];
-  for (const e of readdirSync(dir, { withFileTypes: true })) {
-    const p = path.join(dir, e.name);
-    if (e.isDirectory()) out.push(...vendoredManifests(p));
-    else if (e.name === "Cargo.toml") out.push(p);
-  }
-  return out;
+  // No skips: a manifest under a directory named `target` is still a crate.
+  return walk(dir, ["Cargo.toml"], { skip: [] }).filter(
+    (file) => path.basename(file) === "Cargo.toml",
+  );
 }
 
 /** `atlas-engine-foo = …` / `atlas-engine-foo.workspace = true` in a dependency table. */

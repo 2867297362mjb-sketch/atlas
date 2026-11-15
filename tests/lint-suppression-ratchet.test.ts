@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { walk } from "./support/walk";
 
 /**
  * The lint-suppression ratchet.
@@ -55,14 +56,11 @@ const BASELINE: Record<string, number> = {
 
 const DIRECTIVE = /\b(eslint|oxlint)-disable(?:-next-line|-line)?(?![\w/-])\s*([^\n]*)/g;
 
-function walk(dir: string): string[] {
-  const out: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...walk(full));
-    else if (/\.(ts|tsx)$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) out.push(full);
-  }
-  return out;
+/** `src/` without its tests: a test may suppress what it needs. */
+function scanned(): string[] {
+  return walk(path.join(REPO_ROOT, SCAN_ROOT), [".ts", ".tsx"]).filter(
+    (file) => !/\.test\.tsx?$/.test(file),
+  );
 }
 
 interface Scan {
@@ -76,7 +74,7 @@ function scan(): Scan {
   const counts: Record<string, number> = {};
   const eslintPrefixed: string[] = [];
   const bare: string[] = [];
-  for (const file of walk(path.join(REPO_ROOT, SCAN_ROOT))) {
+  for (const file of scanned()) {
     const where = path.relative(REPO_ROOT, file).split(path.sep).join("/");
     readFileSync(file, "utf8")
       .split("\n")

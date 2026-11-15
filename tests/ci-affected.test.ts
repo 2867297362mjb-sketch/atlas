@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import {
   EXTRA_INPUTS,
@@ -15,6 +15,7 @@ import {
   readCrateMatrix,
   resolveRange,
 } from "../scripts/ci-affected.mjs";
+import { walk } from "./support/walk";
 
 /**
  * Guards `scripts/ci-affected.mjs`, the planner that lets CI skip the Rust
@@ -49,16 +50,6 @@ const dialect = dialectPackages(ciYml);
 const ctx = { workspace, crates, dialect };
 const names = new Set(workspace.packages.map((p) => p.name));
 
-function rustFiles(dir: string, out: string[] = []): string[] {
-  for (const e of readdirSync(dir, { withFileTypes: true })) {
-    if (e.name === "target" || e.name === "node_modules") continue;
-    const p = path.join(dir, e.name);
-    if (e.isDirectory()) rustFiles(p, out);
-    else if (e.name.endsWith(".rs")) out.push(p);
-  }
-  return out;
-}
-
 const rel = (p: string) => path.relative(REPO_ROOT, p).split(path.sep).join("/");
 const inside = (dir: string, target: string) => target === dir || target.startsWith(`${dir}/`);
 // `inside` for absolute paths. They carry the platform separator (`\` on
@@ -86,7 +77,7 @@ function escapes(): Escape[] {
   );
   for (const pkg of firstParty) {
     const pkgAbs = path.join(REPO_ROOT, pkg.dir);
-    for (const file of rustFiles(pkgAbs)) {
+    for (const file of walk(pkgAbs, [".rs"])) {
       const src = readFileSync(file, "utf8");
       for (const m of src.matchAll(/"((?:[^"\\\n]|\\.)*)"/g)) {
         const lit = m[1].replace(/^\//, "");

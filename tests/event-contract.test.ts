@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { walk } from "./support/walk";
 
 /**
  * Guards the Tauri *event* seam, the way `ipc-contract.test.ts` guards the
@@ -48,17 +49,6 @@ const RUST_ROOTS = [path.join(REPO_ROOT, "src-tauri", "src"), path.join(REPO_ROO
  */
 const MIN_LISTENED = 15;
 const MIN_PRODUCED = 30;
-
-function walk(dir: string, extensions: string[]): string[] {
-  const out: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name === "target" || entry.name === "node_modules") continue;
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...walk(full, extensions));
-    else if (extensions.some((e) => entry.name.endsWith(e))) out.push(full);
-  }
-  return out;
-}
 
 /** The mock backend under `src/dev/` and test files are not shipping code:
  *  neither may produce, nor count as listening to, a real channel. */

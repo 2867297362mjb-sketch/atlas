@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { walk } from "./support/walk";
 
 /**
  * Guards the Tauri IPC contract: ~350 `#[tauri::command]` handlers on the Rust
@@ -44,19 +45,6 @@ const MIN_INVOKED = 200;
 /** Repo-relative with forward slashes whatever the OS, so paths compare
  *  against the hand-written tables below on Windows too. */
 const posixRelative = (file: string) => path.relative(REPO_ROOT, file).split(path.sep).join("/");
-
-function walk(dir: string, extensions: string[]): string[] {
-  const out: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    // `target/` holds vendored dependency sources — walking it would pull in
-    // every `#[tauri::command]` in every crate we depend on.
-    if (entry.name === "target" || entry.name === "node_modules") continue;
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...walk(full, extensions));
-    else if (extensions.some((e) => entry.name.endsWith(e))) out.push(full);
-  }
-  return out;
-}
 
 /**
  * Command handlers as *declared*: every `fn` carrying `#[tauri::command]`.

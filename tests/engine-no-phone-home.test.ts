@@ -1,7 +1,8 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { walk } from "./support/walk";
 
 /**
  * The engine phones home nowhere (issue #43, spec D2 / Phase 1).
@@ -36,19 +37,7 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 const VENDOR = path.join(REPO_ROOT, "vendor", "atlas-engine");
 
 /** Source-ish files worth scanning. Excludes lockfiles and binary fixtures. */
-const SCANNED = new Set([".rs", ".toml", ".json", ".md", ".bazel", ".sh", ".py", ".ts"]);
-
-function walk(dir = VENDOR): string[] {
-  if (!existsSync(dir)) return [];
-  const out: string[] = [];
-  for (const e of readdirSync(dir, { withFileTypes: true })) {
-    if (e.name === "target" || e.name === "node_modules") continue;
-    const p = path.join(dir, e.name);
-    if (e.isDirectory()) out.push(...walk(p));
-    else if (SCANNED.has(path.extname(e.name))) out.push(p);
-  }
-  return out;
-}
+const SCANNED = [".rs", ".toml", ".json", ".md", ".bazel", ".sh", ".py", ".ts"];
 
 /**
  * The engine tree is ~4k files and every assertion below scans all of it.
@@ -62,7 +51,7 @@ function walk(dir = VENDOR): string[] {
  */
 let walked: string[] | null = null;
 function sourceFiles(): string[] {
-  walked ??= walk();
+  walked ??= walk(VENDOR, SCANNED);
   return walked;
 }
 
@@ -198,7 +187,7 @@ describe("the ChatGPT analytics client is gone", () => {
     // but nothing behind them may reach the network. No client, no POST.
     // `walk`, not `sourceFiles`: this assertion is scoped to one crate, and
     // the memoized `sourceFiles()` is the whole engine tree.
-    const analytics = walk(path.join(VENDOR, "analytics"));
+    const analytics = walk(path.join(VENDOR, "analytics"), SCANNED);
     expect(analytics.length, "analytics crate not found").toBeGreaterThan(3);
 
     const offenders = analytics

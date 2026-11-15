@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { TRANSITION_ALL_RULE, formatViolations, runRatchet } from "@tryatlas/design/ratchet";
 import { DERIVED_VAR_REGISTRY, THEME_KEY_REGISTRY } from "@tryatlas/design/theme";
 import { D23_RENAMES } from "@tryatlas/design";
+import { walk } from "./support/walk";
 
 /**
  * The design-system ratchet (decision 33) — closed at zero.
@@ -149,14 +150,9 @@ describe("design-system ratchet", () => {
   });
 });
 
-function walk(dir: string): string[] {
-  const out: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...walk(full));
-    else if (/\.(ts|tsx|css)$/.test(entry.name)) out.push(full);
-  }
-  return out;
+/** Every file under `src/` that can name a variable or a utility, tests included. */
+function sourceFiles(): string[] {
+  return walk(path.join(REPO_ROOT, "src"), [".ts", ".tsx", ".css"]);
 }
 
 /**
@@ -174,7 +170,7 @@ describe("retired `--atlas-` theme-key names", () => {
       .map(({ cssVar }) => cssVar.slice(2))
       .sort((a, b) => b.length - a.length);
     const retired = new RegExp(`--atlas-(?:${names.join("|")})(?![\\w-])`, "g");
-    const files = [...walk(path.join(REPO_ROOT, "src")), path.join(REPO_ROOT, "index.html")];
+    const files = [...sourceFiles(), path.join(REPO_ROOT, "index.html")];
     const hits = files.flatMap((file) =>
       (readFileSync(file, "utf8").match(retired) ?? []).map(
         (name) => `${path.relative(REPO_ROOT, file)}: ${name}`,
@@ -230,7 +226,7 @@ describe("retired D23 role names", () => {
     // `EXEMPT_DIRS`); an old class name in them is content, not a reference.
     const exempt = Object.keys(EXEMPT_DIRS).map((dir) => path.join(REPO_ROOT, dir) + path.sep);
     const files = [
-      ...walk(path.join(REPO_ROOT, "src")).filter((f) => !exempt.some((d) => f.startsWith(d))),
+      ...sourceFiles().filter((f) => !exempt.some((d) => f.startsWith(d))),
       path.join(REPO_ROOT, "index.html"),
     ];
     const hits = files.flatMap((file) =>

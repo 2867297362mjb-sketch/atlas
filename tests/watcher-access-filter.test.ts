@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { walk } from "./support/walk";
 
 /**
  * Every file watcher in the app drops `EventKind::Access` before doing any
@@ -24,18 +25,8 @@ const SRC = path.join(REPO_ROOT, "src-tauri", "src");
 const WATCHER_CTOR = /\bnew_debouncer(_opt)?\b|\brecommended_watcher\b|RecommendedWatcher::new\b/;
 const FILTER_USE = /\bfs_events::(changes|any_change|is_change)\b/;
 
-function rustFiles(dir: string): string[] {
-  const out: string[] = [];
-  for (const name of readdirSync(dir)) {
-    const p = path.join(dir, name);
-    if (statSync(p).isDirectory()) out.push(...rustFiles(p));
-    else if (name.endsWith(".rs")) out.push(p);
-  }
-  return out;
-}
-
 describe("file watchers drop Access events", () => {
-  const files = rustFiles(SRC).filter((p) => p !== path.join(SRC, "fs_events.rs"));
+  const files = walk(SRC, [".rs"]).filter((p) => p !== path.join(SRC, "fs_events.rs"));
   const watcherFiles = files.filter((p) => WATCHER_CTOR.test(readFileSync(p, "utf8")));
 
   it("finds the watchers it guards", () => {

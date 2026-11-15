@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { BUILTIN_THEMES } from "@/dev/mock-backend/fixtures/builtin-themes";
 import { resolveTheme } from "@tryatlas/design/theme";
+import { walk } from "./support/walk";
 
 /**
  * Every CSS custom property `src/` reads must be one something defines.
@@ -28,13 +29,8 @@ const PACKAGE_STYLES = path.join(
 );
 const themes = BUILTIN_THEMES;
 
-function walk(directory: string): string[] {
-  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-    const target = path.join(directory, entry.name);
-    if (entry.isDirectory()) return walk(target);
-    return /\.(?:css|ts|tsx)$/.test(entry.name) ? [target] : [];
-  });
-}
+/** Stylesheets declare and read variables; so do inline styles in TypeScript. */
+const CARRIES_CSS = [".css", ".ts", ".tsx"];
 
 /** CSS engine variables are supplied by the popup engine at runtime, not Atlas. */
 const CSS_VAR_ALLOWLIST: Record<string, string> = {
@@ -65,12 +61,12 @@ const CSS_VAR_ALLOWLIST: Record<string, string> = {
 
 describe("CSS custom properties", () => {
   it("covers every CSS custom property referenced under src", () => {
-    const files = walk(SRC);
+    const files = walk(SRC, CARRIES_CSS);
     const text = files.map((file) => readFileSync(file, "utf8")).join("\n");
     const references = new Set(
       [...text.matchAll(/var\((--[A-Za-z0-9_-]+)/g)].map((match) => match[1]),
     );
-    const packageCss = walk(PACKAGE_STYLES)
+    const packageCss = walk(PACKAGE_STYLES, CARRIES_CSS)
       .map((file) => readFileSync(file, "utf8"))
       .join("\n");
     const declared = new Set(

@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { walk } from "./support/walk";
 
 /**
  * The `no-unknown-classes` allowlist in `.oxlintrc.json` names only classes
@@ -52,16 +53,6 @@ const LIBRARY_CLASSES: Record<string, string> = {
   nodrag: "@xyflow/react: an element inside a node that must not start a drag",
   hljs: "highlight.js: the root its themes are scoped under",
 };
-
-function walk(dir: string, exts: string[]): string[] {
-  const out: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...walk(full, exts));
-    else if (exts.some((ext) => entry.name.endsWith(ext))) out.push(full);
-  }
-  return out;
-}
 
 function readAllowlist(): string[] {
   const config = JSON.parse(readFileSync(path.join(REPO_ROOT, ".oxlintrc.json"), "utf8"));

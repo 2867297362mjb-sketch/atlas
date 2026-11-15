@@ -1,8 +1,9 @@
 // @vitest-environment happy-dom
 import { describe, expect, it } from "vitest";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { walk } from "./support/walk";
 
 import { baseFixtureMaps, baseHandlers } from "@/dev/mock-backend/scenarios/base";
 import { scenarios } from "@/dev/mock-backend/scenarios";
@@ -88,40 +89,19 @@ const INVOKE_LITERAL = new RegExp(
  *  same table in `ipc-contract.test.ts`. */
 const DYNAMIC_COMMANDS = ["git_stage_hunk", "git_unstage_hunk", "git_discard_hunk"];
 
-function walkTs(dir: string): string[] {
-  const out: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...walkTs(full));
-    else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) out.push(full);
-  }
-  return out;
-}
-
 /** Commands the shipping frontend invokes. `src/dev/` forwards names
  *  generically and is the mock itself, so it is not a caller. */
 function invokedCommands(): Set<string> {
   const found = new Set<string>(DYNAMIC_COMMANDS);
   const devRoot = path.join(TS_SRC, "dev") + path.sep;
-  for (const file of walkTs(TS_SRC)) {
-    if (file.startsWith(devRoot)) continue;
+  for (const file of walk(TS_SRC, [".ts", ".tsx"])) {
+    if (file.startsWith(devRoot) || /\.test\.tsx?$/.test(file)) continue;
     const src = readFileSync(file, "utf8")
       .replace(/\/\*[\s\S]*?\*\//g, " ")
       .replace(/(^|[^:\\])\/\/.*$/gm, "$1");
     for (const match of src.matchAll(INVOKE_LITERAL)) found.add(match[1]);
   }
   return found;
-}
-
-function walk(dir: string): string[] {
-  const out: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name === "target" || entry.name === "node_modules") continue;
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...walk(full));
-    else if (entry.name.endsWith(".rs")) out.push(full);
-  }
-  return out;
 }
 
 /**
@@ -134,7 +114,7 @@ function walk(dir: string): string[] {
 function declaredCommands(): Set<string> {
   const found = new Set<string>();
   const attribute = /^[ \t]*#\[tauri::command(\([^)]*\))?\]/gm;
-  for (const file of walk(RUST_SRC)) {
+  for (const file of walk(RUST_SRC, [".rs"])) {
     const src = readFileSync(file, "utf8");
     for (const attr of src.matchAll(attribute)) {
       const match = src.slice(attr.index + attr[0].length).match(/\bfn\s+([a-z_][a-z0-9_]*)/i);
