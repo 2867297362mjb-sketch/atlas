@@ -256,7 +256,7 @@ fn parse_created(stdout: &str) -> Option<PrCreated> {
 
 /// A bounded local `git` read; `None` for any failure.
 async fn git(cwd: &Path, args: &[&str]) -> Option<String> {
-    run(cwd, "git", args, GIT_READ_TIMEOUT)
+    run(cwd, args, GIT_READ_TIMEOUT)
         .await
         .ok()
         .map(|out| out.trim().to_string())

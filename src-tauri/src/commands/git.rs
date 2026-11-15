@@ -1,6 +1,6 @@
-use atlas_git::{GitCommand, GitErrorPayload};
+use atlas_git::{GitCommand, GitErrorPayload, GitRawOutput, GitRunError};
 use serde::{Deserialize, Serialize};
-use std::process::Command;
+use std::path::Path;
 
 /// `git` for a READ-ONLY query — status, log, diff, blame, rev-parse, refs.
 ///
@@ -17,16 +17,21 @@ use std::process::Command;
 ///
 /// `--no-optional-locks` tells git to skip exactly those non-essential index
 /// writes, so a background read can never block a user-initiated mutation. It
-/// is what Desktop and VS Code pass on every status call, and what
-/// `atlas_git::GitCommand::read_only()` already does for the source-control
-/// crate — this module predates that crate and spawns git directly.
+/// is what Desktop and VS Code pass on every status call, and it is what
+/// [`GitCommand::read_only`] adds.
 ///
 /// Only for reads: a command that is SUPPOSED to write the index (`add`,
-/// `commit`, `checkout`) must take the lock, so it uses plain `Command`.
-fn git_read() -> Command {
-    let mut cmd = atlas_process::command("git");
-    cmd.arg("--no-optional-locks");
-    cmd
+/// `commit`, `checkout`) must take the lock, so it is not marked read-only.
+/// Returns whatever git printed with its exit code; each caller decides what
+/// a non-zero exit means.
+fn git_read<S: AsRef<std::ffi::OsStr>>(
+    path: impl AsRef<Path>,
+    args: &[S],
+) -> Result<GitRawOutput, GitRunError> {
+    GitCommand::new(path.as_ref(), &[])
+        .args(args)
+        .read_only()
+        .output()
 }
 
 #[derive(Debug, Serialize)]
@@ -85,10 +90,7 @@ pub(crate) fn git_log_compute(
     if all {
         args.push("--all".into());
     }
-    let output = git_read()
-        .args(&args)
-        .current_dir(path)
-        .output()
+    let output = git_read(path, &args)
         .map_err(|e| e.to_string())?;
 
     let log_str = String::from_utf8_lossy(&output.stdout);
@@ -136,12 +138,9 @@ pub(crate) fn git_log_compute(
 /// repo, unborn HEAD); callers fall back to the rows they loaded.
 pub(crate) fn git_commit_count(path: &str, all: bool) -> Option<usize> {
     let scope = if all { "--all" } else { "HEAD" };
-    let output = git_read()
-        .args(["rev-list", "--count", scope])
-        .current_dir(path)
-        .output()
+    let output = git_read(path, &["rev-list", "--count", scope])
         .ok()?;
-    if !output.status.success() {
+    if !output.success() {
         return None;
     }
     String::from_utf8_lossy(&output.stdout).trim().parse().ok()
@@ -168,41 +167,32 @@ pub async fn git_log(
 }
 
 pub(crate) fn git_refs_compute(path: &str) -> Result<GitRefs, String> {
-    let head_sha = git_read()
-        .args(["rev-parse", "HEAD"])
-        .current_dir(path)
-        .output()
+    let head_sha = git_read(path, &["rev-parse", "HEAD"])
         .ok()
         .and_then(|o| {
-            if o.status.success() {
+            if o.success() {
                 Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
             } else {
                 None
             }
         });
-    let head_ref = git_read()
-        .args(["symbolic-ref", "--quiet", "--short", "HEAD"])
-        .current_dir(path)
-        .output()
+    let head_ref = git_read(path, &["symbolic-ref", "--quiet", "--short", "HEAD"])
         .ok()
         .and_then(|o| {
-            if o.status.success() {
+            if o.success() {
                 Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
             } else {
                 None
             }
         });
 
-    let out = git_read()
-        .args([
+    let out = git_read(path, &[
             "for-each-ref",
             "--format=%(refname:short)\x1f%(objectname)\x1f%(refname)",
             "refs/heads",
             "refs/remotes",
             "refs/tags",
         ])
-        .current_dir(path)
-        .output()
         .map_err(|e| e.to_string())?;
     let txt = String::from_utf8_lossy(&out.stdout);
     let mut refs: Vec<GitRef> = Vec::new();
@@ -240,16 +230,10 @@ pub(crate) fn git_refs_compute(path: &str) -> Result<GitRefs, String> {
 #[tauri::command]
 pub async fn git_graph_signature(path: String) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
-        let head = git_read()
-            .args(["rev-parse", "HEAD"])
-            .current_dir(&path)
-            .output()
+        let head = git_read(&path, &["rev-parse", "HEAD"])
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
             .unwrap_or_default();
-        let refs_out = git_read()
-            .args(["for-each-ref", "--format=%(refname) %(objectname)"])
-            .current_dir(&path)
-            .output()
+        let refs_out = git_read(&path, &["for-each-ref", "--format=%(refname) %(objectname)"])
             .map_err(|e| e.to_string())?;
         let refs_text = String::from_utf8_lossy(&refs_out.stdout).to_string();
         let mut lines: Vec<String> = refs_text
@@ -288,8 +272,8 @@ pub struct GitProjectSummary {
 pub async fn git_workspace_summary(path: String) -> Result<GitProjectSummary, String> {
     tokio::task::spawn_blocking(move || {
         let git = |args: &[&str]| -> Option<String> {
-            let out = git_read().args(args).current_dir(&path).output().ok()?;
-            if !out.status.success() {
+            let out = git_read(&path, args).ok()?;
+            if !out.success() {
                 return None;
             }
             Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
@@ -386,8 +370,8 @@ fn strip_remote(remote_ref: &str) -> &str {
 pub async fn git_branch_compare(path: String) -> Result<GitBranchCompare, String> {
     tokio::task::spawn_blocking(move || {
         let git = |args: &[&str]| -> Option<String> {
-            let out = git_read().args(args).current_dir(&path).output().ok()?;
-            if !out.status.success() {
+            let out = git_read(&path, args).ok()?;
+            if !out.success() {
                 return None;
             }
             Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
@@ -470,10 +454,7 @@ pub async fn git_branch_compare(path: String) -> Result<GitBranchCompare, String
 #[tauri::command]
 pub async fn git_diff_file(path: String, file: String) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
-        let output = git_read()
-            .args(["diff", "HEAD", "--", &file])
-            .current_dir(&path)
-            .output()
+        let output = git_read(&path, &["diff", "HEAD", "--", &file])
             .map_err(|e| e.to_string())?;
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     })
@@ -517,10 +498,7 @@ pub async fn git_unstage(path: String, files: Vec<String>) -> Result<(), GitErro
 #[tauri::command]
 pub async fn git_list_branches(path: String) -> Result<Vec<GitBranch>, String> {
     tokio::task::spawn_blocking(move || {
-        let output = git_read()
-            .args(["branch", "--format=%(refname:short)\x1f%(HEAD)"])
-            .current_dir(&path)
-            .output()
+        let output = git_read(&path, &["branch", "--format=%(refname:short)\x1f%(HEAD)"])
             .map_err(|e| e.to_string())?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -630,12 +608,9 @@ pub struct BlameLine {
 #[tauri::command]
 pub async fn git_blame_file(path: String, file: String) -> Result<Vec<BlameLine>, String> {
     tokio::task::spawn_blocking(move || {
-        let output = git_read()
-            .args(["blame", "-w", "--line-porcelain", "--", &file])
-            .current_dir(&path)
-            .output()
+        let output = git_read(&path, &["blame", "-w", "--line-porcelain", "--", &file])
             .map_err(|e| e.to_string())?;
-        if !output.status.success() {
+        if !output.success() {
             return Ok(Vec::new());
         }
         Ok(parse_line_porcelain(&String::from_utf8_lossy(

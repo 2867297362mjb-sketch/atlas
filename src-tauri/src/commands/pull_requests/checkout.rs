@@ -25,10 +25,10 @@
 //! Nothing here logs a repository, branch or path.
 
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::time::{Duration, SystemTime};
 
 use atlas_gh::{GhCommand, GhError, GhOutput, Intent};
+use atlas_git::{GitCommand, GitRunError};
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
@@ -155,33 +155,35 @@ pub(super) fn batch_ssh_command(configured: Option<&str>) -> String {
 
 /// What keeps `git` from asking a terminal nobody can see, here and under
 /// the `git` that `gh pr checkout` runs. The second is Git Credential
-/// Manager's own prompt, which ignores the first.
+/// Manager's own prompt, which ignores the first. (`GitCommand` sets the
+/// first itself; `gh` needs both handed to it.)
 const GIT_NO_PROMPT: [(&str, &str); 2] =
     [("GIT_TERMINAL_PROMPT", "0"), ("GCM_INTERACTIVE", "never")];
 
-/// Run `program` in `cwd`, killed past `timeout`. Async process handling:
-/// the child is killed on drop, so the timeout dropping the future is the
-/// kill.
-pub(super) async fn run(
-    cwd: &Path,
-    program: &str,
-    args: &[&str],
-    timeout: Duration,
-) -> Result<String, RunError> {
-    run_with_env(cwd, program, args, timeout, &[]).await
+/// Run `git` in `cwd`, killed past `timeout`.
+pub(super) async fn run(cwd: &Path, args: &[&str], timeout: Duration) -> Result<String, RunError> {
+    run_program(cwd, "git", args, timeout, &[]).await
 }
 
 /// [`run`] for a step that talks to the remote: ssh is told not to prompt
 /// ([`ssh_command`]).
 pub(super) async fn run_networked(
     cwd: &Path,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<String, RunError> {
+    run_networked_program(cwd, "git", args, timeout).await
+}
+
+async fn run_networked_program(
+    cwd: &Path,
     program: &str,
     args: &[&str],
     timeout: Duration,
 ) -> Result<String, RunError> {
     match ssh_command(cwd).await {
-        Some(ssh) => run_with_env(cwd, program, args, timeout, &[("GIT_SSH_COMMAND", &ssh)]).await,
-        None => run(cwd, program, args, timeout).await,
+        Some(ssh) => run_program(cwd, program, args, timeout, &[("GIT_SSH_COMMAND", &ssh)]).await,
+        None => run_program(cwd, program, args, timeout, &[]).await,
     }
 }
 
@@ -194,41 +196,35 @@ async fn ssh_command(cwd: &Path) -> Option<String> {
     }
     let configured = match std::env::var("GIT_SSH_COMMAND") {
         Ok(command) => Some(command),
-        Err(_) => run(
-            cwd,
-            "git",
-            &["config", "--get", "core.sshCommand"],
-            GIT_TIMEOUT,
-        )
-        .await
-        .ok()
-        .map(|s| s.trim().to_string()),
+        Err(_) => run(cwd, &["config", "--get", "core.sshCommand"], GIT_TIMEOUT)
+            .await
+            .ok()
+            .map(|s| s.trim().to_string()),
     };
     Some(batch_ssh_command(configured.as_deref()))
 }
 
-async fn run_with_env(
+/// One run through [`GitCommand`], off the async runtime: its timeout is the
+/// kill. `program` is `git` everywhere but a test, which hands in a script.
+async fn run_program(
     cwd: &Path,
     program: &str,
     args: &[&str],
     timeout: Duration,
     env: &[(&str, &str)],
 ) -> Result<String, RunError> {
-    let mut cmd = atlas_process::async_command(program);
-    cmd.args(args)
-        .current_dir(cwd)
-        .envs(GIT_NO_PROMPT)
-        .env("NO_COLOR", "1")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    for (key, value) in env {
-        cmd.env(key, value);
+    let mut cmd = GitCommand::new(cwd, args)
+        .program(program)
+        .timeout(timeout)
+        .env("NO_COLOR", "1");
+    for (key, value) in GIT_NO_PROMPT.iter().chain(env) {
+        cmd = cmd.env(key, value);
     }
-    let child = match cmd.spawn() {
-        Ok(child) => child,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(RunError::NotInstalled),
+    let out = match tokio::task::spawn_blocking(move || cmd.output()).await {
+        Ok(Ok(out)) => out,
+        Ok(Err(GitRunError::NotInstalled)) => return Err(RunError::NotInstalled),
+        Ok(Err(GitRunError::TimedOut { .. })) => return Err(RunError::TimedOut),
+        Ok(Err(GitRunError::Failed(stderr))) => return Err(RunError::Failed { exit: None, stderr }),
         Err(e) => {
             return Err(RunError::Failed {
                 exit: None,
@@ -236,28 +232,18 @@ async fn run_with_env(
             })
         }
     };
-    let out = match tokio::time::timeout(timeout, child.wait_with_output()).await {
-        Ok(Ok(out)) => out,
-        Ok(Err(e)) => {
-            return Err(RunError::Failed {
-                exit: None,
-                stderr: e.to_string(),
-            })
-        }
-        Err(_) => return Err(RunError::TimedOut),
-    };
-    if !out.status.success() {
+    if !out.success() {
         return Err(RunError::Failed {
-            exit: out.status.code(),
-            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+            exit: out.exit_code,
+            stderr: out.stderr_text(),
         });
     }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    Ok(out.stdout_text())
 }
 
 /// A local `git` step, its output's trailing newline trimmed.
 pub(super) async fn git(cwd: &Path, args: &[&str]) -> Result<String, RunError> {
-    run(cwd, "git", args, GIT_TIMEOUT)
+    run(cwd, args, GIT_TIMEOUT)
         .await
         .map(|s| s.trim_end().to_string())
 }
@@ -834,11 +820,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let started = std::time::Instant::now();
         assert_eq!(
-            run(
+            run_program(
                 dir.path(),
                 "/bin/sh",
                 &["-c", "exec sleep 30"],
-                Duration::from_millis(200)
+                Duration::from_millis(200),
+                &[]
             )
             .await,
             Err(RunError::TimedOut)
@@ -850,7 +837,7 @@ mod tests {
     #[tokio::test]
     async fn a_networked_step_cannot_prompt() {
         let dir = tempfile::tempdir().unwrap();
-        let out = run_networked(
+        let out = run_networked_program(
             dir.path(),
             "/bin/sh",
             &[
@@ -872,7 +859,7 @@ mod tests {
     async fn a_missing_program_is_not_installed() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(
-            run(dir.path(), "atlas-no-such-program", &[], GIT_TIMEOUT).await,
+            run_program(dir.path(), "atlas-no-such-program", &[], GIT_TIMEOUT, &[]).await,
             Err(RunError::NotInstalled)
         );
     }
