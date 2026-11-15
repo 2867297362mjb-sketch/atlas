@@ -46,7 +46,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { extractPlanMarkdown, type PlanRecord } from "../lib/plans";
 import { extractNextSteps, stripNextStepsDirective } from "../lib/next-steps";
-import { turnFilesOfToolCall } from "../lib/tool-files";
+import { foldTurnFiles, turnFilesOfToolCall } from "../lib/turn-files";
+import { toolCallFacts } from "../lib/tool-changes";
 import { inlineQueuedText } from "../lib/queued-text";
 import type { MentionData } from "../lib/mentions";
 import type { TurnFile, TurnInterruption } from "@/types/agent";
@@ -66,27 +67,22 @@ const firstUserPreview = (prose: string): string => prose.slice(0, FIRST_USER_PR
  *  message — the same slot the live path uses. Mutates in place. */
 function reconstructTurnSummaries(messages: ChatMessage[]): void {
   const flushTurn = (start: number, end: number) => {
-    const byPath = new Map<string, TurnFile>();
+    const touched: TurnFile[] = [];
     let lastAsst = -1;
     for (let i = start; i < end; i++) {
       const m = messages[i];
       if (m.role !== "assistant") continue;
       lastAsst = i;
       for (const tc of m.toolCalls) {
-        const files = turnFilesOfToolCall({
-          toolName: tc.toolName,
-          kind: tc.kind,
-          arguments: (tc.arguments ?? {}) as Record<string, unknown>,
-          locations: tc.locations,
-        });
-        for (const file of files) foldTurnFile(byPath, file);
+        for (const file of turnFilesOfToolCall(toolCallFacts(tc))) touched.push(file);
       }
     }
     if (lastAsst >= 0) {
-      if (byPath.size > 0) {
+      const files = foldTurnFiles(touched);
+      if (files.length > 0) {
         messages[lastAsst].turnSummary = {
           turnSeq: 0, // reconstructed — not tied to a live turn
-          files: Array.from(byPath.values()),
+          files,
           repoAtTurn: false,
         };
       }
@@ -105,43 +101,6 @@ function reconstructTurnSummaries(messages: ChatMessage[]): void {
     }
   }
   flushTurn(turnStart, messages.length);
-}
-
-/** Fold one file a tool call touched into a turn's per-path entries, summing
- *  edit counts; `edit` wins over `read`, and any real modify makes it "M". A
- *  rename moves the entry of the path it left to the path it went to, so a
- *  file edited then renamed in one turn is one entry: it keeps the earliest
- *  origin, and a file the turn created stays created with no origin. */
-function foldTurnFile(byPath: Map<string, TurnFile>, file: TurnFile): void {
-  const left = file.movedFrom !== undefined ? byPath.get(file.movedFrom) : undefined;
-  if (left && file.movedFrom !== file.path) {
-    byPath.delete(left.path);
-    const moved: TurnFile = { ...left, path: file.path };
-    if (left.created) delete moved.movedFrom;
-    else moved.movedFrom = left.movedFrom ?? file.movedFrom;
-    const there = byPath.get(file.path);
-    byPath.delete(file.path);
-    byPath.set(file.path, moved);
-    if (there) foldTurnFile(byPath, { ...there, movedFrom: undefined });
-    foldTurnFile(byPath, { ...file, movedFrom: undefined, created: left.created ?? file.created });
-    return;
-  }
-  const ex = byPath.get(file.path);
-  if (!ex) {
-    byPath.set(file.path, { ...file });
-    return;
-  }
-  ex.added += file.added;
-  ex.removed += file.removed;
-  if (file.kind === "edit") ex.kind = "edit";
-  if (file.created === false) ex.created = false;
-}
-
-/** Collapse the per-turn tool-id map into one entry per file path. */
-function aggregateTurnFiles(tools: Record<string, TurnFile>): TurnFile[] {
-  const byPath = new Map<string, TurnFile>();
-  for (const t of Object.values(tools)) foldTurnFile(byPath, t);
-  return Array.from(byPath.values());
 }
 
 /**
@@ -2457,7 +2416,7 @@ function applyDeltaToDraft(s: ChatDraft, env: AgentDelta, addedToolCalls?: Set<s
       // turn end, so the adaptive card never appears mid-stream. `repoAtTurn` is
       // set by the card component (the store stays free of git/app deps).
       if (session.turnScratch) {
-        const files = aggregateTurnFiles(session.turnScratch.tools);
+        const files = foldTurnFiles(Object.values(session.turnScratch.tools));
         if (files.length > 0) {
           for (let i = session.messages.length - 1; i >= 0; i--) {
             if (session.messages[i].role === "assistant") {
@@ -2673,12 +2632,7 @@ function applyDeltaToDraft(s: ChatDraft, env: AgentDelta, addedToolCalls?: Set<s
       // message rescan). Frozen into the trailing message at turn_finished.
       if (session.turnScratch) {
         const tc = env.tool_call;
-        const files = turnFilesOfToolCall({
-          toolName: tc.tool_name,
-          kind: tc.kind,
-          arguments: (tc.arguments ?? {}) as Record<string, unknown>,
-          locations: toolLocations(tc.locations),
-        });
+        const files = turnFilesOfToolCall(tc);
         // A later sighting that names no file (a bare status update) must not
         // erase what an earlier one recorded. A call that names several files
         // (the native engine's patch) keeps the first under its id and the

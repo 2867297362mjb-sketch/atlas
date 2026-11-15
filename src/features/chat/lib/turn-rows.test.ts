@@ -172,6 +172,78 @@ describe("a tool call that reports its edit as a diff content block", () => {
   });
 });
 
+describe("an edit the timeline line used to misread", () => {
+  it("reads a whole file written by a call named by its title as created, with its lines", () => {
+    // Most adapters put the call's title on the wire as its name, so a write
+    // is recognised by its ACP kind. The line dropped the kind: it read
+    // "Edited" at +0 while the turn card counted the file as created.
+    const m = markers(
+      turn(
+        toolCall({
+          kind: "edit",
+          toolName: "Write src/x.ts",
+          arguments: { file_path: "/repo/src/x.ts", content: "a\nb\nc\n" },
+        }),
+      ),
+    )[0];
+    expect([m.verb, m.added, m.removed]).toEqual(["Created", 3, 0]);
+  });
+
+  it("names the file of an edit that says only where it was", () => {
+    // The turn card listed the file from the call's location; the line showed
+    // the bare tool name and opened nothing.
+    const m = markers(
+      turn(
+        toolCall({
+          kind: "edit",
+          toolName: "edit",
+          arguments: {},
+          locations: ["/repo/src/loc.ts"],
+        }),
+      ),
+    )[0];
+    expect([m.verb, m.detail, m.path, m.opens]).toEqual([
+      "Edited",
+      "src/loc.ts",
+      "/repo/src/loc.ts",
+      "diff",
+    ]);
+  });
+
+  it("counts a file a diff block reports beside the arguments' own", () => {
+    const m = markers(
+      turn(
+        toolCall({
+          toolName: "Write",
+          arguments: { file_path: "/repo/src/known.ts", content: "a\n" },
+          contentBlocks: [{ type: "diff", path: "/repo/src/other.ts", newText: "z\n" }],
+        }),
+      ),
+    )[0];
+    // Still named by the file the arguments name.
+    expect([m.detail, m.added]).toEqual(["src/known.ts", 2]);
+  });
+
+  it("names a renamed file as the call did, and opens it where it went", () => {
+    const m = markers(
+      turn(
+        toolCall({
+          kind: "edit",
+          toolName: "Edit /repo/src/c.rs",
+          arguments: {
+            paths: ["/repo/src/c.rs"],
+            patch: "\n\nMoved to: /repo/src/d.rs",
+            changes: [
+              { path: "/repo/src/c.rs", kind: "rename", lines: [0, 0], movePath: "/repo/src/d.rs" },
+            ],
+          },
+        }),
+      ),
+    )[0];
+    expect([m.detail, m.path]).toEqual(["src/c.rs", "/repo/src/d.rs"]);
+  });
+});
+
 describe("a tool call that ran a terminal", () => {
   it("can be opened before it has printed anything", () => {
     // A running command's marker has to be clickable from the start — the
