@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { walk } from "./support/walk";
+import { expectFloor } from "./support/floor";
 
 /**
  * A file under a `views/` directory renders from its props alone.
@@ -192,6 +193,9 @@ describe("view purity contract", () => {
   });
 
   it("no file under a views/ directory reads stores or IPC", () => {
+    // If `views/` were renamed, or the walk stopped reaching it, there would
+    // be no file to hold to the rule.
+    expectFloor("non-test files under src/**/views/", viewFiles.length, 135);
     const violations: Violation[] = [];
     const badAllows: string[] = [];
     for (const file of viewFiles) {

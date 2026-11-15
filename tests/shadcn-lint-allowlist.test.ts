@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { walk } from "./support/walk";
+import { expectFloor } from "./support/floor";
 
 /**
  * The `no-unknown-classes` allowlist in `.oxlintrc.json` names only classes
@@ -62,9 +63,11 @@ function readAllowlist(): string[] {
   return rule[1].allow as string[];
 }
 
+const stylesheets = [...walk(SRC, [".css"]), ...walk(PACKAGE_STYLES, [".css"])];
+
 function definedClasses(): Set<string> {
   const defined = new Set<string>();
-  for (const file of [...walk(SRC, [".css"]), ...walk(PACKAGE_STYLES, [".css"])]) {
+  for (const file of stylesheets) {
     const css = readFileSync(file, "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
     for (const m of css.matchAll(/\.(-?[_a-zA-Z][\w-]*)/g)) defined.add(m[1]);
     for (const m of css.matchAll(/@utility\s+([\w-]+)/g)) defined.add(m[1]);
@@ -79,8 +82,10 @@ describe("shadcn-lint allowlist", () => {
 
   it("parses a plausible allowlist and stylesheet set", () => {
     // Floors: a parse that stops matching fails here rather than passing vacuously.
-    expect(allow.length).toBeGreaterThan(30);
-    expect(defined.size).toBeGreaterThan(200);
+    expectFloor("classes allowlisted in .oxlintrc.json", allow.length, 33);
+    expectFloor("stylesheets under src/ and the package", stylesheets.length, 12);
+    expectFloor("class selectors and @utility names defined", defined.size, 185);
+    expectFloor("TypeScript files under src/", scripts.length, 1800);
   });
 
   it("names every class exactly — no wildcards", () => {

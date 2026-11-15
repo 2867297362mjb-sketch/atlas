@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { walk } from "./support/walk";
+import { expectFloor } from "./support/floor";
 
 /**
  * The engine phones home nowhere (issue #43, spec D2 / Phase 1).
@@ -137,14 +138,14 @@ describe("the engine's egress surface (parser health)", () => {
   it("scans a plausible number of engine files", () => {
     // A traversal that silently stopped would make every assertion below pass
     // by finding nothing. The engine is ~4k files.
-    expect(sourceFiles().length).toBeGreaterThan(1000);
+    expectFloor("source files under vendor/atlas-engine", sourceFiles().length, 3200);
   });
 
   it("still finds the engine's ordinary network code", () => {
     // Proves the scanner reads content, not just names: the engine legitimately
     // talks to whatever model provider the user configured, and that must
     // survive. A test that forbade all HTTP would be wrong, not strict.
-    expect(filesMatching(/reqwest/).length).toBeGreaterThan(10);
+    expectFloor("engine files that name reqwest", filesMatching(/reqwest/).length, 15);
   });
 });
 
@@ -188,7 +189,7 @@ describe("the ChatGPT analytics client is gone", () => {
     // `walk`, not `sourceFiles`: this assertion is scoped to one crate, and
     // the memoized `sourceFiles()` is the whole engine tree.
     const analytics = walk(path.join(VENDOR, "analytics"), SCANNED);
-    expect(analytics.length, "analytics crate not found").toBeGreaterThan(3);
+    expectFloor("source files in the engine's analytics crate", analytics.length, 5);
 
     const offenders = analytics
       .filter((f) => /reqwest|\.post\(|\.send\(\)\s*$/m.test(textOf(f)))

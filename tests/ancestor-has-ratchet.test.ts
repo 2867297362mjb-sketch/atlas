@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { walk } from "./support/walk";
+import { expectFloor } from "./support/floor";
 
 /**
  * No `group-has-[…]` / `peer-has-[…]`.
@@ -40,7 +41,9 @@ function scanned(): string[] {
 describe("ancestor :has() ratchet", () => {
   it("src/ uses no group-has-[…] or peer-has-[…] variant", () => {
     const hits: string[] = [];
-    for (const file of scanned()) {
+    const files = scanned();
+    expectFloor("non-test TypeScript and CSS files under src/", files.length, 1350);
+    for (const file of files) {
       readFileSync(file, "utf8")
         .split(/\r?\n/)
         .forEach((line, i) => {

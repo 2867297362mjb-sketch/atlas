@@ -3,6 +3,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { walk } from "./support/walk";
+import { expectFloor } from "./support/floor";
 
 /**
  * Guards the dev profile (`crates/atlas-profile`): `bun run dev:app` runs a
@@ -434,7 +435,7 @@ describe("Atlas's on-disk names have one source", () => {
   ];
 
   it("finds the Rust sources (parser health)", () => {
-    expect(files.length).toBeGreaterThan(100);
+    expectFloor("production Rust sources in src-tauri/src and crates/*/src", files.length, 360);
   });
 
   it("no production code spells out `.atlas` or `~/.config/atlas`", () => {

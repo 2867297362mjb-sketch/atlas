@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { walk } from "./support/walk";
+import { expectFloor } from "./support/floor";
 
 /**
  * Every consumer that reads a RESOLVED theme colour must have a way to hear
@@ -131,9 +132,10 @@ const readers: Reader[] = scanned.flatMap((file) => {
 
 describe("theme subscription contract", () => {
   it("finds the readers at all (no vacuous pass)", () => {
-    // Well under the real count (13 at the time of writing): a smoke alarm for
-    // "the regex stopped matching", not a coverage target.
-    expect(readers.length).toBeGreaterThanOrEqual(8);
+    // A smoke alarm for "the root moved" and "the regex stopped matching",
+    // not a coverage target.
+    expectFloor("shipping TypeScript files under src/", scanned.length, 1350);
+    expectFloor("files that read a resolved theme value", readers.length, 12);
     // And the seven subsystems the 2026-09-18 review named as the risk are all
     // still in the set, by the path they live at.
     for (const file of [

@@ -7,6 +7,7 @@ import { walk } from "./support/walk";
 
 import { baseFixtureMaps, baseHandlers } from "@/dev/mock-backend/scenarios/base";
 import { scenarios } from "@/dev/mock-backend/scenarios";
+import { expectFloor } from "./support/floor";
 
 /**
  * Guards the dev-only browser mock backend (`src/dev/mock-backend/`) against
@@ -50,9 +51,9 @@ const ALLOWED_OVERLAPS: Record<string, string> = {};
 /**
  * A vacuous pass is the thing to fear: if the imports below ever resolve to an
  * empty object, every assertion here passes while guarding nothing. Well under
- * the real count (~300 at the time of writing) — a smoke alarm, not a target.
+ * the real count — a smoke alarm, not a target.
  */
-const MIN_MOCKED = 200;
+const MIN_MOCKED = 500;
 
 const TS_SRC = path.join(REPO_ROOT, "src");
 
@@ -194,10 +195,10 @@ describe("browser mock backend contract", () => {
   // First, so a broken import reports itself as a broken import rather than as
   // a confusing "0 commands differ" pass.
   it("loads a plausible number of mocked commands", () => {
-    expect(declared.size).toBeGreaterThan(250);
-    expect(registered.size).toBeGreaterThan(250);
-    expect(mocked.size).toBeGreaterThan(MIN_MOCKED);
-    expect(Object.keys(baseFixtureMaps).length).toBeGreaterThan(10);
+    expectFloor("#[tauri::command] handlers in src-tauri/src", declared.size, 500);
+    expectFloor("commands in generate_handler![] in lib.rs", registered.size, 500);
+    expectFloor("commands the mock backend answers", mocked.size, MIN_MOCKED);
+    expectFloor("base fixture maps", Object.keys(baseFixtureMaps).length, 20);
   });
 
   it("answers no command that Rust does not declare", () => {
@@ -248,7 +249,7 @@ describe("browser mock backend contract", () => {
 
   it("answers every command the app invokes, or says why not", () => {
     const invoked = invokedCommands();
-    expect(invoked.size).toBeGreaterThan(200);
+    expectFloor("commands the shipping frontend invokes", invoked.size, 500);
 
     const missing = [...invoked]
       .filter((name) => !mocked.has(name) && !(name in UNMOCKED_ALLOWED))

@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { BUILTIN_THEMES } from "@/dev/mock-backend/fixtures/builtin-themes";
 import { resolveTheme } from "@tryatlas/design/theme";
 import { walk } from "./support/walk";
+import { expectFloor } from "./support/floor";
 
 /**
  * Every CSS custom property `src/` reads must be one something defines.
@@ -66,9 +67,8 @@ describe("CSS custom properties", () => {
     const references = new Set(
       [...text.matchAll(/var\((--[A-Za-z0-9_-]+)/g)].map((match) => match[1]),
     );
-    const packageCss = walk(PACKAGE_STYLES, CARRIES_CSS)
-      .map((file) => readFileSync(file, "utf8"))
-      .join("\n");
+    const packageFiles = walk(PACKAGE_STYLES, CARRIES_CSS);
+    const packageCss = packageFiles.map((file) => readFileSync(file, "utf8")).join("\n");
     const declared = new Set(
       [...`${text}\n${packageCss}`.matchAll(/(--[A-Za-z0-9_-]+)\s*:/g)].map((match) => match[1]),
     );
@@ -76,6 +76,12 @@ describe("CSS custom properties", () => {
       ...Object.keys(resolveTheme(themes[0], "dark").cssVars),
       ...Object.keys(themes[0].dark!.base).map((key) => `--${key}`),
     ]);
+
+    expectFloor("TypeScript and CSS files under src/", files.length, 1800);
+    expectFloor("stylesheets in @tryatlas/design's src/styles", packageFiles.length, 8);
+    expectFloor("distinct var(--…) references under src/", references.size, 110);
+    expectFloor("custom properties declared under src/ and the package", declared.size, 350);
+    expectFloor("variables the resolved theme produces", produced.size, 110);
 
     const missing = [...references]
       .filter((variable) => !produced.has(variable) && !declared.has(variable))

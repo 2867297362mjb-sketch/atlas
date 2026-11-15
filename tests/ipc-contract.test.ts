@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { walk } from "./support/walk";
+import { expectFloor } from "./support/floor";
 
 /**
  * Guards the Tauri IPC contract: ~350 `#[tauri::command]` handlers on the Rust
@@ -33,14 +34,16 @@ const LIB_RS = path.join(RUST_SRC, "lib.rs");
  * The failure mode this defends against: someone reformats `lib.rs`, a regex
  * below stops matching, every derived set comes back empty, and the equality
  * assertions pass trivially — leaving a green test that guards nothing,
- * possibly for years. These numbers are deliberately well under the real
- * counts at the time of writing (350 declared / 345 registered / 316 invoked);
- * they are a smoke alarm for "the parser broke", not a coverage target, so
- * they should only ever be raised if a parser rewrite needs a tighter alarm.
+ * possibly for years. These numbers are deliberately a little under the real
+ * counts; they are a smoke alarm for "the parser broke", not a coverage
+ * target, so they should only ever be raised if a parser rewrite needs a
+ * tighter alarm.
  */
-const MIN_DECLARED = 250;
-const MIN_REGISTERED = 250;
-const MIN_INVOKED = 200;
+const MIN_RUST_FILES = 170;
+const MIN_TS_FILES = 1800;
+const MIN_DECLARED = 500;
+const MIN_REGISTERED = 500;
+const MIN_INVOKED = 500;
 
 /** Repo-relative with forward slashes whatever the OS, so paths compare
  *  against the hand-written tables below on Windows too. */
@@ -228,16 +231,21 @@ describe("tauri IPC contract", () => {
 
   // These three run first so that a broken parser reports itself as a broken
   // parser, rather than as a confusing "0 commands differ" pass.
+  it("reads a plausible number of files on both sides", () => {
+    expectFloor("Rust files under src-tauri/src", walk(RUST_SRC, [".rs"]).length, MIN_RUST_FILES);
+    expectFloor("TypeScript files under src/", frontendFiles().length, MIN_TS_FILES);
+  });
+
   it("parses a plausible number of declared commands", () => {
-    expect(declared.size).toBeGreaterThan(MIN_DECLARED);
+    expectFloor("#[tauri::command] handlers in src-tauri/src", declared.size, MIN_DECLARED);
   });
 
   it("parses a plausible number of registered commands", () => {
-    expect(registered.length).toBeGreaterThan(MIN_REGISTERED);
+    expectFloor("commands in generate_handler![] in lib.rs", registered.length, MIN_REGISTERED);
   });
 
   it("parses a plausible number of invoked commands", () => {
-    expect(invoked.size).toBeGreaterThan(MIN_INVOKED);
+    expectFloor('invoke("name") literals under src/', invoked.size, MIN_INVOKED);
   });
 
   it("registers every command name exactly once", () => {
@@ -306,6 +314,7 @@ describe("tauri IPC contract", () => {
     // be maintained, reviewed and kept safe, and it hides which capability
     // actually lives where. Delete the command, or wire its caller.
     const literals = frontendCommandLiterals();
+    expectFloor("snake_case string literals in shipping TypeScript", literals.size, 2300);
     const uncalled = registered.filter((name) => !literals.has(name) && !KNOWN_UNCALLED.has(name));
     expect(uncalled).toEqual([]);
 

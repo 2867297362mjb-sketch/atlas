@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { walk } from "./support/walk";
+import { expectFloor } from "./support/floor";
 
 /**
  * Keeps the engine quarantined (issue #42, spec D2 / Phase 1).
@@ -139,7 +140,7 @@ describe("the engine is present and whole", () => {
 
 describe("nothing that ships depends on the engine", () => {
   it("finds Atlas's manifests (parser health)", () => {
-    expect(atlasManifests().length).toBeGreaterThan(10);
+    expectFloor("Atlas manifests: src-tauri and crates/*", atlasManifests().length, 26);
   });
 
   it("no Atlas crate declares a atlas-agent dependency", () => {

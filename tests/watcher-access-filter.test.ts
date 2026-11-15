@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { walk } from "./support/walk";
+import { expectFloor } from "./support/floor";
 
 /**
  * Every file watcher in the app drops `EventKind::Access` before doing any
@@ -31,7 +32,8 @@ describe("file watchers drop Access events", () => {
 
   it("finds the watchers it guards", () => {
     // If this goes to zero the regex drifted from the code, not the other way.
-    expect(watcherFiles.length).toBeGreaterThanOrEqual(5);
+    expectFloor("Rust files under src-tauri/src", files.length, 170);
+    expectFloor("files that create a file watcher", watcherFiles.length, 5);
   });
 
   for (const file of watcherFiles) {

@@ -6,6 +6,7 @@ import { TRANSITION_ALL_RULE, formatViolations, runRatchet } from "@tryatlas/des
 import { DERIVED_VAR_REGISTRY, THEME_KEY_REGISTRY } from "@tryatlas/design/theme";
 import { D23_RENAMES } from "@tryatlas/design";
 import { walk } from "./support/walk";
+import { expectFloor } from "./support/floor";
 
 /**
  * The design-system ratchet (decision 33) — closed at zero.
@@ -124,6 +125,8 @@ const EXEMPT_DIRS: Record<string, string> = {
 
 describe("design-system ratchet", () => {
   it("has no violation in " + SCAN_ROOTS.join(" + "), () => {
+    // A root that is gone scans nothing and passes silently.
+    for (const root of SCAN_ROOTS) expect(existsSync(path.join(REPO_ROOT, root)), root).toBe(true);
     const violations = runRatchet({
       cwd: REPO_ROOT,
       roots: SCAN_ROOTS,
@@ -176,7 +179,8 @@ describe("retired `--atlas-` theme-key names", () => {
         (name) => `${path.relative(REPO_ROOT, file)}: ${name}`,
       ),
     );
-    expect(names.length).toBeGreaterThan(0);
+    expectFloor("theme keys and derived variables in the package's registries", names.length, 75);
+    expectFloor("TypeScript and CSS files under src/, plus index.html", files.length, 1800);
     expect(hits, "drop the `--atlas-` prefix: a theme key's variable is `--<key>`").toEqual([]);
   });
 });
@@ -229,6 +233,8 @@ describe("retired D23 role names", () => {
       ...sourceFiles().filter((f) => !exempt.some((d) => f.startsWith(d))),
       path.join(REPO_ROOT, "index.html"),
     ];
+    expectFloor("files under src/ outside the fixture directories", files.length, 1800);
+    expectFloor("role names D23 retired", Object.keys(D23_RENAMES).length, 90);
     const hits = files.flatMap((file) =>
       readFileSync(file, "utf8")
         .split("\n")

@@ -16,6 +16,7 @@ import {
   resolveRange,
 } from "../scripts/ci-affected.mjs";
 import { walk } from "./support/walk";
+import { expectFloor } from "./support/floor";
 
 /**
  * Guards `scripts/ci-affected.mjs`, the planner that lets CI skip the Rust
@@ -113,7 +114,7 @@ describe("the CI planner sees every input", () => {
   it("finds the workspace and the out-of-tree reads it already knows about", () => {
     // Floor guards: an empty workspace or a scan that matches nothing would
     // make every assertion below pass vacuously.
-    expect(workspace.packages.length).toBeGreaterThan(100);
+    expectFloor("packages in the cargo workspace", workspace.packages.length, 120);
     const sites = escapes().map((e) => e.pkg);
     expect(sites).toEqual(expect.arrayContaining(["atlas", "atlas-theme", "atlas-process"]));
   });
@@ -136,7 +137,7 @@ describe("the CI planner sees every input", () => {
     const tracked = execFileSync("git", ["ls-files", "-z"], { cwd: REPO_ROOT, encoding: "utf8" })
       .split("\0")
       .filter(Boolean);
-    expect(tracked.length).toBeGreaterThan(1000);
+    expectFloor("files git tracks", tracked.length, 7000);
     const unclassified = tracked.filter((f) => {
       const { all } = affectedPackages([f], workspace);
       return all !== null && !GLOBAL_INPUTS.some((g) => matches(g, f));
