@@ -2,6 +2,7 @@ import { useLayoutStore } from "@/features/layout/stores/layout-store";
 import { useChatStore } from "@/features/chat/stores/chat-store";
 import { useProjectStore } from "@/features/projects/stores/project-store";
 import { useTerminalStore } from "@/features/terminal/stores/terminal-store";
+import { emitWindowEvent } from "@/lib/window-events";
 
 /**
  * Tab ↔ project resolution. Tab ids are unique across projects, so a tab
@@ -62,5 +63,5 @@ export async function jumpToSession(tabId: string): Promise<void> {
     await ws.actions.switchTo(ownerId);
   }
   useLayoutStore.getState().actions.setActiveTab(tabId);
-  window.dispatchEvent(new CustomEvent("atlas:chat-focus", { detail: { tabId } }));
+  emitWindowEvent("atlas:chat-focus", { tabId });
 }

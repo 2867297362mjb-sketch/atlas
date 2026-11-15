@@ -7,6 +7,7 @@ import type { PlanRecord } from "../lib/plans";
 import { loadPlans } from "../lib/plans-api";
 import { SidePanelFrameView } from "./views/side-panel-frame-view";
 import { PlansPanelView } from "./views/plans-panel-view";
+import { onWindowEvent } from "@/lib/window-events";
 
 interface PlansPanelProps {
   onClose: () => void;
@@ -40,8 +41,7 @@ export function PlansPanel({ onClose }: PlansPanelProps) {
   useEffect(() => {
     load();
     const onSaved = () => load();
-    window.addEventListener("atlas:plan-saved", onSaved);
-    return () => window.removeEventListener("atlas:plan-saved", onSaved);
+    return onWindowEvent("atlas:plan-saved", onSaved);
   }, [load]);
 
   return (

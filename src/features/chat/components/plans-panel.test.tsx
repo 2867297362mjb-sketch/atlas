@@ -15,6 +15,7 @@ import userEvent from "@testing-library/user-event";
 import { useAppStore } from "@/features/app/stores/app-store";
 import type { PlanRecord } from "../lib/plans";
 import { PlansPanel } from "./plans-panel";
+import { emitWindowEvent } from "@/lib/window-events";
 
 const PLAN = (id: string, userMessage: string): PlanRecord =>
   ({
@@ -56,7 +57,7 @@ describe("PlansPanel", () => {
     expect(await screen.findByText("Plan a")).toBeTruthy();
 
     act(() => {
-      window.dispatchEvent(new CustomEvent("atlas:plan-saved"));
+      emitWindowEvent("atlas:plan-saved");
     });
     await waitFor(() => expect(loadPlans).toHaveBeenCalledTimes(2));
   });

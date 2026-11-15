@@ -23,10 +23,12 @@ import { useLiveElsewhereStore, useSendHeldForTerminal } from "../stores/live-el
 import { useRcStore } from "../stores/rc-store";
 import { createChatPanelHandlers, type ChatSendHandler } from "../lib/chat-panel-handlers";
 import { sessionSend } from "../lib/session-send";
-import { CHAT_STOP_EVENT } from "../lib/switch-agent";
 import type { BindControl } from "./use-agent-bind";
 import { useComposerGates } from "./use-composer-gates";
 import { useChatPanelEvents, useQueueDrain } from "./use-queue-drain";
+import { emitWindowEvent } from "@/lib/window-events";
+import { askAgent } from "@/features/ask-agent/lib/ask-agent";
+import { useLayoutStore } from "@/features/layout/stores/layout-store";
 
 const TAB = "tab-1";
 const SESSION = "sess-1";
@@ -181,19 +183,73 @@ describe("the window events", () => {
   it("atlas:chat-send and the stop event reach this tab's handlers, and no other tab's", async () => {
     bindTab();
     renderHook(usePanelSend);
-    const dispatch = (name: string, tabId: string, text?: string) =>
-      act(() => {
-        window.dispatchEvent(new CustomEvent(name, { detail: { tabId, text } }));
-      });
+    const send = (tabId: string, text: string) =>
+      act(() => void emitWindowEvent("atlas:chat-send", { tabId, text }));
+    const stop = (tabId: string) => act(() => void emitWindowEvent("atlas:chat-stop", { tabId }));
 
-    dispatch("atlas:chat-send", "another-tab", "not mine");
-    dispatch("atlas:chat-send", TAB, "mine");
+    send("another-tab", "not mine");
+    send(TAB, "mine");
     await waitFor(() => expect(sentTexts()).toEqual(["mine"]));
 
-    dispatch(CHAT_STOP_EVENT, "another-tab");
+    stop("another-tab");
     expect(count("agents_cancel")).toBe(0);
-    dispatch(CHAT_STOP_EVENT, TAB);
+    stop(TAB);
     expect(tauri.calls("agents_cancel").map((c) => c.args.stop)).toEqual([true]);
+  });
+
+  // The real emitter, not the helper called by hand: `askAgent` (the "Ask
+  // agent" action every feature uses) emits a cancelable `atlas:chat-send`,
+  // and learns from the listener's `preventDefault` that a panel took it.
+  it("an ask from another feature goes out through this tab's send path, and is told it landed", async () => {
+    bindTab();
+    act(() => {
+      useLayoutStore.setState(useLayoutStore.getInitialState(), true);
+      useLayoutStore.getState().actions.addTab({
+        id: TAB,
+        type: "chat",
+        title: TAB,
+        closable: true,
+        dirty: false,
+        data: {},
+      });
+      store().actions.setActiveSession(TAB);
+    });
+    renderHook(usePanelSend);
+
+    let result: Awaited<ReturnType<typeof askAgent>> | undefined;
+    await act(async () => {
+      result = await askAgent({ context: [], prompt: "why did the push fail?", send: true });
+    });
+
+    expect(result).toMatchObject({ tabId: TAB, sent: true, created: false });
+    await waitFor(() => expect(sentTexts()).toEqual(["why did the push fail?"]));
+    // Sent, so not also left in the composer.
+    expect(store().drafts[TAB] ?? "").toBe("");
+  });
+
+  it("an ask no panel is mounted for is not sent: it waits in the draft", async () => {
+    act(() => {
+      useLayoutStore.setState(useLayoutStore.getInitialState(), true);
+      useLayoutStore.getState().actions.addTab({
+        id: TAB,
+        type: "chat",
+        title: TAB,
+        closable: true,
+        dirty: false,
+        data: {},
+      });
+      store().actions.setActiveSession(TAB);
+    });
+    vi.useFakeTimers();
+    try {
+      const asked = askAgent({ context: [], prompt: "nobody home", send: true });
+      await vi.runAllTimersAsync();
+      expect(await asked).toMatchObject({ tabId: TAB, sent: false });
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(count("agents_send")).toBe(0);
+    expect(store().drafts[TAB]).toBe("nobody home");
   });
 });
 

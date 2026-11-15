@@ -25,6 +25,7 @@ import { metaFromSearch } from "@/features/github/types";
 import { imageMimeFromPath } from "@/lib/byok/model-capabilities";
 import { scratchPathForFile } from "@/lib/scratch-file";
 import { useAppStore } from "@/features/app/stores/app-store";
+import { emitWindowEvent } from "@/lib/window-events";
 
 export function useComposerAttachments({
   tabId,
@@ -241,7 +242,7 @@ export function useComposerAttachments({
         attachPicked(mention, "clone");
         // Keep the knowledge sidebar's cloned-repos list in sync (same signal the
         // GitHub panel emits).
-        window.dispatchEvent(new Event("atlas:repo-cloned"));
+        emitWindowEvent("atlas:repo-cloned");
         requestAnimationFrame(() => inputRef.current?.focus());
       } catch (err) {
         toast.error(

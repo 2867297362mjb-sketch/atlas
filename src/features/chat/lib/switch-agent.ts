@@ -23,15 +23,11 @@ import { saveLastAgentPref } from "./last-agent-pref";
 import { rc, roomOpen } from "./rc-api";
 import { useRcStore } from "@/features/chat/stores/rc-store";
 import { sessionSend } from "./session-send";
+import { emitWindowEvent } from "@/lib/window-events";
 
-/** The window event a handoff fires; the composer of `tabId` inserts the
- *  previous conversation as a past-session chip. */
-export const SESSION_HANDOFF_EVENT = "atlas:chat-handoff-session";
-
-/** Ask the chat panel of `detail.tabId` to stop its running turn, the same as
- *  its Stop button. */
-export const CHAT_STOP_EVENT = "atlas:chat-stop";
-
+/** `atlas:chat-handoff-session`: the window event a handoff fires; the
+ *  composer of `tabId` inserts the previous conversation as a past-session
+ *  chip. */
 export interface SessionHandoffDetail {
   tabId: string;
   mention: MentionPastSession;
@@ -196,12 +192,12 @@ export function switchAgentForTab(
     );
   } else if (handoff) {
     const detail: SessionHandoffDetail = { tabId, mention: handoff };
-    window.dispatchEvent(new CustomEvent(SESSION_HANDOFF_EVENT, { detail }));
+    emitWindowEvent("atlas:chat-handoff-session", detail);
     toast(
       `${agentMeta(previousAgent).label} conversation attached. Your next message hands it to ${agentMeta(next).label}.`,
     );
   }
-  window.dispatchEvent(new CustomEvent("atlas:chat-focus", { detail: { tabId } }));
+  emitWindowEvent("atlas:chat-focus", { tabId });
 }
 
 /** Longest a pre-switch `/remember` turn is waited on before switching anyway. */
@@ -246,7 +242,7 @@ function releaseHeldQueue(tabId: string): void {
   }
   if (!queues[tabId]?.length) return;
   const text = actions.shiftQueue(tabId);
-  if (text) window.dispatchEvent(new CustomEvent("atlas:chat-send", { detail: { tabId, text } }));
+  if (text) emitWindowEvent("atlas:chat-send", { tabId, text });
 }
 
 /** The "saving…" notice for a pending switch; with `id`, updates it in place. */
@@ -288,7 +284,7 @@ async function stopTurn(tabId: string): Promise<void> {
   if (!sess || !isBusyAgentStatus(sess.status)) return;
   // Subscribed before the Stop: the turn may end inside the dispatch.
   const ended = awaitTurnEnd(tabId, { timeoutMs: REMEMBER_STOP_GRACE_MS });
-  if (!sess.stopping) window.dispatchEvent(new CustomEvent(CHAT_STOP_EVENT, { detail: { tabId } }));
+  if (!sess.stopping) emitWindowEvent("atlas:chat-stop", { tabId });
   await ended;
 }
 
@@ -340,9 +336,7 @@ async function rememberThenSwitch(
   // (`SendState.switchPending`), so it leaves the queue alone meanwhile.
   sessionSend.setHold(tabId, "switch", true);
   try {
-    window.dispatchEvent(
-      new CustomEvent("atlas:chat-send", { detail: { tabId, text: REMEMBER_MESSAGE } }),
-    );
+    emitWindowEvent("atlas:chat-send", { tabId, text: REMEMBER_MESSAGE });
     const end = await awaitTurnEnd(tabId, {
       timeoutMs: REMEMBER_BEFORE_SWITCH_TIMEOUT_MS,
       startTimeoutMs: REMEMBER_START_TIMEOUT_MS,

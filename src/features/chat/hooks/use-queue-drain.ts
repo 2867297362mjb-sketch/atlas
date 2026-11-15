@@ -4,7 +4,7 @@ import type { BindControl } from "./use-agent-bind";
 import type { ChatSendHandler } from "../lib/chat-panel-handlers";
 import type { MentionData } from "../lib/mentions";
 import { sessionSend } from "../lib/session-send";
-import { CHAT_STOP_EVENT } from "../lib/switch-agent";
+import { useWindowEvent } from "@/lib/window-events";
 
 /** `atlas:chat-send`: send `text` as this tab's next message. `mentions` are
  *  the chips its short forms stand for (`askAgent`'s context chips); without
@@ -64,7 +64,7 @@ export function useQueueDrain({
 }
 
 /** Window events addressed to this panel: a send from outside the composer
- *  (`atlas:chat-send`) and a stop from outside it (`CHAT_STOP_EVENT`). */
+ *  (`atlas:chat-send`) and a stop from outside it (`atlas:chat-stop`). */
 export function useChatPanelEvents(
   tabId: string,
   handleSendRef: RefObject<ChatSendHandler | null>,
@@ -75,30 +75,21 @@ export function useChatPanelEvents(
   // act when the event is addressed to THIS tab (the chip stamps its origin
   // tabId). A tabId-less event (none today) still falls through to all, matching
   // the prior behaviour.
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent<ChatSendDetail>).detail;
-      if (detail?.tabId != null && detail.tabId !== tabId) return;
-      if (detail?.text && handleSendRef.current) {
-        handleSendRef.current(detail.text, detail.mentions ?? []);
-        // Heard: a sender that dispatches it cancelable (`askAgent`, into a
-        // session tab that may not have mounted yet) knows it landed.
-        e.preventDefault();
-      }
-    };
-    window.addEventListener("atlas:chat-send", handler);
-    return () => window.removeEventListener("atlas:chat-send", handler);
-  }, [tabId]);
+  useWindowEvent("atlas:chat-send", (detail, e) => {
+    if (detail?.tabId != null && detail.tabId !== tabId) return;
+    if (detail?.text && handleSendRef.current) {
+      handleSendRef.current(detail.text, detail.mentions ?? []);
+      // Heard: a sender that dispatches it cancelable (`askAgent`, into a
+      // session tab that may not have mounted yet) knows it landed.
+      e.preventDefault();
+    }
+  });
 
   // Stop this tab's turn from outside the composer — an agent switch that
   // waited on `/remember` and now switches in place (`switch-agent.ts`). Only
   // ever addressed to one tab.
-  useEffect(() => {
-    const handler = (e: Event) => {
-      if ((e as CustomEvent<{ tabId?: string }>).detail?.tabId !== tabId) return;
-      handleStopRef.current?.();
-    };
-    window.addEventListener(CHAT_STOP_EVENT, handler);
-    return () => window.removeEventListener(CHAT_STOP_EVENT, handler);
-  }, [tabId]);
+  useWindowEvent("atlas:chat-stop", (detail) => {
+    if (detail?.tabId !== tabId) return;
+    handleStopRef.current?.();
+  });
 }

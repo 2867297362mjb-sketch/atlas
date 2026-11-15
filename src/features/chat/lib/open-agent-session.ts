@@ -16,6 +16,7 @@ import { invalidateLoad } from "./load-tokens";
 import { snapshotLive } from "./snapshot-message";
 import { ResumeError, resumeSessionFast } from "./resume-session";
 import { applyModeOnResume, holdUnrestoredMode } from "./resume-mode";
+import { emitWindowEvent } from "@/lib/window-events";
 
 /** Active project root, preferring the legacy `currentProject` but falling back
  *  to the active project path (mirrors the sidebar's `cwd` resolution). */
@@ -225,8 +226,7 @@ export function openNewAgentChat(agent?: SwitchableAgent): string {
   const { setActiveTab } = layout.actions;
   const { clearSession, switchChatAgent } = chat.actions;
 
-  const focus = (id: string) =>
-    window.dispatchEvent(new CustomEvent("atlas:chat-focus", { detail: { tabId: id } }));
+  const focus = (id: string) => emitWindowEvent("atlas:chat-focus", { tabId: id });
 
   // Prefer the ACTIVE chat tab; fall back to the first chat tab. Multiple chat
   // tabs can coexist (handleOpenAgent spawns a new one when the current chat is
@@ -298,6 +298,6 @@ export function openAgentChatInNewTab(
     return id;
   }
   setActiveTab(id);
-  window.dispatchEvent(new CustomEvent("atlas:chat-focus", { detail: { tabId: id } }));
+  emitWindowEvent("atlas:chat-focus", { tabId: id });
   return id;
 }
