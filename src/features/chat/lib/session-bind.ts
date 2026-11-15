@@ -29,8 +29,7 @@ import { agentTypeFromPluginId, CLAUDE_PERMISSION_MODES, pluginIdForAgent } from
 import { sessionConfiguration, useChatStore } from "../stores/chat-store";
 import { bindFailureAction, errInfo, promptSignIn } from "./agent-signin";
 import { agents, ensureAgent, resetAgent } from "./agents-api";
-import { configOptionPushes, loadConfigOptionPrefs } from "./config-option-prefs";
-import type { SessionConfiguration } from "./session-configuration";
+import { KNOBS, type SessionConfiguration } from "./session-configuration";
 import { projectPathForTab } from "./tab-project";
 import { isDeadlineError, progressSince, withDeadline } from "./with-deadline";
 
@@ -52,17 +51,14 @@ const BIND_STALL_MS = 30_000;
 const BIND_DEADLINE_MS = 3 * 60_000;
 
 /** What the bind asks of the agents backend (`agents-api.ts`). */
-export type BindAgentsPort = Pick<
-  typeof agents,
-  "newSession" | "setModel" | "snapshotMeta" | "setConfigOption" | "killPlugin"
->;
+export type BindAgentsPort = Pick<typeof agents, "newSession" | "snapshotMeta" | "killPlugin">;
 
 type ChatState = ReturnType<typeof useChatStore.getState>;
 
 export interface SessionBindDeps {
   agents: BindAgentsPort;
   /** Where a session is put on the tab's picks (`session-configuration.ts`). */
-  configuration: Pick<SessionConfiguration, "settleMode">;
+  configuration: Pick<SessionConfiguration, "settleMode" | "apply" | "reapplyRememberedOptions">;
   /** Connect the plugin's agent process, or hand back the live one. */
   connect: (pluginId: string) => Promise<AgentInfo>;
   /** Forget the cached agent of a plugin whose connection was just killed. */
@@ -74,8 +70,6 @@ export interface SessionBindDeps {
   projectPath: (tabId: string) => string;
   /** What the agent is called in a message to the user. */
   agentLabel: (agentType: string | undefined) => string;
-  /** The user's remembered config-option picks for an agent. */
-  configPrefs: (agentType: string) => ReturnType<typeof loadConfigOptionPrefs>;
   /** Where a failure is said. */
   report: {
     log: typeof logEvent;
@@ -297,11 +291,7 @@ export function createSessionBind(deps: SessionBindDeps): SessionBind {
         // a rebind, the model the conversation was already on.
         const pickedModel = deps.chat().sessions[tabId]?.acpCurrentModel;
         if (pickedModel) {
-          try {
-            await deps.agents.setModel(key, pickedModel);
-          } catch (err) {
-            console.warn("setModel at session create failed:", err);
-          }
+          await deps.configuration.apply(key, KNOBS.model, pickedModel);
           if (stale()) return;
         }
         deps.chat().actions.setAcpBinding(tabId, agent.agent_id, key.session_id, cwd);
@@ -379,23 +369,16 @@ export function createSessionBind(deps: SessionBindDeps): SessionBind {
                 snap.config_options ?? [],
                 agentTypeFromPluginId(snap.plugin_id),
               );
-            // Re-apply the user's remembered knob picks (#33) — the mode
-            // pref's discipline: only knobs this session advertises, only
-            // values it offers, nothing when it already sits there. Each push
-            // answers with the confirmed list as a delta, so the pills follow.
+            // Re-apply the user's remembered knob picks (#33).
             const at = deps.chat().sessions[tabId]?.agentType;
             if (at) {
-              for (const push of configOptionPushes(
+              await deps.configuration.reapplyRememberedOptions(
+                at,
+                key,
                 snap.config_options ?? [],
-                deps.configPrefs(at),
-              )) {
-                try {
-                  await deps.agents.setConfigOption(key, push.configId, push.value);
-                } catch (err) {
-                  console.warn("re-applying a config-option pref failed:", err);
-                }
-                if (moved()) return;
-              }
+                moved,
+              );
+              if (moved()) return;
             }
             // Boot finished (with or without modes) — drop the loading state.
             deps.chat().actions.setAcpModesPending(tabId, false);
@@ -582,7 +565,6 @@ export const sessionBind = createSessionBind({
   projectPath: (tabId) =>
     projectPathForTab(tabId) ?? useAppStore.getState().currentProject?.path ?? "/",
   agentLabel: (agentType) => agentMeta(agentType).label,
-  configPrefs: (agentType) => loadConfigOptionPrefs(agentType),
   report: {
     log: (entry) => logEvent(entry),
     error: (message) => void toast.error(message),

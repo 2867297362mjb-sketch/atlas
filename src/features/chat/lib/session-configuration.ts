@@ -25,6 +25,7 @@ import type { ChatSession, ClaudePermissionMode } from "@/types/agent";
 import type { SessionKey, SessionModeInfo } from "@/types/agents";
 import { parseConfigOptions } from "./acp-config-options";
 import type { agents } from "./agents-api";
+import { configOptionPushes, type ConfigOptionPrefs } from "./config-option-prefs";
 
 /** What setting a knob asks of the agents backend (`agents-api.ts`). */
 export type ConfigurationAgentsPort = Pick<
@@ -40,6 +41,8 @@ export interface ConfigurationPrefs {
   saveEffort: (effort: string) => void;
   /** The last value picked for one of an agent's options. */
   saveOption: (agentType: string, configId: string, value: boolean | string) => void;
+  /** Every option value remembered for an agent. */
+  loadOptions: (agentType: string) => ConfigOptionPrefs;
 }
 
 /** One thing about a session the user can set. */
@@ -292,6 +295,25 @@ export interface SessionConfiguration {
     reported: ReportedModes,
   ): Promise<SettledMode>;
   /**
+   * Push a value to a session by its key, with no composer involved: the
+   * bind's, for a session it has not exposed yet. A refusal is only logged.
+   * Answers whether the agent took it.
+   */
+  apply<V>(key: SessionKey, knob: Knob<V>, value: V): Promise<boolean>;
+  /**
+   * Re-apply the option picks remembered for `agentType` to a session that
+   * has just advertised `advertised`: only options it advertises, only values
+   * it takes, nothing where it already sits there (`configOptionPushes`).
+   * Each push is answered with the confirmed list as a delta, so the pills
+   * follow. Stops early when `stop` says the tab has moved on.
+   */
+  reapplyRememberedOptions(
+    agentType: string,
+    key: SessionKey,
+    advertised: unknown,
+    stop: () => boolean,
+  ): Promise<void>;
+  /**
    * Put the agent back on a value the tab already holds, once its session is
    * bound. Not a pick: nothing is remembered, the user's flags are left alone,
    * and a refusal is only logged, as the bind's own pushes are.
@@ -407,23 +429,42 @@ export function createSessionConfiguration(deps: SessionConfigurationDeps): Sess
     }
   }
 
+  async function apply<V>(key: SessionKey, knob: Knob<V>, value: V): Promise<boolean> {
+    try {
+      await knob.push(deps.agents, key, value);
+      return true;
+    } catch (err) {
+      console.warn(`applying the ${knob.name} failed:`, err);
+      return false;
+    }
+  }
+
+  async function reapplyRememberedOptions(
+    agentType: string,
+    key: SessionKey,
+    advertised: unknown,
+    stop: () => boolean,
+  ): Promise<void> {
+    for (const push of configOptionPushes(advertised, deps.prefs.loadOptions(agentType))) {
+      await apply(key, option(push.configId), push.value);
+      if (stop()) return;
+    }
+  }
+
   async function reapply<V>(tabId: string, knob: Knob<V>, value: V): Promise<void> {
     const session = deps.sessions.get(tabId);
     if (!session || !knob.offers(session, value)) return;
     const { mirror } = knob;
     if (mirror) deps.sessions.update(tabId, (s) => mirror.restore(s, value));
     const key = keyOf(session);
-    if (!key) return;
-    try {
-      await knob.push(deps.agents, key, value);
-    } catch (err) {
-      console.warn(`re-applying the ${knob.name} failed:`, err);
-    }
+    if (key) await apply(key, knob, value);
   }
 
   return {
     pick,
     settleMode,
+    apply,
+    reapplyRememberedOptions,
     reapply,
     reset() {
       flights.clear();

@@ -32,7 +32,7 @@ import { loadCachedAcpModes, saveCachedAcpModes } from "../lib/acp-modes-cache";
 import { loadLastModePref, saveLastModePref } from "../lib/last-mode-pref";
 import { modeSelectOf, modelSelectOf } from "../lib/acp-config-options";
 import { exitPlanModeForOption, exitPlanOptionRestartsSession } from "../lib/exit-plan-modes";
-import { saveConfigOptionPref } from "../lib/config-option-prefs";
+import { loadConfigOptionPrefs, saveConfigOptionPref } from "../lib/config-option-prefs";
 import { KNOBS, createSessionConfiguration } from "../lib/session-configuration";
 import {
   loadCachedAcpConfigOptions,
@@ -1951,6 +1951,7 @@ export const sessionConfiguration = createSessionConfiguration({
     saveMode: saveLastModePref,
     saveEffort: saveNativeEffort,
     saveOption: saveConfigOptionPref,
+    loadOptions: loadConfigOptionPrefs,
   },
   report: { refused: (message) => void toast.error(message) },
 });

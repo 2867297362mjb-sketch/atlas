@@ -28,6 +28,8 @@ let pushes: Push[];
 /** Decides how the backend answers a push. Default: it accepts. */
 let answer: (push: Push) => Promise<void>;
 let prefs: { modes: Record<string, string | null>; effort?: string; options: unknown[] };
+/** Option values remembered from earlier sessions, per agent. */
+let remembered: Record<string, Record<string, boolean | string>>;
 let refusals: string[];
 let configuration: SessionConfiguration;
 
@@ -58,6 +60,7 @@ beforeEach(() => {
   pushes = [];
   answer = async () => {};
   prefs = { modes: {}, options: [] };
+  remembered = {};
   refusals = [];
   const record =
     (cmd: Push["cmd"]) =>
@@ -96,6 +99,7 @@ beforeEach(() => {
       saveOption: (agentType, configId, value) => {
         prefs.options.push([agentType, configId, value]);
       },
+      loadOptions: (agentType) => remembered[agentType] ?? {},
     },
     report: { refused: (message) => refusals.push(message) },
   });
@@ -364,6 +368,63 @@ describe("settleMode: a session that has just been opened", () => {
       honoured: true,
     });
     expect(pushes).toEqual([{ cmd: "setMode", value: "read-only" }]);
+  });
+});
+
+describe("reapplyRememberedOptions: a session that has just advertised its options", () => {
+  const select = (id: string, currentValue: string, values: string[]) => ({
+    id,
+    name: id,
+    type: "select",
+    currentValue,
+    options: values.map((value) => ({ value, name: value })),
+  });
+  const ADVERTISED = [
+    select("thought", "low", ["low", "high"]),
+    select("verbosity", "terse", ["terse", "chatty"]),
+    { id: "web", name: "Web search", type: "boolean", currentValue: true },
+  ];
+
+  it("pushes each remembered pick once, and nothing the session does not take", async () => {
+    remembered.codex = {
+      thought: "high",
+      // Already there.
+      web: true,
+      // A value this agent no longer offers.
+      verbosity: "poetic",
+      // An option this agent no longer advertises.
+      sandbox: "strict",
+    };
+
+    await configuration.reapplyRememberedOptions("codex", KEY, ADVERTISED, () => false);
+
+    expect(pushes).toEqual([{ cmd: "setConfigOption", configId: "thought", value: "high" }]);
+    expect(prefs.options, "re-applying is not a pick").toEqual([]);
+  });
+
+  it("carries on past a refusal, quietly", async () => {
+    remembered.codex = { thought: "high", verbosity: "chatty" };
+    answer = async (push) => {
+      if (push.configId === "thought") throw "no";
+    };
+
+    await configuration.reapplyRememberedOptions("codex", KEY, ADVERTISED, () => false);
+
+    expect(pushes.map((push) => push.configId)).toEqual(["thought", "verbosity"]);
+    expect(refusals).toEqual([]);
+  });
+
+  it("stops once the tab has moved to another session", async () => {
+    remembered.codex = { thought: "high", verbosity: "chatty" };
+
+    await configuration.reapplyRememberedOptions("codex", KEY, ADVERTISED, () => true);
+
+    expect(pushes).toHaveLength(1);
+  });
+
+  it("pushes nothing for an agent with nothing remembered", async () => {
+    await configuration.reapplyRememberedOptions("codex", KEY, ADVERTISED, () => false);
+    expect(pushes).toEqual([]);
   });
 });
 
