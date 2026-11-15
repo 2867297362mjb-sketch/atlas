@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // `closeProject` reaches most of the app's stores through `teardownHot` and
 // the fallback switch. Only the org store, the app store's `setActiveProject`
 // and `clearPanelStores` are observed; the rest is inert.
-vi.mock("@tauri-apps/api/core", () => ({ invoke: async () => null }));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
 vi.mock("sonner", () => ({ toast: Object.assign(() => {}, { error: () => {} }) }));
 vi.mock("@/features/log/lib/log", () => ({ logEvent: () => {} }));
 vi.mock("../lib/flush-registry", () => ({ flushAll: async () => {} }));

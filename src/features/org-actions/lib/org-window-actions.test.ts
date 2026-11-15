@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}), emit: vi.fn() }));
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => undefined) }));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
 
 const writeSpacePage = vi.hoisted(() => vi.fn(async () => ({ nodes: 1, edges: 0 })));
 vi.mock("@/features/spaces/lib/space-page-write", async (importOriginal) => {

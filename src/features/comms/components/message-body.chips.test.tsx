@@ -11,7 +11,7 @@ const opener = vi.hoisted(() => ({
   revealItemInDir: vi.fn(async () => {}),
 }));
 vi.mock("@tauri-apps/plugin-opener", () => opener);
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => null) }));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
 const openOutsideFile = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("@/features/external-editor/lib/preferred-editor", () => ({ openOutsideFile }));
 const openInProject = vi.hoisted(() => vi.fn(async () => {}));

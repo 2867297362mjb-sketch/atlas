@@ -9,10 +9,7 @@ import type { AgentCatalogEntry } from "@/types/agent-catalog";
 // imports the chat/project stores. Their module setup subscribes to config
 // events, so provide the real Tauri boundary shape rather than letting the
 // browser shim reject asynchronously after otherwise-passing assertions.
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async () => () => {}),
-  emit: vi.fn(async () => {}),
-}));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
 
 import { uninstalledBetween } from "./removed-agents";
 

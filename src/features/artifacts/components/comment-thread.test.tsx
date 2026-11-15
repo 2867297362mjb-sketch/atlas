@@ -13,7 +13,7 @@ import { COMMENT_BODY_MAX, type Comment } from "../lib/comments-api";
 import { selectionCommentBody } from "../lib/selection-comment";
 import { CommentButton, type CommentActions } from "./comment-thread";
 
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
 
 beforeEach(cleanup);
 

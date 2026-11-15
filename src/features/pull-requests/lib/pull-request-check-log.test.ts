@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
 
 import { buildFixFindingHandoff, type HandoffPullRequest } from "./pull-request-handoff";
 import { checkLogHandoffText, checkLogJobId, hasCheckLog } from "./pull-request-check-log";

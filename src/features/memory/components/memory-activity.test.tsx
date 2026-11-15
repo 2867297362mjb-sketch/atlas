@@ -5,8 +5,8 @@
 // `acpSessionId`; an open tab with that id is the target, else a new session.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => null) }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
 
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";

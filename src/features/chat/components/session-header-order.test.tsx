@@ -11,11 +11,8 @@ import { createRef } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => null) }));
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async () => () => {}),
-  emit: vi.fn(async () => {}),
-}));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
 vi.mock("@/features/session-context/components/session-details-button", () => ({
   SessionDetailsButton: () => <button type="button" aria-label="Session details" />,
 }));

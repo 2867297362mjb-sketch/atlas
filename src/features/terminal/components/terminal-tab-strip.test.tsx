@@ -4,8 +4,8 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { TerminalTabStrip } from "./terminal-tab-strip";
 import { useTerminalStore, type PaneNode } from "../stores/terminal-store";
 
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}), emit: vi.fn() }));
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => null) }));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
 
 afterEach(() => {
   cleanup();

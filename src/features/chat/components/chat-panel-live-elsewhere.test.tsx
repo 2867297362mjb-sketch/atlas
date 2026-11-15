@@ -19,11 +19,8 @@ const sent = vi.hoisted(() => [] as string[]);
 /** Every other `agents.*` call, as `[name, ...args]`. */
 const calls = vi.hoisted(() => [] as unknown[][]);
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => undefined) }));
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async () => () => {}),
-  emit: vi.fn(async () => {}),
-}));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
 vi.mock("../lib/agents-api", async (importOriginal) => {
   const real = await importOriginal<typeof import("../lib/agents-api")>();
   const agents = new Proxy(

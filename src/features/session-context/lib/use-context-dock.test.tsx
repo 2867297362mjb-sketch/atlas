@@ -9,11 +9,8 @@ import { useRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => null) }));
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async () => () => {}),
-  emit: vi.fn(async () => {}),
-}));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
 import { resolveContextDock } from "./context-dock";
 import { useSessionDetailsStore } from "../stores/session-details-store";
 import { useContextDock } from "./use-context-dock";

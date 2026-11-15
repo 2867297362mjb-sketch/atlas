@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => false) }));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
 
 import { useLayoutStore } from "@/features/layout/stores/layout-store";
 import { useEditorStore } from "@/features/editor/stores/editor-store";

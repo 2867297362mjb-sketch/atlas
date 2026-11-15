@@ -13,7 +13,7 @@ import { useProjectStore } from "@/features/projects/stores/project-store";
 
 import { FileTabFrame } from "./file-tab-frame";
 
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
 vi.mock("./project-file-tree", () => ({ ProjectFileTree: () => null }));
 
 afterEach(cleanup);

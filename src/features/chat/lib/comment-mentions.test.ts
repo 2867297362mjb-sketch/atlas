@@ -6,8 +6,8 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
 
 import type { Comment } from "@/features/artifacts/lib/comments-api";
 import type { OrgMember } from "@/features/auth/lib/auth-api";

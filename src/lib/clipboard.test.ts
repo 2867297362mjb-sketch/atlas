@@ -3,9 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { copyText } from "./clipboard";
 
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(),
-}));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
 
 describe("copyText", () => {
   const originalClipboard = navigator.clipboard;

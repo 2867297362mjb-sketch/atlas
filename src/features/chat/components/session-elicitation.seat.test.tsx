@@ -5,11 +5,8 @@
 // nothing — Rust refuses the answer anyway; this is the explanation first.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => undefined) }));
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async () => () => {}),
-  emit: vi.fn(async () => {}),
-}));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn(async () => {}) }));
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
