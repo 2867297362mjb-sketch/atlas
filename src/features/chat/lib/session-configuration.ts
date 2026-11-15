@@ -22,7 +22,7 @@
  * actions can call it without this file importing the store.
  */
 import type { ChatSession, ClaudePermissionMode } from "@/types/agent";
-import type { SessionKey } from "@/types/agents";
+import type { SessionKey, SessionModeInfo } from "@/types/agents";
 import { parseConfigOptions } from "./acp-config-options";
 import type { agents } from "./agents-api";
 
@@ -220,6 +220,25 @@ function option(configId: string): Knob<boolean | string> {
   };
 }
 
+/**
+ * The mode a session should actually end up in.
+ *
+ * `requested` is the user's explicit pick, or undefined when they never made
+ * one. A pick the agent does not advertise is dropped in favour of whatever
+ * the agent reports, because sending it would be rejected and would leave the
+ * picker stuck on a mode id that does not exist. An agent that advertises no
+ * modes at all is taken at its word and the pick is kept.
+ */
+export function resolveEffectiveMode(
+  requested: string | undefined,
+  currentMode: string | null,
+  availableModes: readonly SessionModeInfo[],
+): string | null {
+  if (!requested) return currentMode;
+  const advertised = availableModes.length === 0 || availableModes.some((m) => m.id === requested);
+  return advertised ? requested : currentMode;
+}
+
 export const KNOBS = { claudeMode, planExitMode, acpMode, model, effort, option };
 
 /**
@@ -241,10 +260,37 @@ export interface SessionConfigurationDeps {
   report: { refused: (message: string) => void };
 }
 
+/** What an agent said about a session's modes on `session/new` or
+ *  `session/load`. */
+export interface ReportedModes {
+  current_mode: string | null;
+  available_modes: readonly SessionModeInfo[];
+}
+
+/** The mode an opened session is in, and whether it is the one asked for. */
+export interface SettledMode {
+  effective: string | null;
+  honoured: boolean;
+}
+
 export interface SessionConfiguration {
   /** The user picked `value` for `knob` on `tabId`'s session. The composer
    *  shows it before this returns; the answer says how it ended. */
   pick<V>(tabId: string, knob: Knob<V>, value: V): Promise<PickOutcome>;
+  /**
+   * Put a session that has just been opened (new or resumed) in the mode asked
+   * for it, before the composer shows anything. `reported` is what the agent
+   * said on `session/new` or `session/load`.
+   *
+   * Answers the mode the session is in, and whether that is the one asked
+   * for: a pick the agent does not advertise, or refuses, leaves the session
+   * in the agent's own mode, and the caller shows that.
+   */
+  settleMode(
+    key: SessionKey,
+    requested: string | undefined,
+    reported: ReportedModes,
+  ): Promise<SettledMode>;
   /**
    * Put the agent back on a value the tab already holds, once its session is
    * bound. Not a pick: nothing is remembered, the user's flags are left alone,
@@ -338,6 +384,29 @@ export function createSessionConfiguration(deps: SessionConfigurationDeps): Sess
     }
   }
 
+  async function settleMode(
+    key: SessionKey,
+    requested: string | undefined,
+    reported: ReportedModes,
+  ): Promise<SettledMode> {
+    const effective = resolveEffectiveMode(
+      requested,
+      reported.current_mode,
+      reported.available_modes,
+    );
+    const honoured = !!requested && effective === requested;
+    if (!effective || effective === reported.current_mode) return { effective, honoured };
+    try {
+      await deps.agents.setMode(key, effective);
+      return { effective, honoured };
+    } catch (err) {
+      // The agent is the authority. If it would not take the mode, the picker
+      // has to show what the agent has rather than what we wanted it to have.
+      console.warn("setting the mode of an opened session failed:", err);
+      return { effective: reported.current_mode, honoured: false };
+    }
+  }
+
   async function reapply<V>(tabId: string, knob: Knob<V>, value: V): Promise<void> {
     const session = deps.sessions.get(tabId);
     if (!session || !knob.offers(session, value)) return;
@@ -354,6 +423,7 @@ export function createSessionConfiguration(deps: SessionConfigurationDeps): Sess
 
   return {
     pick,
+    settleMode,
     reapply,
     reset() {
       flights.clear();

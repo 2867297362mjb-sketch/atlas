@@ -26,11 +26,11 @@ import { logEvent } from "@/features/log/lib/log";
 import { notifyAgentSignInRequired } from "@/features/notifications/lib/agent-notifier";
 import type { AgentInfo } from "@/types/acp";
 import { agentTypeFromPluginId, CLAUDE_PERMISSION_MODES, pluginIdForAgent } from "@/types/agent";
-import { useChatStore } from "../stores/chat-store";
+import { sessionConfiguration, useChatStore } from "../stores/chat-store";
 import { bindFailureAction, errInfo, promptSignIn } from "./agent-signin";
 import { agents, ensureAgent, resetAgent } from "./agents-api";
 import { configOptionPushes, loadConfigOptionPrefs } from "./config-option-prefs";
-import { resolveEffectiveMode } from "./resume-mode";
+import type { SessionConfiguration } from "./session-configuration";
 import { projectPathForTab } from "./tab-project";
 import { isDeadlineError, progressSince, withDeadline } from "./with-deadline";
 
@@ -54,13 +54,15 @@ const BIND_DEADLINE_MS = 3 * 60_000;
 /** What the bind asks of the agents backend (`agents-api.ts`). */
 export type BindAgentsPort = Pick<
   typeof agents,
-  "newSession" | "setMode" | "setModel" | "snapshotMeta" | "setConfigOption" | "killPlugin"
+  "newSession" | "setModel" | "snapshotMeta" | "setConfigOption" | "killPlugin"
 >;
 
 type ChatState = ReturnType<typeof useChatStore.getState>;
 
 export interface SessionBindDeps {
   agents: BindAgentsPort;
+  /** Where a session is put on the tab's picks (`session-configuration.ts`). */
+  configuration: Pick<SessionConfiguration, "settleMode">;
   /** Connect the plugin's agent process, or hand back the live one. */
   connect: (pluginId: string) => Promise<AgentInfo>;
   /** Forget the cached agent of a plugin whose connection was just killed. */
@@ -255,21 +257,13 @@ export function createSessionBind(deps: SessionBindDeps): SessionBind {
           : undefined;
         const requestedAcpMode = session?.acpModeExplicit ? session.acpCurrentMode : undefined;
         const requestedMode = nowAt === "claude-code" ? requestedClaudeMode : requestedAcpMode;
-        // Same rule as the resume path, so a mode means the same thing
-        // whether a session is new or reopened (`resume-mode.ts`).
-        const effectiveMode = resolveEffectiveMode(
-          requestedMode ?? undefined,
-          init.current_mode,
-          init.available_modes,
-        );
-        if (effectiveMode && effectiveMode !== init.current_mode) {
-          try {
-            await deps.agents.setMode(key, effectiveMode);
-          } catch (err) {
-            console.warn("setMode at session create failed:", err);
-          }
-          if (stale()) return;
-        }
+        // The same call the resume path makes, so a mode means the same
+        // thing whether a session is new or reopened (`resume-mode.ts`). A
+        // pick the agent refuses leaves it in its own mode, and that is the
+        // mode seeded below.
+        const settled = await deps.configuration.settleMode(key, requestedMode ?? undefined, init);
+        if (stale()) return;
+        const effectiveMode = settled.effective;
         // Seed the store before binding: binding is the point at which queued
         // sends become eligible, so the first prompt sees the agent's actual
         // default instead of a hard-coded Atlas fallback.
@@ -288,6 +282,12 @@ export function createSessionBind(deps: SessionBindDeps): SessionBind {
             );
           } else if (nowAt !== "claude-code" && init.available_modes.length > 0) {
             actions.setAcpModes(tabId, effectiveMode, init.available_modes, nowAt);
+          }
+          // The picker shows the AGENT's mode now, which the user never
+          // chose: it is not a pick the next resume should ask for. (Claude's
+          // `hydrateClaudePermissionMode` drops its flag the same way.)
+          if (requestedMode && !settled.honoured && nowAt !== "claude-code") {
+            actions.dropAcpModePick(tabId);
           }
         }
         // A model picked before there was a session — the composer's agent +
@@ -573,6 +573,7 @@ export function createSessionBind(deps: SessionBindDeps): SessionBind {
 /** The app's instance. */
 export const sessionBind = createSessionBind({
   agents,
+  configuration: sessionConfiguration,
   // Called through, not captured: a test that mocks one of these modules
   // narrowly need not define what its code path never reaches.
   connect: (pluginId) => ensureAgent(pluginId),

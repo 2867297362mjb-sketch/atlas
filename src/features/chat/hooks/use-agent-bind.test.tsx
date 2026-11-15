@@ -228,6 +228,41 @@ describe("a new session", () => {
     expect(session().acpCurrentMode).toBe("read-only");
   });
 
+  it("shows the agent's mode, not the pick, when the agent refuses the pick", async () => {
+    const modes = [
+      { id: "read-only", name: "Read only" },
+      { id: "auto", name: "Auto" },
+    ];
+    tauri.handleRaw({
+      agents_new_session: ({ agentId }) => ({
+        key: { agent_id: agentId, session_id: "sess-1" },
+        current_mode: "auto",
+        available_modes: modes,
+      }),
+      agents_set_mode: () => {
+        throw "busy";
+      },
+      // Held: the snapshot would correct the picker a round trip later, and
+      // the first prompt can go out before then.
+      agents_snapshot_meta: () => new Promise(() => {}),
+    });
+    act(() => {
+      store().actions.setAcpModes(TAB, "read-only", modes, "codex");
+      useChatStore.setState((s) => {
+        s.sessions[TAB]!.acpModeExplicit = true;
+      });
+    });
+
+    mountPanel();
+    await flush();
+
+    expect(count("agents_set_mode")).toBe(1);
+    expect(session().acpSessionId).toBe("sess-1");
+    expect(session().acpCurrentMode).toBe("auto");
+    // The mode showing is the agent's now, so it is nobody's pick.
+    expect(session().acpModeExplicit).toBe(false);
+  });
+
   it("binds once under StrictMode's double mount", async () => {
     mountPanel({ wrapper: StrictMode });
     await flush();

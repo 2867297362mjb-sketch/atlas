@@ -305,6 +305,68 @@ describe("what is remembered", () => {
   });
 });
 
+describe("settleMode: a session that has just been opened", () => {
+  const MODES = [
+    { id: "read-only", name: "Read only" },
+    { id: "auto", name: "Auto" },
+  ];
+  const reported = (current_mode: string | null, available_modes = MODES) => ({
+    current_mode,
+    available_modes,
+  });
+
+  it("is put on the pick, once, when the agent is somewhere else", async () => {
+    expect(await configuration.settleMode(KEY, "read-only", reported("auto"))).toEqual({
+      effective: "read-only",
+      honoured: true,
+    });
+    expect(pushes).toEqual([{ cmd: "setMode", value: "read-only" }]);
+  });
+
+  it("is left alone when the agent is already on the pick", async () => {
+    expect(await configuration.settleMode(KEY, "auto", reported("auto"))).toEqual({
+      effective: "auto",
+      honoured: true,
+    });
+    expect(pushes).toEqual([]);
+  });
+
+  it("stays in the agent's mode when nothing was picked", async () => {
+    expect(await configuration.settleMode(KEY, undefined, reported("auto"))).toEqual({
+      effective: "auto",
+      honoured: false,
+    });
+    expect(pushes).toEqual([]);
+  });
+
+  it("skips a pick the agent no longer advertises, without asking", async () => {
+    expect(await configuration.settleMode(KEY, "yolo", reported("auto"))).toEqual({
+      effective: "auto",
+      honoured: false,
+    });
+    expect(pushes).toEqual([]);
+  });
+
+  it("answers the agent's mode when the agent refuses the pick, and tells nobody", async () => {
+    answer = async () => {
+      throw "busy";
+    };
+    expect(await configuration.settleMode(KEY, "read-only", reported("auto"))).toEqual({
+      effective: "auto",
+      honoured: false,
+    });
+    expect(refusals).toEqual([]);
+  });
+
+  it("keeps a pick on trust when the agent advertises no modes at all", async () => {
+    expect(await configuration.settleMode(KEY, "read-only", reported(null, []))).toEqual({
+      effective: "read-only",
+      honoured: true,
+    });
+    expect(pushes).toEqual([{ cmd: "setMode", value: "read-only" }]);
+  });
+});
+
 describe("reapply", () => {
   it("pushes the value a bound session holds, and remembers nothing", async () => {
     open("atlas-agent", { nativeEffort: "high" });
