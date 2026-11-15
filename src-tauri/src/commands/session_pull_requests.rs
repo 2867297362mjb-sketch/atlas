@@ -826,56 +826,124 @@ pub(crate) fn list_text(links: &[PullRequestLink]) -> String {
         }
         out.push_str(&format!(" {}\n", link.url));
     }
-    for chain in stacks(&visible) {
-        let numbers: Vec<String> = chain.iter().map(|n| format!("#{n}")).collect();
-        out.push_str(&format!(
-            "Stack (bottom to top): {}\n",
-            numbers.join(" -> ")
-        ));
+    // The agent is told only real stacks, a lone link being no stack, and
+    // each as the lines that run through it: where two sit on one, a line a
+    // branch.
+    for stack in stacks(&visible).iter().filter(|s| s.layers.len() > 1) {
+        for line in stack.lines() {
+            let numbers: Vec<String> = line
+                .iter()
+                .map(|&at| format!("#{}", visible[at].number))
+                .collect();
+            out.push_str(&format!(
+                "Stack (bottom to top): {}\n",
+                numbers.join(" -> ")
+            ));
+        }
     }
     out.trim_end().to_owned()
 }
 
-/// The pull requests that build on one another, bottom to top: one whose
-/// base branch is another's head branch, in the same repository, sits on
-/// it. Only stacks of two or more.
-pub(crate) fn stacks(links: &[&PullRequestLink]) -> Vec<Vec<u32>> {
-    let branches = |l: &PullRequestLink| {
-        l.snapshot
-            .as_ref()
-            .map(|s| (s.head_branch.clone(), s.base_branch.clone()))
-            .filter(|(head, _)| !head.is_empty())
-    };
-    let parent_of = |link: &PullRequestLink| -> Option<u32> {
-        let (_, base) = branches(link)?;
-        links
-            .iter()
-            .find(|other| {
-                other.number != link.number
-                    && other.repository.eq_ignore_ascii_case(&link.repository)
-                    && branches(other).is_some_and(|(head, _)| head == base)
-            })
-            .map(|other| other.number)
-    };
-    let mut chains = Vec::new();
-    for root in links.iter().filter(|l| parent_of(l).is_none()) {
-        let mut chain = vec![root.number];
-        let mut seen: HashSet<u32> = HashSet::from([root.number]);
-        let mut current = root.number;
-        while let Some(child) = links.iter().find(|l| {
-            !seen.contains(&l.number)
-                && l.repository.eq_ignore_ascii_case(&root.repository)
-                && parent_of(l) == Some(current)
-        }) {
-            seen.insert(child.number);
-            chain.push(child.number);
-            current = child.number;
+/// One stack of pull requests: indices into the links it was resolved from.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct Stack {
+    /// Bottom first; a parent before what sits on it.
+    pub layers: Vec<usize>,
+    /// One per layer: 0 for the bottom, the parent's depth + 1 above it.
+    /// Siblings share a depth.
+    pub depths: Vec<usize>,
+}
+
+impl Stack {
+    /// Every bottom-to-top line through the stack: one when each layer has
+    /// a single pull request on it, one a branch otherwise.
+    fn lines(&self) -> Vec<Vec<usize>> {
+        let mut lines = Vec::new();
+        let mut line: Vec<usize> = Vec::new();
+        for (at, (&layer, &depth)) in self.layers.iter().zip(&self.depths).enumerate() {
+            line.truncate(depth);
+            line.push(layer);
+            // A layer nothing sits on ends a line.
+            if self.depths.get(at + 1).is_none_or(|&next| next <= depth) {
+                lines.push(line.clone());
+            }
         }
-        if chain.len() > 1 {
-            chains.push(chain);
+        lines
+    }
+}
+
+/// The links as stacks, derived from base branches. The same rule as
+/// `resolveStacks` in `src/features/pull-requests/lib/pull-request-stacks.ts`,
+/// which the session's panel draws from, so the agent is never told a stack
+/// the user does not see; both are held to `pull-request-stacks.fixtures.json`.
+///
+/// A link sits on the one whose head branch is its base branch, in the same
+/// repository (compared without case; branches with it). A head branch two
+/// links share is ambiguous and links nothing. A link not read yet, or with
+/// no head branch, links nothing. Links whose bases form a cycle have no
+/// bottom, so each of them, and anything sitting on them, stands alone.
+///
+/// Every link passed takes part, closed and merged ones too, and lands in
+/// exactly one stack, a lone one in a stack of one. Stacks come in the order
+/// their bottoms were given, siblings in the order they were given, then the
+/// members of cycles.
+pub(crate) fn stacks(links: &[&PullRequestLink]) -> Vec<Stack> {
+    fn branches(link: &PullRequestLink) -> Option<(&str, &str)> {
+        link.snapshot
+            .as_ref()
+            .filter(|s| !s.head_branch.is_empty())
+            .map(|s| (s.head_branch.as_str(), s.base_branch.as_str()))
+    }
+    let key = |link: &PullRequestLink, branch: &str| {
+        (link.repository.to_ascii_lowercase(), branch.to_owned())
+    };
+    // Head branch -> the one link with it, or `None` once a second claims it.
+    let mut by_head: HashMap<(String, String), Option<usize>> = HashMap::new();
+    for (at, link) in links.iter().enumerate() {
+        if let Some((head, _)) = branches(link) {
+            by_head
+                .entry(key(link, head))
+                .and_modify(|claimed| *claimed = None)
+                .or_insert(Some(at));
         }
     }
-    chains
+    let parents: Vec<Option<usize>> = links
+        .iter()
+        .enumerate()
+        .map(|(at, link)| {
+            let (_, base) = branches(link)?;
+            let parent = (*by_head.get(&key(link, base))?)?;
+            (parent != at).then_some(parent)
+        })
+        .collect();
+    let mut children: Vec<Vec<usize>> = vec![Vec::new(); links.len()];
+    for (at, parent) in parents.iter().enumerate() {
+        if let Some(parent) = parent {
+            children[*parent].push(at);
+        }
+    }
+
+    let mut out = Vec::new();
+    let mut placed = vec![false; links.len()];
+    for bottom in (0..links.len()).filter(|&at| parents[at].is_none()) {
+        let mut stack = Stack::default();
+        let mut pending = vec![(bottom, 0)];
+        while let Some((at, depth)) = pending.pop() {
+            placed[at] = true;
+            stack.layers.push(at);
+            stack.depths.push(depth);
+            pending.extend(children[at].iter().rev().map(|&above| (above, depth + 1)));
+        }
+        out.push(stack);
+    }
+    // Nothing reached from a bottom is on a cycle of bases, or sits on one.
+    for at in (0..links.len()).filter(|&at| !placed[at]) {
+        out.push(Stack {
+            layers: vec![at],
+            depths: vec![0],
+        });
+    }
+    out
 }
 
 /// A pull-request failure, in words for the agent.
@@ -1345,14 +1413,104 @@ mod tests {
             stacked(1, "a", "main"),
             stacked(3, "b", "a"),
         ];
-        let refs: Vec<&PullRequestLink> = links.iter().collect();
-        assert_eq!(stacks(&refs), vec![vec![1, 3, 2]]);
         let text = list_text(&links);
         assert!(text.contains("acme/shop#9 \"Step 9\": open, checks passing, other -> main"));
         assert!(
             text.ends_with("Stack (bottom to top): #1 -> #3 -> #2"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn the_agent_is_told_no_stack_through_an_ambiguous_head() {
+        // #1 and #2 share the head `a`, so #3 on `a` sits on neither.
+        let text = list_text(&[
+            stacked(1, "a", "main"),
+            stacked(2, "a", "main"),
+            stacked(3, "b", "a"),
+        ]);
+        assert!(!text.contains("Stack"), "{text}");
+    }
+
+    #[test]
+    fn two_pull_requests_on_one_list_as_a_line_each() {
+        let text = list_text(&[
+            stacked(1, "a", "main"),
+            stacked(2, "b", "a"),
+            stacked(3, "c", "a"),
+            stacked(4, "d", "b"),
+        ]);
+        assert!(
+            text.ends_with(
+                "Stack (bottom to top): #1 -> #2 -> #4\nStack (bottom to top): #1 -> #3"
+            ),
+            "{text}"
+        );
+    }
+
+    /// The rule's cases, shared with the frontend's resolver: its test
+    /// (`pull-request-stacks.test.ts`) reads the same file, so the agent and
+    /// the session's panel cannot come to resolve stacks differently.
+    #[test]
+    fn stacks_resolve_as_the_shared_fixture_table_says() {
+        #[derive(serde::Deserialize)]
+        struct Case {
+            name: String,
+            links: Vec<CaseLink>,
+            stacks: Vec<CaseStack>,
+        }
+        #[derive(serde::Deserialize)]
+        struct CaseLink {
+            /// `owner/name#number`.
+            pr: String,
+            head: Option<String>,
+            base: Option<String>,
+            state: Option<String>,
+        }
+        #[derive(serde::Deserialize, Debug, PartialEq)]
+        struct CaseStack {
+            layers: Vec<String>,
+            depths: Vec<usize>,
+        }
+        let cases: Vec<Case> = serde_json::from_str(include_str!(
+            "../../../src/features/pull-requests/lib/pull-request-stacks.fixtures.json"
+        ))
+        .expect("the fixture table parses");
+        assert!(!cases.is_empty());
+        for case in cases {
+            let links: Vec<PullRequestLink> = case
+                .links
+                .iter()
+                .map(|l| {
+                    let (repository, number) = l.pr.split_once('#').expect("owner/name#number");
+                    let mut link = stacked(number.parse().expect("a number"), "", "");
+                    link.repository = repository.to_owned();
+                    link.snapshot = match (&l.head, &l.base, link.snapshot.take()) {
+                        (Some(head), Some(base), Some(snapshot)) => Some(PullRequestSnapshot {
+                            head_branch: head.clone(),
+                            base_branch: base.clone(),
+                            state: l.state.clone().unwrap_or_else(|| "open".into()),
+                            ..snapshot
+                        }),
+                        _ => None,
+                    };
+                    link
+                })
+                .collect();
+            let refs: Vec<&PullRequestLink> = links.iter().collect();
+            let resolved: Vec<CaseStack> = stacks(&refs)
+                .into_iter()
+                .map(|stack| CaseStack {
+                    layers: stack
+                        .layers
+                        .iter()
+                        .map(|&at| case.links[at].pr.clone())
+                        .collect(),
+                    depths: stack.depths,
+                })
+                .collect();
+            assert_eq!(resolved, case.stacks, "{}", case.name);
+        }
     }
 
     #[test]

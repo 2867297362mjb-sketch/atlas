@@ -103,6 +103,12 @@ export const EXTRA_INPUTS = [
     why: "include_str! in the tests module of src-tauri/src/state/atlas_config.rs",
   },
   {
+    path: "src/features/pull-requests/lib/pull-request-stacks.fixtures.json",
+    packages: ["atlas"],
+    testOnly: true,
+    why: "include_str! in the tests module of src-tauri/src/commands/session_pull_requests.rs",
+  },
+  {
     path: "docs/reference/config.default.toml",
     packages: ["atlas"],
     testOnly: true,
