@@ -8,15 +8,11 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const invoke = vi.fn();
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: (...args: unknown[]) => invoke(...args),
-  convertFileSrc: (p: string) => p,
-}));
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async () => () => {}),
-  emit: vi.fn(async () => {}),
-}));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
+import { tauri } from "@/test/tauri-fake";
+
+const invoke = tauri.invoke;
 
 import { agentHandlers, receivedText, setPromptHandler } from "@/dev/mock-backend/fake-agent";
 import { composePrompt, toShortForm, type MentionData } from "./mentions";

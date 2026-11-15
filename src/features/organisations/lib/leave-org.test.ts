@@ -5,8 +5,10 @@ import type { Organisation } from "../types";
 // `org-switch` reaches most of the app's stores at import time. Only what
 // `leaveOrgAndData` touches when the left org is not the active one (so no
 // `switchOrg` teardown runs) is given behaviour; the rest is inert.
-const invoke = vi.fn(async (..._args: unknown[]) => null);
-vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+import { tauri } from "@/test/tauri-fake";
+
+const invoke = tauri.invoke;
 vi.mock("sonner", () => ({ toast: Object.assign(() => {}, { error: () => {} }) }));
 vi.mock("@/features/log/lib/log", () => ({ logEvent: () => {} }));
 vi.mock("@/features/log/stores/log-store", () => ({ useLogStore: { getState: () => ({}) } }));

@@ -16,14 +16,8 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { BoardSession } from "../types";
 import { EMPTY_DIRECTORY } from "../lib/author-directory";
 
-vi.mock("@tauri-apps/api/core", () => ({
-  convertFileSrc: (p: string) => p,
-  invoke: vi.fn(async () => undefined),
-}));
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async () => () => {}),
-  emit: vi.fn(async () => {}),
-}));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
 vi.mock("thinking-orbs", () => ({ ThinkingOrb: () => <span /> }));
 // The sticky date animates with `motion`. happy-dom has no real WAAPI, so
 // cancelling the animation on unmount rejects — after the test has passed.

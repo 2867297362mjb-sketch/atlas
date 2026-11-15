@@ -6,14 +6,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * error — the option just silently stays at its default.
  */
 
-const mocks = vi.hoisted(() => ({ invoke: vi.fn() }));
-vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+import { tauri } from "@/test/tauri-fake";
 
 const { codeGrep, SEARCH_MAX_RESULTS } = await import("./code-search-api");
 
 describe("codeGrep", () => {
   beforeEach(() => {
-    mocks.invoke.mockReset();
+    tauri.invoke.mockReset();
   });
 
   it("sends the overlay's switches under the names the Rust command takes", async () => {
@@ -24,13 +24,13 @@ describe("codeGrep", () => {
       truncated: false,
       partial: false,
     };
-    mocks.invoke.mockResolvedValue(answer);
+    tauri.invoke.mockResolvedValue(answer);
     const res = await codeGrep("/p", "foo(", {
       regex: false,
       caseSensitive: true,
       wholeWord: false,
     });
-    expect(mocks.invoke).toHaveBeenCalledWith("code_grep", {
+    expect(tauri.invoke).toHaveBeenCalledWith("code_grep", {
       path: "/p",
       query: "foo(",
       regex: false,
@@ -44,7 +44,7 @@ describe("codeGrep", () => {
   it("rejects with the engine's message, for the overlay to show", async () => {
     const message =
       "regex error: look-around, including look-ahead and look-behind, is not supported.";
-    mocks.invoke.mockRejectedValue(message);
+    tauri.invoke.mockRejectedValue(message);
     await expect(
       codeGrep("/p", "(?<=a)b", { regex: true, caseSensitive: false, wholeWord: false }),
     ).rejects.toBe(message);

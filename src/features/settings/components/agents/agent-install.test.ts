@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 // The component module pulls in Tauri IPC + zustand at import time; none of
 // that is needed for the pure card-state precedence under test.
-vi.mock("@tauri-apps/api/event", () => ({ listen: () => Promise.resolve(() => {}) }));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: () => Promise.resolve() }));
 vi.mock("sonner", () => ({
   toast: Object.assign(() => {}, { error: () => {}, success: () => {} }),

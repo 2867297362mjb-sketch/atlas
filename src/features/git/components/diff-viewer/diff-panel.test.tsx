@@ -13,7 +13,7 @@ vi.mock("@/features/settings/lib/atlas-config-api", () => ({
   onConfigChanged: () => Promise.resolve(() => {}),
   onConfigError: () => Promise.resolve(() => {}),
 }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
 
 vi.mock("../../lib/git-review-api", () => ({
   getDiffPreview: vi.fn(async () => ({

@@ -8,7 +8,7 @@ const { writeGuide, settings } = vi.hoisted(() => ({
   writeGuide: vi.fn(async () => undefined),
   settings: { guideEnabled: true },
 }));
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
 vi.mock("./pr-agent-session", () => ({
   actionAgent: () => ({ agent: "claude", label: "Claude" }),
   currentSessionTab: () => null,

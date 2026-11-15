@@ -3,17 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OrgMember } from "@/features/auth/lib/auth-api";
 import type { OrgDirectory } from "@/features/organisations/lib/use-org-directory";
 
-// Captures the one handler the listener registers, so a test can hand it the
-// frames Rust would emit.
-let handler: ((event: { payload: unknown }) => void) | null = null;
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async (_channel: string, fn: (event: { payload: unknown }) => void) => {
-    handler = fn;
-    return () => {};
-  }),
-}));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
+import { tauri } from "@/test/tauri-fake";
 
-const { onlineIds, onlineTeammates, startTeamPresenceListener, onlineLabel } =
+const { ARTIFACTS_EVENT, onlineIds, onlineTeammates, startTeamPresenceListener, onlineLabel } =
   await import("./team-presence");
 const { useTeamPresenceStore } = await import("../stores/team-presence-store");
 
@@ -34,7 +27,8 @@ function directory(me: string | null, members: OrgMember[]): OrgDirectory {
   return { byId: new Map(members.map((m) => [m.userId, m])), currentUserId: me };
 }
 
-const frame = (payload: unknown) => handler?.({ payload });
+// The frames Rust would emit, on the channel it emits them on.
+const frame = (payload: unknown) => void tauri.emit(ARTIFACTS_EVENT, payload);
 
 beforeEach(() => {
   useTeamPresenceStore.getState().actions.reset();

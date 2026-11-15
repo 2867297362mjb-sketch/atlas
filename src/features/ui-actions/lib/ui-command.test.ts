@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The settings store subscribes to config events when it loads.
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}), emit: vi.fn() }));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
 
 import { registerActionHandlers } from "@/features/keybindings/lib/action-registry";
 import { performUiAction } from "./ui-actions";

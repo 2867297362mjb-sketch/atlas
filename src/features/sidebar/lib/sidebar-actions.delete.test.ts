@@ -3,8 +3,8 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => undefined) }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}), emit: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
 const confirmDeleteChat = vi.hoisted(() => vi.fn(async () => true));
 const deleteThread = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("@/features/chat/lib/confirm-delete-chat", () => ({ confirmDeleteChat }));

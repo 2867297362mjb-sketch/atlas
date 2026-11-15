@@ -5,8 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  * destructures (`path`), plus the "gh unavailable" back-off. Pattern:
  * `byok-api.test.ts`.
  */
-const invoke = vi.hoisted(() => vi.fn());
-vi.mock("@tauri-apps/api/core", () => ({ invoke }));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+import { tauri } from "@/test/tauri-fake";
+
+const invoke = tauri.invoke;
 
 const { fetchRepoAvatars, repoAvatars, resetGhAvatarsAvailabilityForTests } =
   await import("./git-avatars-api");

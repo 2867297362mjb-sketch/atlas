@@ -6,7 +6,7 @@
 // Organisation's roster, then whatever name the wire did carry.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => []) }));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
 
 import { renderHook } from "@testing-library/react";
 import type { AccountUser, OrgMember } from "@/features/auth/lib/auth-api";
