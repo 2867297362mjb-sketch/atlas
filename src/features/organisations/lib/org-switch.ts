@@ -5,10 +5,7 @@ import { useProjectStore } from "@/features/projects/stores/project-store";
 import { resetGitSummariesForOrgSwitch } from "@/features/projects/stores/project-git-store";
 import { commsActions } from "@/features/comms/stores/comms-store";
 import { comms } from "@/features/comms/lib/comms-api";
-import { markOrgReconciled } from "./org-reconciliation";
-import { useLayoutStore } from "@/features/layout/stores/layout-store";
-import { useSpacesStore } from "@/features/spaces/stores/spaces-store";
-import { ORG_SCOPED_TYPES } from "@/lib/tab-registry";
+import { activeOrganisationChanged } from "./active-org-change";
 import {
   useAppStore,
   flushAppStateSave,
@@ -69,33 +66,19 @@ export async function switchOrg(id: string): Promise<void> {
     }
   }
 
-  // The switch is going ahead: from here on the desktop's choice is pushed by
-  // THIS path, and the boot reconciliation must not fire a competing,
-  // unordered push after it. Not before the prompt above: a declined switch
-  // pushes nothing, and the boot push is then still owed.
-  markOrgReconciled();
-
   orgActions.setSwitching(true);
   const startedAt = Date.now();
 
   try {
-    // 0) Close the outgoing org's org-scoped centre tabs FIRST — before the
-    //    flush below, so they are not captured into the outgoing project's
-    //    editor state on the way out. Their ids embed this org's
-    //    conversation/draft ids and mean nothing in the incoming one.
+    // 0) The switch is going ahead (not before the prompt above: a declined
+    //    switch pushes nothing, and the boot push is then still owed). This
+    //    settles the boot push, since the desktop's choice is pushed by THIS
+    //    path from here on, and closes the outgoing org's tabs FIRST — before
+    //    the flush below, so they are not captured into the outgoing
+    //    project's editor state on the way out.
     //    (The Spaces sockets die with the Rust retarget's `disconnect_all`;
     //    unmounting the tab closes each canvas's socket first anyway.)
-    {
-      const layout = useLayoutStore.getState();
-      for (const tab of layout.tabs) {
-        if (ORG_SCOPED_TYPES.has(tab.type)) layout.actions.closeTab(tab.id);
-      }
-      // A Space or Usage open as the destination is the outgoing org's too.
-      if (layout.destination && ORG_SCOPED_TYPES.has(layout.destination.type)) {
-        layout.actions.closeTab(layout.destination.id);
-      }
-      useSpacesStore.getState().actions.clearAll();
-    }
+    activeOrganisationChanged({ why: "switch", from: activeOrganisationId, to: id });
 
     const wsActions = useProjectStore.getState().actions;
     const projectActions = useAppStore.getState().actions;

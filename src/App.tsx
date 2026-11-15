@@ -85,10 +85,7 @@ import { useQuitGuard } from "@/features/app/lib/use-quit-guard";
 import { RemoveAgentDialog } from "@/features/agents/components/remove-agent-dialog";
 import { useOrgStore } from "@/features/organisations/stores/org-store";
 import { useActiveOrgProjects, activeOrgProjectsSnapshot } from "@/features/projects/lib/org-scope";
-import {
-  isOrgReconciled,
-  markOrgReconciled,
-} from "@/features/organisations/lib/org-reconciliation";
+import { pushActiveOrgAtBoot } from "@/features/organisations/lib/active-org-change";
 import { comms, listenComms } from "@/features/comms/lib/comms-api";
 import { createCommsEnvelopeStream } from "@/features/comms/lib/comms-envelope-stream";
 import { startTeamPresenceListener } from "@/features/artifacts/lib/team-presence";
@@ -353,23 +350,15 @@ export function App() {
   // pushed on an explicit switch. Push it once at boot too, so the auth
   // snapshot — and everything keyed off it: the chat socket's target and the
   // gateway `atlas-org` billing header — follows the org actually on screen
-  // rather than whichever one the server listed first.
-  const orgReconciledRef = useRef(false);
+  // rather than whichever one the server listed first. Once per launch, and
+  // not at all after a switch: `pushActiveOrgAtBoot` owns that.
   const bootAuthStatus = useAuthStore((s) => s.snapshot.status);
   const bootLocalActiveOrg = useOrgStore.use.activeOrganisationId();
   const bootOrganisations = useOrgStore.use.organisations();
   useEffect(() => {
-    // `isOrgReconciled` covers the other pusher: an explicit `switchOrg` that
-    // ran before sign-in settled has already told Rust, and this push landing
-    // after it would drag the chat socket back to the org just left.
-    if (orgReconciledRef.current || isOrgReconciled()) return;
-    if (bootAuthStatus !== "signed-in" || !bootLocalActiveOrg) return;
-    const active = bootOrganisations.find((o) => o.id === bootLocalActiveOrg);
-    if (!active) return;
-    orgReconciledRef.current = true;
-    markOrgReconciled();
-    void invoke("auth_set_active_org", { orgId: active.remoteId ?? null }).catch((e) => {
-      console.warn("boot org reconciliation failed:", e);
+    pushActiveOrgAtBoot({
+      signedIn: bootAuthStatus === "signed-in",
+      activeOrg: bootOrganisations.find((o) => o.id === bootLocalActiveOrg),
     });
   }, [bootAuthStatus, bootLocalActiveOrg, bootOrganisations]);
 

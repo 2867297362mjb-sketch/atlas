@@ -73,7 +73,7 @@ const state = {
 vi.mock("../stores/org-store", () => ({ useOrgStore: { getState: () => state } }));
 
 const { leaveOrgAndData, switchOrg } = await import("./org-switch");
-const { isOrgReconciled } = await import("./org-reconciliation");
+const { pushActiveOrgAtBoot, resetActiveOrgChangeForTests } = await import("./active-org-change");
 
 const org = (id: string, remoteId?: string): Organisation => ({
   id,
@@ -166,9 +166,12 @@ describe("switchOrg", () => {
     state.activeOrganisationId = "local-a";
     agents.busy = 1;
 
+    resetActiveOrgChangeForTests();
+
     await switchOrg("local-b");
 
     expect(invoke).not.toHaveBeenCalledWith("auth_set_active_org", expect.anything());
-    expect(isOrgReconciled()).toBe(false);
+    expect(pushActiveOrgAtBoot({ signedIn: true, activeOrg: org("local-a", "org_a") })).toBe(true);
+    expect(invoke).toHaveBeenCalledWith("auth_set_active_org", { orgId: "org_a" });
   });
 });
