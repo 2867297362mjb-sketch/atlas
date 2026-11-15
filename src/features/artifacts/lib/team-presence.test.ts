@@ -6,8 +6,9 @@ import type { OrgDirectory } from "@/features/organisations/lib/use-org-director
 vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
 import { tauri } from "@/test/tauri-fake";
 
-const { ARTIFACTS_EVENT, onlineIds, onlineTeammates, startTeamPresenceListener, onlineLabel } =
+const { onlineIds, onlineTeammates, startTeamPresenceListener, onlineLabel } =
   await import("./team-presence");
+const { ARTIFACTS_EVENT } = await import("./cloud-event");
 const { useTeamPresenceStore } = await import("../stores/team-presence-store");
 
 function member(userId: string, name: string): OrgMember {

@@ -21,7 +21,6 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
 
 import { useOrgDirectory } from "@/features/organisations/lib/use-org-directory";
 import { safeUnlistenPromise } from "@/lib/safe-unlisten";
@@ -33,22 +32,11 @@ import {
   EMPTY_THREADS,
   findComment,
   type AnchorKind,
-  type Comment,
   type CommentThreads,
 } from "./comments-api";
+import { listenCloudEvents } from "./cloud-event";
 import { queueFollow, queueUnfollow } from "./watch-queue";
 import { NO_VOTES, withVote, type VoteValue } from "./votes";
-
-/** The window channel the cloud bridge emits on. */
-const ARTIFACTS_EVENT = "atlas:artifacts-cloud";
-
-type WireEvent =
-  | { kind: "boardChanged" }
-  | { kind: "entryUpsert"; sessionId: string; change: string; entry: unknown }
-  | { kind: "commentUpsert"; sessionId: string; comment: Comment }
-  | { kind: "presence"; projectId: string; online: string[] }
-  | { kind: "revoked"; projectId: string }
-  | { kind: "resync" };
 
 export function useSessionComments(
   /** The **server** Project id. `null` for a Session that is not shared. */
@@ -119,17 +107,24 @@ export function useSessionComments(
 
   useEffect(() => {
     if (!shared) return;
-    const stop = listen<WireEvent>(ARTIFACTS_EVENT, (event) => {
-      const payload = event.payload;
-      if (payload.kind === "commentUpsert") {
-        // Frames reach every socket on the Project, not only this Session's.
-        if (payload.sessionId !== sessionId) return;
-        setThreads((current) => applyComment(current, payload.comment));
-        return;
+    const stop = listenCloudEvents((event) => {
+      switch (event.kind) {
+        case "commentUpsert":
+          // Frames reach every socket on the Project, not only this Session's.
+          if (event.sessionId !== sessionId) return;
+          setThreads((current) => applyComment(current, event.comment));
+          return;
+        case "resync":
+          // We fell behind and frames were dropped, so local state has a gap
+          // it cannot see. Re-read rather than carrying it.
+          load();
+          return;
+        case "boardChanged":
+        case "entryUpsert":
+        case "presence":
+        case "revoked":
+          return;
       }
-      // We fell behind and frames were dropped, so local state has a gap it
-      // cannot see. Re-read rather than carrying it.
-      if (payload.kind === "resync") load();
     });
     return () => safeUnlistenPromise(stop);
   }, [shared, sessionId, load]);
