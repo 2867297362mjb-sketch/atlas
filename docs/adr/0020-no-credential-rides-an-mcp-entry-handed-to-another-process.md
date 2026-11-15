@@ -19,7 +19,7 @@
 - Without the Atlas binary's path (`current_exe` fails), an ACP session gets no Atlas servers and the offer's log line says why. If the token file cannot be written, the session gets none either: the token is revoked unused and a warning is logged. Neither case falls back to HTTP.
 - The rule covers every server on the shared token, not only memory and code: an entry goes over HTTP only when the request is `in_process` (and the agent takes HTTP); anything else is bridged. The UI and organisation servers are offered only to a connection carrying `ui_control` / `org_access`, which today only the native one does, so in practice they never ride the bridge; if a future connection carried either without being in process, its entries would be bridged too, not sent with a header.
 - The bridge's path is `current_exe()`, which is whichever binary is serving: `target/debug/atlas` under `bun run dev:app`, `Atlas.app/Contents/MacOS/atlas` in a release. `main` runs `run_bridge_if_asked` before anything else, so the bridge never boots a window, a profile or the single-instance plugin.
-- `preapproval_meta` pre-approves the host's stdio entries for the Claude Code adapter, as it did its HTTP ones.
+- `claude_code_meta` (`preapproval_meta` when this was written) pre-approves the host's stdio entries for the Claude Code adapter, as it did its HTTP ones.
 
 ## Considered
 

@@ -1,8 +1,6 @@
----
-status: superseded by ADR-0005
----
+# ADR-0026: Skill identity is the canonical path; picker identity is the name
 
-# Skill identity is the canonical path; picker identity is the name
+**Status:** Superseded by ADR-0005 (2026-08-26).
 
 > Superseded. The reconciliation described here was machinery for keeping two
 > canonical stores coherent. ADR-0005 removes the second store, so most of it is

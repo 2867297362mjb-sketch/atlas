@@ -127,7 +127,7 @@ until the team picks them up again.
 - Screen-level automation lives with each app, over its mock backend, not in the
   package; the package's Storybook covers primitives. Desktop's axe run keeps an
   allowlist of the violations it found on landing, each entry pointing at its fix
-  (ATL-1006, ATL-1007), and shrinks as they land.
+  (ATL-1006, since landed, and ATL-1007), and shrinks as they land.
 - The `?scenario=design-system` gallery shrinks once its primitives come from the package.
   It now shows only the active theme as desktop resolved it and desktop's own utilities,
   and links to Storybook for the rest.

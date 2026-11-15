@@ -2,7 +2,7 @@
 
 **Status:** Superseded by ADR-0021 (2026-10-15). `task_context` was served by the code index, and
 went with it. Accepted (2026-10-04) as Phase 4 of
-`docs/superpowers/plans/2026-10-03-codeindex-search/`.
+`docs/superpowers/plans/2026-10-03-codeindex-search/` (not kept in the repo).
 
 **For agents:** there is no `task_context` tool. The finding below — that seeding a first turn helps
 — still stands; what no longer stands is the index it was seeded from. Nothing is prepended to a

@@ -1,6 +1,6 @@
 # ADR-0018: A memory is used only as far as its evidence holds
 
-**Status:** Accepted (2026-10-07). Milestone M3 of `docs/superpowers/plans/2026-10-03-memory-system/`.
+**Status:** Accepted (2026-10-07). Milestone M3 of `docs/superpowers/plans/2026-10-03-memory-system/` (not kept in the repo). Amended by ADR-0021: there is no code index, so a moved symbol is found by the same-length window search only.
 
 **For agents:** if you are changing how a memory's validity is decided, read `crates/atlas-memory/src/citation.rs` (`cite`, `validate`, `ValidationCache`, `work_validity`), `src-tauri/src/commands/memory_capture.rs` (`work_evidence`) and `check_entries` in `src-tauri/src/commands/memory_server/tools.rs` first.
 

@@ -1,6 +1,6 @@
 # ADR-0012: The native agent acts on the window through the UI tool server
 
-**Status:** Accepted (2026-09-25)
+**Status:** Accepted (2026-09-25). Amended by ADR-0020: an ACP agent reaches Atlas's tool servers through the stdio bridge whatever it advertises; only the in-process native agent gets them over HTTP.
 
 ## Context
 
@@ -68,7 +68,7 @@ Three consequences of those rules, decided while building them (2026-09-25):
 
 - The dynamic-tools seam stays unused for this; nothing under `vendor/atlas-engine` changes.
 - Every native turn carries roughly 1.8 KB more tool schema in its fixed prefix
-  (`docs/research/native-agent-input-tokens-measured.md`); the surface is kept to seven tools with
+  (`docs/research/native-agent-input-tokens-measured.md`, not kept in the repo); the surface is kept to seven tools with
   one-clause descriptions for that reason.
 - An ACP agent gets no UI tools, by the connection flag rather than by its name.
 - A closed or unresponsive window fails the call, not the turn; the model reads the error.

@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 
-**History:** 2026-08-22: accepted; scrape readers replaced by an app-owned store. 2026-10-05: discovery split from replay; ongoing, project-scoped discovery and live-elsewhere guard (ATL-421–424).
+**History:** 2026-08-22: accepted; scrape readers replaced by an app-owned store. 2026-10-05: discovery split from replay; ongoing, project-scoped discovery and live-elsewhere guard (ATL-421–424). 2026-10-24: Settled replaced Archive (ADR-0028); read "archived" and "unarchived" below as "settled" and "active".
 
 ## Context
 
@@ -55,7 +55,7 @@ Liveness is computed, not stored. It rides on each row (`liveElsewhere`). The wa
 
 What Rule 7 holds:
 
-- **Sending.** The composer shows a banner and holds the send until the user picks "Send anyway". The hold sits at the one point every sender passes (`ChatPanel.handleSend`): the composer, suggestion chips, `atlas:chat-send` (agent-switch handoffs, another agent's `ui_chat`), the queue drain and the permission modal. Nothing is dropped. The message queues, or a held first message stays held, and the drain releases it on "Send anyway" or once the session stops being live. An override lasts only while the session stays live.
+- **Sending.** The composer shows a banner and holds the send until the user picks "Send anyway". The hold sits at the one point every sender passes (`handleSend` in `src/features/chat/lib/chat-panel-handlers.ts`): the composer, suggestion chips, `atlas:chat-send` (agent-switch handoffs, another agent's `ui_chat`), the queue drain and the permission modal. Nothing is dropped. The message queues, or a held first message stays held, and the drain releases it on "Send anyway" or once the session stops being live. An override lasts only while the session stays live.
 - **`ui_chat` "send"** to a held session is refused with a reason. The calling agent is told to use `prefill` and leave the choice to the user.
 - **Deleting** a live-elsewhere row is refused ("still active in another process; close it there first"). The agent-side delete would remove the transcript under the running process.
 

@@ -148,7 +148,7 @@ One Rust module per IPC domain under `src-tauri/src/commands/`. `commands/mod.rs
 | Domain group | Modules |
 |---|---|
 | Agents (ported ACP stack) | agents, agent_host, agent_transcript, agent_analytics, agent_memory, catalog, registry, capture, artifacts_cloud |
-| Agent tool servers | memory_server (ADR-0010), memory_bridge (ADR-0019, ADR-0020), ui_server (ADR-0012) |
+| Agent tool servers | memory_server (ADR-0010), memory_bridge (ADR-0019, ADR-0020), ui_server (ADR-0012), org_server (ADR-0014), code_server (ADR-0015) |
 | Terminal / browser / fs | terminal, browser, fs |
 | Git | git, git_graph, git_watcher, git_autofetch, gitdiff, git_ops, git_conflicts, git_snapshot, git_stage_ops, git_pr (a branch's PR badge, via `gh pr list`), git_avatars (author avatars, via `gh api`) |
 | GitHub | github (search and clone reference repositories), pull_requests (the pull-request surface, via `gh api`; see below) |
@@ -253,7 +253,7 @@ Three layers sit between the connection and the IPC surface:
 
 ### The session-delta wire
 
-Every delta travels an ordered `OutboundPipeline` (`atlas-bus`) of independent middleware: `BroadcastMiddleware` (the `atlas:agents` window event), `CaptureMiddleware` (Timeline + the permanent checkpoint record), `AnalyticsMiddleware`, `TranscriptMiddleware`, `MemoryIngestMiddleware`.
+Every delta travels an ordered `OutboundPipeline` (`atlas-bus`) of independent middleware: `BroadcastMiddleware` (the `atlas:agents` window event), `AnalyticsMiddleware`, `KeepAwakeMiddleware`, `CaptureMiddleware` (Timeline + the permanent checkpoint record), `TranscriptMiddleware`, `MemoryIngestMiddleware`, and last `TapMiddleware` (in-process subscribers that must not lose a delta).
 
 Ahead of the pipeline, the sink's `SleepWatch` (`src-tauri/src/sleep_watch.rs`) reads the clocks on every delta and on a 5 s tick: when the wall clock has run ahead of the monotonic one (which stops while the machine sleeps), every turn that was running across the gap gets a `slept_mid_turn` delta, delivered before that turn's terminal. While the turn runs the composer shows it live (`sleep-pill.tsx`); when the turn ends the store freezes it onto the turn's last message as a `TurnInterruption` record, which the transcript draws as its own row (`interruption-row.tsx`) with Retry and Continue — a record on the turn, never text in it. Agent-agnostic by construction — it watches the machine, not the agent.
 
@@ -261,7 +261,7 @@ The `SessionDelta` shapes those consumers pattern-match live in **`crates/atlas-
 
 ### Atlas's tool servers
 
-Atlas hands agents three in-process MCP services on one loopback listener, behind one bearer token per session: the **memory tool server** (`memory_server/`, `/mcp`, ADR-0010), offered to every agent — over HTTP to the in-process native agent, and to every ACP agent, whatever it advertises, as a stdio server: the Atlas binary run as `atlas mcp-bridge <url> <token file>`, the token in a private file and never in the entry, which an adapter may put on its command line (ADR-0019, ADR-0020) — the **UI tool server** (`ui_server/`, `/ui`, ADR-0012), offered only to a connection that carries **UI control** — today the in-process native connection — and the **organisation tool server** (below). One offer (`MemorySessionOffers`) decides all three, because the token table holds one token per session. A UI tool call crosses to the window as `atlas:ui-action`; the frontend performs it through the app's own openers (`src/features/ui-actions/`) and answers through `ui_action_respond`, so Rust mirrors no layout or focus state. `tests/ui-actions-contract.test.ts` keeps the tool list and the window's dispatcher in step.
+Atlas hands agents four in-process MCP services on one loopback listener, behind one bearer token per session: the **memory tool server** (`memory_server/`, `/mcp`, ADR-0010), offered to every agent — over HTTP to the in-process native agent, and to every ACP agent, whatever it advertises, as a stdio server: the Atlas binary run as `atlas mcp-bridge <url> <token file>`, the token in a private file and never in the entry, which an adapter may put on its command line (ADR-0019, ADR-0020) — the **UI tool server** (`ui_server/`, `/ui`, ADR-0012), offered only to a connection that carries **UI control** — today the in-process native connection — the **organisation tool server** (below) and the **code tool server** (`code_server/`, `/code`, ADR-0015: `grep`, `find_files` and `request_project_access`, see Attached projects). One offer (`MemorySessionOffers`) decides all four, because the token table holds one token per session. A UI tool call crosses to the window as `atlas:ui-action`; the frontend performs it through the app's own openers (`src/features/ui-actions/`) and answers through `ui_action_respond`, so Rust mirrors no layout or focus state. `tests/ui-actions-contract.test.ts` keeps the tool list and the window's dispatcher in step.
 
 ### The organisation tool server
 
@@ -289,7 +289,7 @@ Deltas return over the single `atlas:agents` channel, payload-typed by `kind`.
 
 ### Three invariants
 
-- **Atlas owns its history.** The sidebar reads the app-owned thread-metadata store (`crates/atlas-thread-metadata`, `threads.db`) and nothing else. Atlas does not read any agent CLI's private storage to build history — the per-agent scrape readers were deleted and must not come back. See [ADR-0001](adr/0001-app-owned-thread-metadata-store.md), and `CONTEXT.md` for the thread/session/draft/settled vocabulary.
+- **Atlas owns its history.** The sidebar reads the app-owned thread-metadata store (`crates/atlas-thread-metadata`, `threads.db`) and nothing else. Atlas does not read any agent CLI's private storage to build history — the per-agent scrape readers were deleted and must not come back. Project sync's discovery is the one reader of an agent's directory that feeds history: it learns that a session exists and when it was last active, never its content. `CONTEXT.md` lists the other deliberate reads, none of them history. See [ADR-0001](adr/0001-app-owned-thread-metadata-store.md), and `CONTEXT.md` for the thread/session/draft/settled vocabulary.
 - **A thread is not a session.** A *thread* is the conversation Atlas tracks, keyed by an id Atlas mints; it exists before any agent process and outlives one forgetting the session. A *session* is the agent-side conversation, keyed by an ACP session id. A thread references at most one session. Collapsing the two is the mistake the old `acpSessionId`-as-filename design made.
 - **Streams are tab-independent.** The projector owns the broadcast, not any UI component — concurrent prompts in several tabs keep streaming regardless of focus. Switching tabs resubscribes; no in-flight state is created, paused, or lost.
 

@@ -2,7 +2,7 @@
 
 **Status:** Accepted (2026-10-15). Supersedes ADR-0015's index half and ADR-0016 in full.
 
-**For agents:** `atlas_code` exists and serves exactly two tools, `grep` and `find_files`. There is
+**For agents:** `atlas_code` exists and serves exactly two search tools, `grep` and `find_files`, and one tool that is not a search, `request_project_access` (ADR-0029). There is
 no `find_symbol`, `outline`, `read_symbol`, `related`, `impact_of_diff`, `repo_map`,
 `semantic_search` or `task_context`, and no `codebase_index_*` command. Nothing in Atlas indexes a
 repository. If you are looking for the symbol table, it is gone — read the files.

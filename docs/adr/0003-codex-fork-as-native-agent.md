@@ -1,6 +1,6 @@
 # ADR-0003: A one-time port of Codex replaces the Cersei SDK as the native agent's engine
 
-**Status:** Accepted (2026-08-27)
+**Status:** Accepted (2026-08-27). The names here predate ADR-0011, which renamed the engine to `vendor/atlas-engine` and its crates to `atlas-engine-*`.
 
 ## Context
 
@@ -14,7 +14,7 @@ Codex (`openai/codex`, Rust, Apache-2.0) is chosen specifically because it alrea
 
 Delete the Cersei path and replace its engine with a one-time port of Codex.
 
-- **Deleted:** the Cersei SDK dependency (all crates.io `cersei*` crates and both vendored patch forks) and `crates/atlas-cersei`. `crates/atlas-native-agent` is the seam the app plugs into, not the engine, and is **not** on this list — see CONTEXT.md ("Retiring the name Cersei") for what "Cersei" may and may not refer to while the port is in flight.
+- **Deleted:** the Cersei SDK dependency (all crates.io `cersei*` crates and both vendored patch forks) and `crates/atlas-cersei`. `crates/atlas-native-agent` is the seam the app plugs into, not the engine, and is **not** on this list — the CONTEXT.md section that governed the name while the port was in flight ("Retiring the name Cersei") was removed at cutover; ADR-0011 records the final names.
 - **A hard fork, ported once.** Full Codex functionality, rebranded, repointed at our LLM provider. Fork point: `openai/codex` @ `42b5f05` (2026-08-14). From cutover the engine is ours and we maintain it; we do not track upstream, rebase onto it, or merge from it. Upstream is at most mined manually for specific fixes.
 - The ported engine lands behind the existing `AgentConnection` seam (`crates/atlas-native-agent`), so the native agent keeps occupying the same slot as an external ACP agent. Whether the seam's interface survives unchanged and where the ported crates sit in the tree is decided by the integration research, not by this ADR.
 - The user-facing name becomes **Atlas Agent**; "Cersei" leaves the product and the glossary at cutover.
