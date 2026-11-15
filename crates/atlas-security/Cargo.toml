@@ -18,7 +18,8 @@ eval = ["dep:tokio", "dep:atlas-profile"]
 
 [dependencies]
 atlas-checkpoint = { path = "../atlas-checkpoint" }
-atlas-process = { path = "../atlas-process" }
+# Every git run goes through its `GitCommand`.
+atlas-git = { path = "../atlas-git" }
 # The harness binary only: where a Project keeps its `.atlas/` (dev profile aware).
 atlas-profile = { path = "../atlas-profile", optional = true }
 atlas-redact = { path = "../atlas-redact" }
