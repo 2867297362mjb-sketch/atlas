@@ -186,6 +186,75 @@ describe("pick", () => {
   });
 });
 
+describe("what is remembered", () => {
+  it("is the pick the agent took last, whichever answer came back first", async () => {
+    open("codex", { acpCurrentMode: "auto" });
+    const outs = [held(), held()];
+    answer = () => outs[pushes.length - 1]!.promise;
+
+    const first = configuration.pick(TAB, KNOBS.acpMode, "read-only");
+    const second = configuration.pick(TAB, KNOBS.acpMode, "full-access");
+    outs[1]!.resolve();
+    await second;
+    outs[0]!.resolve();
+    await first;
+
+    expect(prefs.modes).toEqual({ codex: "full-access" });
+  });
+
+  it("is not a pick the agent refused", async () => {
+    open("atlas-agent", { nativeEffort: "low" });
+    answer = async () => {
+      throw "no";
+    };
+
+    await configuration.pick(TAB, KNOBS.effort, "high");
+
+    expect(prefs.effort).toBeUndefined();
+    expect(session().nativeEffort).toBe("low");
+    expect(refusals).toEqual(["no"]);
+  });
+});
+
+describe("reapply", () => {
+  it("pushes the value a bound session holds, and remembers nothing", async () => {
+    open("atlas-agent", { nativeEffort: "high" });
+
+    await configuration.reapply(TAB, KNOBS.effort, "high");
+
+    expect(pushes).toEqual([{ cmd: "setEffort", value: "high" }]);
+    expect(prefs.effort).toBeUndefined();
+  });
+
+  it("seeds the composer of a session that is not bound yet, and pushes nothing", async () => {
+    open("atlas-agent", {}, false);
+
+    await configuration.reapply(TAB, KNOBS.effort, "medium");
+
+    expect(session().nativeEffort).toBe("medium");
+    expect(pushes).toEqual([]);
+  });
+
+  it("only logs a refusal: the user picked nothing just now", async () => {
+    open("atlas-agent", { nativeEffort: "high" });
+    answer = async () => {
+      throw "no";
+    };
+
+    await configuration.reapply(TAB, KNOBS.effort, "high");
+
+    expect(refusals).toEqual([]);
+    expect(session().nativeEffort).toBe("high");
+  });
+
+  it("does nothing on a session that does not offer the knob", async () => {
+    open("codex");
+    await configuration.reapply(TAB, KNOBS.effort, "high");
+    expect(pushes).toEqual([]);
+    expect(session().nativeEffort).toBeUndefined();
+  });
+});
+
 describe("what a knob decides", () => {
   it("a mode pick is the user's: it is marked explicit and releases a held resume", async () => {
     open("codex", { acpCurrentMode: "auto", unrestoredModeId: "read-only" });

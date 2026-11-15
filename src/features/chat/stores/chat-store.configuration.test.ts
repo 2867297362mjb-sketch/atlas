@@ -102,10 +102,6 @@ interface Knob {
   /** Where the code departs from the rows below, as found. Each entry is a
    *  fault; fixing one deletes it. */
   today: {
-    /** A refused pick is remembered, so the next session starts on it. */
-    refusedPickRemembered?: true;
-    /** A refusal is only logged: the composer keeps the pick, nobody is told. */
-    refusalSilent?: true;
     /** A pick the session does not offer is shown, or even pushed. */
     unoffered?: "shown" | "pushed";
   };
@@ -133,7 +129,7 @@ const KNOBS: Knob[] = [
       arrange: () => actions().switchChatAgent(TAB, "codex"),
       pick: () => actions().setClaudePermissionMode(TAB, "plan"),
     },
-    today: { refusedPickRemembered: true, unoffered: "shown" },
+    today: { unoffered: "shown" },
   },
   {
     name: "ACP mode",
@@ -152,7 +148,7 @@ const KNOBS: Knob[] = [
     unbound: "kept-for-bind",
     reported: (mode_id) => delta({ kind: "mode_changed", mode_id }),
     unoffered: { arrange: () => {}, pick: () => actions().setAcpMode(TAB, "yolo") },
-    today: { refusedPickRemembered: true, unoffered: "shown" },
+    today: { unoffered: "shown" },
   },
   {
     name: "model",
@@ -196,11 +192,7 @@ const KNOBS: Knob[] = [
       arrange: () => actions().switchChatAgent(TAB, "codex"),
       pick: () => actions().setNativeEffort(TAB, "high"),
     },
-    today: {
-      refusedPickRemembered: true,
-      refusalSilent: true,
-      unoffered: "shown",
-    },
+    today: { unoffered: "shown" },
   },
   {
     name: "advertised option",
@@ -228,7 +220,7 @@ const KNOBS: Knob[] = [
       arrange: () => {},
       pick: () => void actions().setAcpConfigOption(TAB, "verbosity", "high"),
     },
-    today: { refusedPickRemembered: true, refusalSilent: true, unoffered: "pushed" },
+    today: { unoffered: "pushed" },
   },
 ];
 
@@ -282,11 +274,10 @@ describe.each(KNOBS)("picking a session's $name", (knob) => {
     knob.pick(knob.first);
     await flush();
 
-    const silent = knob.today.refusalSilent;
-    expect(knob.shown()).toBe(silent && knob.optimistic ? knob.first : knob.before);
-    expect(toastError).toHaveBeenCalledTimes(silent ? 0 : 1);
-    if (!silent) expect(toastError).toHaveBeenCalledWith("the agent said no");
-    expect(knob.remembered()).toBe(knob.today.refusedPickRemembered ? knob.first : null);
+    expect(knob.shown()).toBe(knob.before);
+    expect(toastError).toHaveBeenCalledTimes(1);
+    expect(toastError).toHaveBeenCalledWith("the agent said no");
+    expect(knob.remembered()).toBeNull();
   });
 
   it("leaves a newer pick alone when an older one is refused late", async () => {
@@ -306,7 +297,7 @@ describe.each(KNOBS)("picking a session's $name", (knob) => {
     expect(pushes()).toHaveLength(2);
     if (knob.optimistic) expect(knob.shown()).toBe(knob.second);
     expect(knob.remembered()).toBe(knob.hasPreference ? knob.second : null);
-    expect(toastError).toHaveBeenCalledTimes(knob.today.refusalSilent ? 0 : 1);
+    expect(toastError).toHaveBeenCalledTimes(1);
   });
 
   it("goes back to what the agent has when two picks in a row are refused", async () => {
@@ -325,11 +316,8 @@ describe.each(KNOBS)("picking a session's $name", (knob) => {
     second.reject("no");
     await flush();
 
-    // Effort keeps a refused pick for a different reason, until the next fix.
-    expect(knob.shown()).toBe(
-      knob.today.refusalSilent && knob.optimistic ? knob.second : knob.before,
-    );
-    expect(knob.remembered()).toBe(knob.today.refusedPickRemembered ? knob.second : null);
+    expect(knob.shown()).toBe(knob.before);
+    expect(knob.remembered()).toBeNull();
   });
 
   it(`a pick before the session is bound is ${knob.unbound}`, async () => {

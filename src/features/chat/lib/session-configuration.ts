@@ -60,7 +60,8 @@ export interface Knob<V> {
   /** Does this session offer the knob, and this value of it? */
   offers: (session: ChatSession, value: V) => boolean;
   push: (agents: ConfigurationAgentsPort, key: SessionKey, value: V) => Promise<void>;
-  /** How a pick is remembered. Absent: it is not (`model`). */
+  /** How a pick is remembered, once the agent has taken it or the bind has it
+   *  to apply. Absent: it is not (`model`). */
   remember?: (prefs: ConfigurationPrefs, session: ChatSession, value: V) => void;
   /**
    * A pick made before the session is bound. `kept-for-bind`: shown and
@@ -69,11 +70,6 @@ export interface Knob<V> {
    * has advertised it.
    */
   unbound: "kept-for-bind" | "refused";
-  /**
-   * What a refusal does. `rollback`: the composer goes back and the user is
-   * told. `log`: the composer keeps the pick and only the console hears.
-   */
-  refusal: "rollback" | "log";
 }
 
 /**
@@ -101,7 +97,6 @@ const claudeMode: Knob<ClaudePermissionMode> = {
   remember: (prefs, _session, mode) =>
     prefs.saveMode("claude-code", mode === "default" ? null : mode),
   unbound: "kept-for-bind",
-  refusal: "rollback",
 };
 
 /**
@@ -124,7 +119,6 @@ const planExitMode: Knob<ClaudePermissionMode> = {
   offers: claudeMode.offers,
   push: claudeMode.push,
   unbound: "kept-for-bind",
-  refusal: "rollback",
 };
 
 /** A mode the agent advertises (`acpAvailableModes`). Remembered per agent. */
@@ -155,7 +149,6 @@ const acpMode: Knob<string> = {
     }
   },
   unbound: "kept-for-bind",
-  refusal: "rollback",
 };
 
 /**
@@ -177,7 +170,6 @@ const model: Knob<string> = {
   offers: (_session, id) => !!id,
   push: (agents, key, id) => agents.setModel(key, id),
   unbound: "kept-for-bind",
-  refusal: "rollback",
 };
 
 /**
@@ -200,7 +192,6 @@ const effort: Knob<string> = {
   push: (agents, key, level) => agents.setEffort(key, level),
   remember: (prefs, _session, level) => prefs.saveEffort(level),
   unbound: "kept-for-bind",
-  refusal: "log",
 };
 
 /**
@@ -218,7 +209,6 @@ function option(configId: string): Knob<boolean | string> {
       if (session.agentType) prefs.saveOption(session.agentType, configId, value);
     },
     unbound: "refused",
-    refusal: "log",
   };
 }
 
@@ -247,6 +237,12 @@ export interface SessionConfiguration {
   /** The user picked `value` for `knob` on `tabId`'s session. The composer
    *  shows it before this returns; the answer says how it ended. */
   pick<V>(tabId: string, knob: Knob<V>, value: V): Promise<PickOutcome>;
+  /**
+   * Put the agent back on a value the tab already holds, once its session is
+   * bound. Not a pick: nothing is remembered, the user's flags are left alone,
+   * and a refusal is only logged, as the bind's own pushes are.
+   */
+  reapply<V>(tabId: string, knob: Knob<V>, value: V): Promise<void>;
   /** Forget what is in flight. For tests that share the app's instance. */
   reset(): void;
 }
@@ -287,8 +283,10 @@ export function createSessionConfiguration(deps: SessionConfigurationDeps): Sess
     const { mirror } = knob;
     const shown = mirror?.read(session);
     if (mirror) deps.sessions.update(tabId, (s) => mirror.pick(s, value));
-    knob.remember?.(deps.prefs, session, value);
-    if (!key) return "kept-for-bind";
+    if (!key) {
+      knob.remember?.(deps.prefs, session, value);
+      return "kept-for-bind";
+    }
     if (!knob.offers(session, value)) return "refused";
 
     const flightKey = `${tabId}\u0000${knob.name}`;
@@ -303,11 +301,13 @@ export function createSessionConfiguration(deps: SessionConfigurationDeps): Sess
       if (mine > flight.heldBy) {
         flight.held = value;
         flight.heldBy = mine;
+        // Remembered only now: a pick the agent refused would otherwise be
+        // where the next session starts.
+        knob.remember?.(deps.prefs, session, value);
       }
       return "applied";
     } catch (err) {
       console.warn(`setting the ${knob.name} failed:`, err);
-      if (knob.refusal === "log") return "refused";
       // The pick is already showing. Leaving it there is the composer lying:
       // the native agent refuses a mid-turn mode switch precisely because the
       // running turn keeps the permissions it started with (#61). Roll it
@@ -327,8 +327,23 @@ export function createSessionConfiguration(deps: SessionConfigurationDeps): Sess
     }
   }
 
+  async function reapply<V>(tabId: string, knob: Knob<V>, value: V): Promise<void> {
+    const session = deps.sessions.get(tabId);
+    if (!session || !knob.offers(session, value)) return;
+    const { mirror } = knob;
+    if (mirror) deps.sessions.update(tabId, (s) => mirror.restore(s, value));
+    const key = keyOf(session);
+    if (!key) return;
+    try {
+      await knob.push(deps.agents, key, value);
+    } catch (err) {
+      console.warn(`re-applying the ${knob.name} failed:`, err);
+    }
+  }
+
   return {
     pick,
+    reapply,
     reset() {
       flights.clear();
     },
