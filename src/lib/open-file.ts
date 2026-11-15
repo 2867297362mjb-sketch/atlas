@@ -11,6 +11,7 @@ import { useLayoutStore } from "@/features/layout/stores/layout-store";
 import { useEditorStore } from "@/features/editor/stores/editor-store";
 import type { RevealTarget } from "@/features/editor/lib/reveal";
 import { classifyFile, type FileKind } from "@/lib/file-types";
+import type { FileTabType } from "@/lib/tab-registry";
 
 export type { RevealTarget };
 
@@ -97,9 +98,7 @@ export async function openFileOrReveal(path: string): Promise<void> {
   openFileAs(path, kind);
 }
 
-function tabTypeFor(
-  kind: FileKind,
-): "editor" | "media" | "svg" | "pdf" | "notebook" | "unsupported" {
+function tabTypeFor(kind: FileKind): FileTabType {
   if (kind === "text") return "editor";
   if (kind === "image" || kind === "video" || kind === "audio") return "media";
   if (kind === "svg") return "svg";

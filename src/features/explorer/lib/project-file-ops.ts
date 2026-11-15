@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { activeProjectId } from "@/features/projects/lib/active-project";
 import { useLayoutStore } from "@/features/layout/stores/layout-store";
 import { openFile } from "@/lib/open-file";
+import { fileTabPath } from "@/lib/tab-registry";
 import {
   copyPath,
   createDirectory,
@@ -19,9 +20,6 @@ import {
   renameRecentFile,
 } from "./fs-api";
 import type { ProjectTreeModel } from "./project-tree-model";
-
-/** Tab types whose `data.filePath` is a file on disk. */
-const FILE_TAB_TYPES = new Set(["editor", "media", "svg", "pdf", "notebook", "unsupported"]);
 
 const dirOf = (p: string) => p.slice(0, Math.max(0, p.lastIndexOf("/")));
 const baseOf = (p: string) => p.slice(p.lastIndexOf("/") + 1);
@@ -88,15 +86,14 @@ async function destinationFor(src: string, destDir: string): Promise<string> {
   return `${destDir}/${freeName(baseOf(src), taken)}`;
 }
 
-function filesTabsAt(path: string) {
-  return useLayoutStore
-    .getState()
-    .tabs.filter(
-      (t) =>
-        FILE_TAB_TYPES.has(t.type) &&
-        typeof t.data.filePath === "string" &&
-        (t.data.filePath === path || t.data.filePath.startsWith(`${path}/`)),
-    );
+/** The open file tabs showing `path` or a file under it, with their paths. */
+function filesTabsAt(path: string): { id: string; filePath: string }[] {
+  return useLayoutStore.getState().tabs.flatMap((t) => {
+    const filePath = fileTabPath(t);
+    return filePath !== null && (filePath === path || filePath.startsWith(`${path}/`))
+      ? [{ id: t.id, filePath }]
+      : [];
+  });
 }
 
 export class ProjectFileOps {
@@ -246,9 +243,8 @@ export class ProjectFileOps {
     if (stale.length === 0) return;
     const { closeTab } = useLayoutStore.getState().actions;
     for (const tab of stale) {
-      const old = tab.data.filePath as string;
       closeTab(tab.id);
-      void openFile(to + old.slice(from.length));
+      void openFile(to + tab.filePath.slice(from.length));
     }
   }
 }

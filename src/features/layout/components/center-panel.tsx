@@ -6,15 +6,11 @@ import { useProjectStore } from "@/features/projects/stores/project-store";
 import { useAppStore } from "@/features/app/stores/app-store";
 import { useChatStore } from "@/features/chat/stores/chat-store";
 import { useShallow } from "zustand/react/shallow";
-import { surfaceMinWidth } from "@/lib/constants";
+import { surfaceMinWidth } from "@/lib/tab-registry";
 import { ProjectlessCenter } from "./projectless-center";
 import { TabColumn } from "./tab-column";
 import { ColumnPanel } from "./views/column-panel";
 import { initialCenterLayout } from "../lib/center-layout";
-
-// The tab registry — every tab type's lazy import and render branch, and the
-// persistent-type lists — lives in `tab-panels.tsx`.
-export { PERSISTENT_TYPES_LIST, IDLE_EXPENSIVE_TYPES_LIST } from "./tab-panels";
 
 /**
  * The center panel is one or more side-by-side **split columns**
@@ -194,7 +190,7 @@ const ProjectColumns = memo(function ProjectColumns({
 
 /**
  * A surfaces column's floor: the pixel minimum its active surface declares
- * (`TAB_PLACEMENT`, ADR-0024), so a column cannot be dragged narrower than
+ * (its placement in the tab registry, ADR-0024), so a column cannot be dragged narrower than
  * its tool's layout works at. A percentage floor alone let team chat's
  * composer wrap on a narrow window.
  */
