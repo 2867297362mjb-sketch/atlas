@@ -92,7 +92,9 @@ describe("northwind content", () => {
 });
 
 describe("northwind scenario", () => {
-  it("answers every command its key screens send", async () => {
+  // Importing `install.ts` evaluates every fixture module, which on a loaded
+  // machine has passed vitest's 5 s default by itself.
+  it("answers every command its key screens send", { timeout: 30_000 }, async () => {
     window.history.replaceState(null, "", "/?scenario=northwind&record=1");
     const { installMockBackend } = await import("../install");
     await installMockBackend("northwind");

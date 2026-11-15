@@ -11,23 +11,31 @@ import { emit, listen } from "@tauri-apps/api/event";
  * arrive. These pin the gap down: nothing sent early is lost or answered
  * wrong.
  */
-describe("mock backend install", () => {
-  it("answers a command sent before the fixtures have loaded", async () => {
-    const { installMockBackend } = await import("./install");
-    // Importing the module already started one install (it is the injected
-    // entry); a second one races it the same way, from a known instant.
-    const ready = installMockBackend("default");
-    const early = invoke<string>("git_graph_signature", { path: "/x" });
-    const seenEarly: unknown[] = [];
-    await listen("mock-install-test", (e) => seenEarly.push(e.payload));
-    await ready;
-    await expect(early).resolves.toMatch(/:/);
-    await emit("mock-install-test", 1);
-    expect(seenEarly).toEqual([1]);
-    expect(window.__atlasMock?.scenario).toBe("default");
-  });
+// Importing `install.ts` evaluates every fixture module. On a loaded machine
+// (a full run beside cargo builds) that alone has passed vitest's 5 s default.
+const IMPORT_TIMEOUT_MS = 30_000;
 
-  it("still answers an unmocked command with null", async () => {
+describe("mock backend install", () => {
+  it(
+    "answers a command sent before the fixtures have loaded",
+    { timeout: IMPORT_TIMEOUT_MS },
+    async () => {
+      const { installMockBackend } = await import("./install");
+      // Importing the module already started one install (it is the injected
+      // entry); a second one races it the same way, from a known instant.
+      const ready = installMockBackend("default");
+      const early = invoke<string>("git_graph_signature", { path: "/x" });
+      const seenEarly: unknown[] = [];
+      await listen("mock-install-test", (e) => seenEarly.push(e.payload));
+      await ready;
+      await expect(early).resolves.toMatch(/:/);
+      await emit("mock-install-test", 1);
+      expect(seenEarly).toEqual([1]);
+      expect(window.__atlasMock?.scenario).toBe("default");
+    },
+  );
+
+  it("still answers an unmocked command with null", { timeout: IMPORT_TIMEOUT_MS }, async () => {
     await import("./install");
     // Built, not written: `tests/ipc-contract.test.ts` rejects a literal
     // `invoke("…")` that names no Rust command.
