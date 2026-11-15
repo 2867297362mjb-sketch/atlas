@@ -99,12 +99,6 @@ interface Knob {
   reported?: (value: string) => AgentDelta;
   /** A pick the session does not offer. */
   unoffered: { arrange: () => void; pick: () => void };
-  /** Where the code departs from the rows below, as found. Each entry is a
-   *  fault; fixing one deletes it. */
-  today: {
-    /** A pick the session does not offer is shown, or even pushed. */
-    unoffered?: "shown" | "pushed";
-  };
 }
 
 const KNOBS: Knob[] = [
@@ -129,7 +123,6 @@ const KNOBS: Knob[] = [
       arrange: () => actions().switchChatAgent(TAB, "codex"),
       pick: () => actions().setClaudePermissionMode(TAB, "plan"),
     },
-    today: { unoffered: "shown" },
   },
   {
     name: "ACP mode",
@@ -148,7 +141,6 @@ const KNOBS: Knob[] = [
     unbound: "kept-for-bind",
     reported: (mode_id) => delta({ kind: "mode_changed", mode_id }),
     unoffered: { arrange: () => {}, pick: () => actions().setAcpMode(TAB, "yolo") },
-    today: { unoffered: "shown" },
   },
   {
     name: "model",
@@ -167,7 +159,6 @@ const KNOBS: Knob[] = [
     unbound: "kept-for-bind",
     reported: (model_id) => delta({ kind: "model_changed", model_id }),
     unoffered: { arrange: () => {}, pick: () => actions().setAcpModel(TAB, "") },
-    today: { unoffered: "shown" },
   },
   {
     name: "reasoning effort",
@@ -192,7 +183,6 @@ const KNOBS: Knob[] = [
       arrange: () => actions().switchChatAgent(TAB, "codex"),
       pick: () => actions().setNativeEffort(TAB, "high"),
     },
-    today: { unoffered: "shown" },
   },
   {
     name: "advertised option",
@@ -220,7 +210,6 @@ const KNOBS: Knob[] = [
       arrange: () => {},
       pick: () => void actions().setAcpConfigOption(TAB, "verbosity", "high"),
     },
-    today: { unoffered: "pushed" },
   },
 ];
 
@@ -364,15 +353,7 @@ describe.each(KNOBS)("picking a session's $name", (knob) => {
     knob.unoffered.pick();
     await flush();
 
-    if (knob.today.unoffered === "pushed") {
-      expect(pushes()).toHaveLength(1);
-      return;
-    }
     expect(pushes()).toEqual([]);
-    if (knob.today.unoffered === "shown") {
-      expect(knob.shown()).not.toBe(before);
-      return;
-    }
     expect(knob.shown()).toBe(before);
     expect(knob.remembered()).toBe(remembered);
   });

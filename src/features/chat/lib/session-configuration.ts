@@ -23,6 +23,7 @@
  */
 import type { ChatSession, ClaudePermissionMode } from "@/types/agent";
 import type { SessionKey } from "@/types/agents";
+import { parseConfigOptions } from "./acp-config-options";
 import type { agents } from "./agents-api";
 
 /** What setting a knob asks of the agents backend (`agents-api.ts`). */
@@ -57,7 +58,8 @@ export interface Knob<V> {
      *  (`undefined` when it held none the composer knew of). */
     restore: (session: ChatSession, value: V | undefined) => void;
   };
-  /** Does this session offer the knob, and this value of it? */
+  /** Does this session offer the knob, and this value of it? A pick it does
+   *  not offer is refused before anything is shown. */
   offers: (session: ChatSession, value: V) => boolean;
   push: (agents: ConfigurationAgentsPort, key: SessionKey, value: V) => Promise<void>;
   /** How a pick is remembered, once the agent has taken it or the bind has it
@@ -203,7 +205,13 @@ const effort: Knob<string> = {
 function option(configId: string): Knob<boolean | string> {
   return {
     name: `option "${configId}"`,
-    offers: () => true,
+    // Only an option this session advertises, and only a value it takes.
+    offers: (session, value) => {
+      const knob = parseConfigOptions(session.acpConfigOptions).find((o) => o.id === configId);
+      if (!knob) return false;
+      if (knob.kind === "boolean") return typeof value === "boolean";
+      return typeof value === "string" && knob.choices.some((choice) => choice.id === value);
+    },
     push: (agents, key, value) => agents.setConfigOption(key, configId, value),
     remember: (prefs, session, value) => {
       if (session.agentType) prefs.saveOption(session.agentType, configId, value);
@@ -277,6 +285,10 @@ export function createSessionConfiguration(deps: SessionConfigurationDeps): Sess
   async function pick<V>(tabId: string, knob: Knob<V>, value: V): Promise<PickOutcome> {
     const session = deps.sessions.get(tabId);
     if (!session) return "refused";
+    // Not offered, not picked: nothing is shown, pushed or remembered. The
+    // composer only lists what the session offers, so this is the guard for
+    // every other caller (a shortcut, a programmatic pick, a stale menu).
+    if (!knob.offers(session, value)) return "refused";
     const key = keyOf(session);
     if (!key && knob.unbound === "refused") return "refused";
 
@@ -287,7 +299,6 @@ export function createSessionConfiguration(deps: SessionConfigurationDeps): Sess
       knob.remember?.(deps.prefs, session, value);
       return "kept-for-bind";
     }
-    if (!knob.offers(session, value)) return "refused";
 
     const flightKey = `${tabId}\u0000${knob.name}`;
     const flight = flights.get(flightKey) ?? { latest: 0, out: 0, held: shown, heldBy: 0 };

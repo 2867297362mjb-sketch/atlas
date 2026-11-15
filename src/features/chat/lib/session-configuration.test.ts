@@ -186,6 +186,95 @@ describe("pick", () => {
   });
 });
 
+describe("a pick the session does not offer", () => {
+  const WEB = { id: "web", name: "Web search", type: "boolean", currentValue: false };
+  const THOUGHT = {
+    id: "thought",
+    name: "Thinking",
+    type: "select",
+    currentValue: "low",
+    options: [
+      { value: "low", name: "Low" },
+      { value: "high", name: "High" },
+    ],
+  };
+  /** Each opens its session, then answers the pick to make on it. */
+  const cases: [string, () => () => Promise<unknown>][] = [
+    [
+      "a mode the agent did not advertise",
+      () => {
+        open("codex", {
+          acpCurrentMode: "auto",
+          acpAvailableModes: [{ id: "auto", name: "Auto" }],
+        });
+        return () => configuration.pick(TAB, KNOBS.acpMode, "yolo");
+      },
+    ],
+    [
+      "Claude's permission mode, on another agent's session",
+      () => {
+        open("codex");
+        return () => configuration.pick(TAB, KNOBS.claudeMode, "bypassPermissions");
+      },
+    ],
+    [
+      "the effort level, on a session that is not the native agent's",
+      () => {
+        open("codex");
+        return () => configuration.pick(TAB, KNOBS.effort, "high");
+      },
+    ],
+    [
+      "an empty model id",
+      () => {
+        open("codex", { acpCurrentModel: "sonnet" });
+        return () => configuration.pick(TAB, KNOBS.model, "");
+      },
+    ],
+    [
+      "an option the agent did not advertise",
+      () => {
+        open("codex", { acpConfigOptions: [WEB] });
+        return () => configuration.pick(TAB, KNOBS.option("verbosity"), "high");
+      },
+    ],
+    [
+      "a value an advertised option does not take",
+      () => {
+        open("codex", { acpConfigOptions: [THOUGHT] });
+        return () => configuration.pick(TAB, KNOBS.option("thought"), "max");
+      },
+    ],
+    [
+      "a value of the wrong kind for an advertised option",
+      () => {
+        open("codex", { acpConfigOptions: [WEB] });
+        return () => configuration.pick(TAB, KNOBS.option("web"), "yes");
+      },
+    ],
+  ];
+
+  it.each(cases)(
+    "%s: refused, with nothing shown, pushed or remembered",
+    async (_name, arrange) => {
+      const pick = arrange();
+      const before = structuredClone(session());
+
+      expect(await pick()).toBe("refused");
+
+      expect(session()).toEqual(before);
+      expect(pushes).toEqual([]);
+      expect(prefs).toEqual({ modes: {}, options: [] });
+      expect(refusals).toEqual([]);
+    },
+  );
+
+  it("a mode is taken on trust while the agent has advertised none yet", async () => {
+    open("codex", { acpAvailableModes: [] });
+    expect(await configuration.pick(TAB, KNOBS.acpMode, "read-only")).toBe("applied");
+  });
+});
+
 describe("what is remembered", () => {
   it("is the pick the agent took last, whichever answer came back first", async () => {
     open("codex", { acpCurrentMode: "auto" });
