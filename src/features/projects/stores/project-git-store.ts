@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { createSelectors } from "@/lib/create-selectors";
+import type { GitChangedPayload } from "@/features/git/lib/git-changed-events";
 
 export interface GitSummary {
   isRepo: boolean;
@@ -61,7 +62,7 @@ export const useProjectGitStore = createSelectors(
       // plain unstaged edit (+N/-M) would never reach us. We ALSO listen to the
       // fs working-tree watcher (`atlas:explorer:changed`) so the live +/-
       // counts track uncommitted edits, mirroring the source-control panel.
-      void listen<{ project?: string }>("atlas:git-changed", (e) => {
+      void listen<GitChangedPayload>("atlas:git-changed", (e) => {
         const p = e.payload?.project;
         if (p && fetched.has(p)) get().actions.refresh(p);
       });

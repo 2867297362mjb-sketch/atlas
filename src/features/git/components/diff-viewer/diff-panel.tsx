@@ -46,6 +46,7 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@tryatlas/design";
+import type { GitChangedPayload } from "@/features/git/lib/git-changed-events";
 
 /**
  * The review diff: every changed file of the working tree or the branch,
@@ -136,7 +137,7 @@ function GitDiffPanel({
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => void refetch(), 250);
     };
-    const offGit = listen<{ project: string }>("atlas:git-changed", (e) => {
+    const offGit = listen<GitChangedPayload>("atlas:git-changed", (e) => {
       if (e.payload?.project !== repoPath) return;
       // HEAD may have moved under files whose patches are cached by what is
       // on disk; those keys cannot see it.
@@ -209,7 +210,7 @@ function GitDiffPanel({
     if (!attachedKey) return;
     const paths = new Set(attachedKey.split("\0"));
     let timer: ReturnType<typeof setTimeout> | null = null;
-    const off = listen<{ project: string }>("atlas:git-changed", (e) => {
+    const off = listen<GitChangedPayload>("atlas:git-changed", (e) => {
       const project = e.payload?.project;
       if (!project || !paths.has(project)) return;
       invalidateReviewFiles(queryClient, project);
