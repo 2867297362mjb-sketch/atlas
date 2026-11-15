@@ -90,7 +90,7 @@ Reference: `docs/reference/design-system.md` and `docs/reference/theme-keys.md`.
 ### State management
 
 - **Stores are Zustand + Immer**, wrapped in `createSelectors` (`src/lib/create-selectors.ts`), which auto-generates `useStore.use.x()` selectors.
-- **Stores never call other stores directly.** Cross-feature coordination happens by reading another feature's state via `getState()` at an action boundary, or by firing `window.dispatchEvent(new CustomEvent("atlas:..."))` for looser coupling. Importing one feature's store into another feature's store module violates this.
+- **Stores never call other stores directly.** Cross-feature coordination happens by reading another feature's state via `getState()` at an action boundary, or by firing a window event for looser coupling: `emitWindowEvent("atlas:...", detail)` from `src/lib/window-events.ts`, whose map declares every such event and its payload (`tests/window-event-contract.test.ts`). Importing one feature's store into another feature's store module violates this.
 - **Tailwind classes compose through `cn()`** (`src/lib/utils.ts`), never concatenated ad hoc.
 
 ### The authoritative-state boundary
