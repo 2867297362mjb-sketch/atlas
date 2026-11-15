@@ -8,7 +8,7 @@ import { collapseCites } from "../lib/cited-text";
 import { mergeQueued } from "../lib/composer-submit";
 import { rememberMention } from "../lib/mention-registry";
 import { collapsePastes } from "../lib/pasted-text";
-import { removeQueuedPrompt } from "../lib/turn-queue";
+import { sessionSend } from "../lib/session-send";
 import { useChatStore } from "../stores/chat-store";
 
 export function useComposerText({
@@ -64,7 +64,7 @@ export function useComposerText({
     for (const p of pastes) rememberMention(p, projectPath);
     for (const c of uncited.cites) rememberMention(c, projectPath);
     writeComposer(mergeQueued(cur, text));
-    removeQueuedPrompt(tabId, i);
+    sessionSend.removeQueued(tabId, i);
     requestAnimationFrame(() => inputRef.current?.focus());
   };
 

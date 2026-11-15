@@ -114,7 +114,7 @@ describe("resume-mode coverage", () => {
   it("restores the mode BEFORE the tab is bound", () => {
     // Ordering, not presence. The send gate is `setAcpBinding`, not
     // `setDisconnected(false)`: a tab whose agent died while starting has no
-    // `acpSessionId`, so the bind is a `justBound` edge (`drain-gate.ts`) and
+    // `acpSessionId`, so the bind is a `justBound` edge (`send-gate.ts`) and
     // the queued message goes out on the next commit. A mode restored after
     // the bind races that message, and an `await` between the bind and
     // `setDisconnected(false)` lets it see the tab still disconnected and

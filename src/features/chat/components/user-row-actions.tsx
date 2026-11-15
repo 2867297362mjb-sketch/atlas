@@ -385,7 +385,7 @@ export function UserRowActions({
   text: string;
   /** Only the thread's last user message can be retried, and only where the
    *  agent can actually rewind. Resolved by the transcript so this stays a
-   *  plain boolean prop — see `sessionCanRetry` in `retry-gate.ts`. */
+   *  plain boolean prop — see `sessionCanRetry` in `send-gate.ts`. */
   canRetry: boolean;
   /** `ChatMessage.id` — what a pin addresses. The row id is `u:<messageId>`;
    *  the pin stores the raw id so the header can resolve it to a message
@@ -421,7 +421,7 @@ export function UserRowActions({
 
   // Edit is NOT retry. Retry rewinds the turn off the agent and re-runs it
   // (destructive, native-agent-only). ACP has no verb to forget or rewrite a
-  // turn (see `retry-gate.ts`), so editing in place is impossible there; the
+  // turn (see `send-gate.ts`), so editing in place is impossible there; the
   // honest version every agent supports is to load the prompt back into the
   // composer and let it go out as a NEW turn, the old exchange left intact.
   // Sending unchanged is one Enter away, which is what the old blind "Send

@@ -51,7 +51,7 @@ import { projectRows, type Projection, type Segment } from "../lib/turn-rows";
 import { RowKind, type Row } from "@tryatlas/design/session";
 import { useThawed } from "../lib/use-thawed";
 import { useChatStore } from "../stores/chat-store";
-import { sessionCanRetry } from "../lib/retry-gate";
+import { sessionCanRetry } from "../lib/send-gate";
 import { latestResponseRowId } from "../lib/message-footer";
 import { useRcRemoteDriver } from "../stores/rc-store";
 import { pinScope } from "../stores/chat-pins-store";

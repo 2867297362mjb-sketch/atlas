@@ -377,7 +377,7 @@ interface ChatState {
    * Per-tab queued prompts, as the composer's strip renders them. For a bound
    * session this mirrors Rust's queue (the turn controller owns and drains it;
    * `queue_changed` keeps this current), followed by any items typed while the
-   * tab had no session to queue them in. See `lib/turn-queue.ts`.
+   * tab had no session to queue them in. See `lib/session-send.ts`.
    */
   queues: Record<string, string[]>;
   /**
@@ -630,7 +630,7 @@ interface ChatActions {
      * `@paste:<id>` or `@cite:<id>` would reach the agent with nothing behind
      * it. Required, so no queue path can skip it. `id` is the item's Rust
      * queue id or a `pending:` marker; omitted, the item is local (held until
-     * the next bind). Pure state — `lib/turn-queue.ts` decides where an item
+     * the next bind). Pure state — `lib/session-send.ts` decides where an item
      * goes.
      */
     enqueueMessage: (
