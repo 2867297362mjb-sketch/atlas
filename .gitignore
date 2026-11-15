@@ -107,3 +107,6 @@ __pycache__/
 
 # Built by scripts/linux/build-bwrap.sh for the AppImage; never committed.
 src-tauri/binaries/
+
+# Vitest's transformed-module cache (vitest.config.ts keeps it per checkout).
+/.vitest-cache/
