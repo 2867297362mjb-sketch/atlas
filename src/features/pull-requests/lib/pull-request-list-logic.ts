@@ -8,6 +8,7 @@
  */
 
 import type { PullRequestListFilters } from "./pull-request-query";
+import { resolveStacks, type PullRequestStack } from "./pull-request-stacks";
 import type {
   PrAction,
   PrActor,
@@ -436,71 +437,39 @@ export function settlePullRequestOverrides(
 
 // ── stacks ──────────────────────────────────────────────────────────────
 
-/** A chain of open pull requests, each based on the one below it. */
-export interface PullRequestChain {
-  /** Base first; a parent before its children. */
-  layers: PrListEntry[];
-  /** One per layer: 0 for the base, the parent's depth + 1 above it. */
-  depths: number[];
-}
-
 export interface PullRequestStackMembership {
-  chain: PullRequestChain;
+  stack: PullRequestStack<PrListEntry>;
   /** 1-based, base first. */
   position: number;
   size: number;
 }
 
 /**
- * Chains derived from base branches: a pull request whose base is another
- * open pull request's head sits on it. A head two open pull requests share
- * is ambiguous and links nothing, and a fork's branch never does. Only
- * chains of two or more are returned, keyed by each member's number.
+ * The repository list's stacks, by the shared rule (`resolveStacks`), keyed
+ * by each member's number. Three choices are this caller's, each made here
+ * and nowhere else: only open pull requests take part, and no fork's (its
+ * head branch is another repository's, so it never is a base here); siblings
+ * read in number order, because the rows arrive in display order; and only
+ * stacks of two or more are kept, a lone row showing no stack.
  */
 export function resolvePullRequestStacks(
   entries: readonly PrListEntry[],
 ): Map<number, PullRequestStackMembership> {
-  const open = entries.filter((entry) => entry.state === "open" && !entry.isCrossRepository);
-  const byHead = new Map<string, PrListEntry | null>();
-  for (const entry of open) {
-    byHead.set(entry.headBranch, byHead.has(entry.headBranch) ? null : entry);
-  }
-  const parentOf = (entry: PrListEntry) => {
-    const parent = byHead.get(entry.baseBranch);
-    return parent == null || parent.number === entry.number ? undefined : parent;
-  };
-  const children = new Map<number, PrListEntry[]>();
-  for (const entry of open) {
-    const parent = parentOf(entry);
-    if (!parent) continue;
-    const siblings = children.get(parent.number) ?? [];
-    siblings.push(entry);
-    children.set(parent.number, siblings);
-  }
+  const open = entries
+    .filter((entry) => entry.state === "open" && !entry.isCrossRepository)
+    .sort((a, b) => a.number - b.number);
   const out = new Map<number, PullRequestStackMembership>();
-  const placed = new Set<number>();
-  for (const base of open) {
-    if (parentOf(base) !== undefined || !children.has(base.number)) continue;
-    const layers: PrListEntry[] = [];
-    const depths: number[] = [];
-    const pending = [{ entry: base, depth: 0 }];
-    for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
-      // Two bases naming each other would otherwise walk forever.
-      if (placed.has(next.entry.number)) continue;
-      placed.add(next.entry.number);
-      layers.push(next.entry);
-      depths.push(next.depth);
-      const below = [...(children.get(next.entry.number) ?? [])].sort(
-        (a, b) => a.number - b.number,
-      );
-      for (let index = below.length - 1; index >= 0; index -= 1) {
-        pending.push({ entry: below[index]!, depth: next.depth + 1 });
-      }
-    }
-    if (layers.length < 2) continue;
-    const chain = { layers, depths };
-    layers.forEach((layer, index) =>
-      out.set(layer.number, { chain, position: index + 1, size: layers.length }),
+  // The list is one repository's, so every entry names the same one.
+  const stacks = resolveStacks(open, (entry) => ({
+    repository: "",
+    headBranch: entry.headBranch,
+    baseBranch: entry.baseBranch,
+  }));
+  for (const stack of stacks) {
+    const size = stack.layers.length;
+    if (size < 2) continue;
+    stack.layers.forEach((layer, index) =>
+      out.set(layer.number, { stack, position: index + 1, size }),
     );
   }
   return out;
