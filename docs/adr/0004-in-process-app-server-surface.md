@@ -1,6 +1,6 @@
 # ADR-0004: The ported engine is driven in-process at the app-server layer
 
-**Status:** Accepted (2026-08-28). The names here predate ADR-0011 (`atlas_engine_app_server_client`, `EngineHome`). Known deviation, recorded 2026-11-16: `src-tauri/src/commands/agent_host.rs` downcasts a connection to `EngineConnection` for fork, effort and the model-catalogue refresh, so "never sees an engine type" below does not hold at those three sites. The decision stands; the intended fix is to advertise those three as capabilities on `AgentConnection`, as rewind already is, and this note goes when that lands.
+**Status:** Accepted (2026-08-28). The names here predate ADR-0011 (`atlas_engine_app_server_client`, `EngineHome`).
 
 ## Context
 
