@@ -2065,7 +2065,7 @@ impl ConfigManager {
             }
         };
         if fresh.last_raw != raw {
-            write_atomic(&self.path, &fresh.last_raw)
+            atlas_fs::replace_file(&self.path, &fresh.last_raw)
                 .map_err(|error| ConfigError::Io(error.to_string()))?;
         }
         self.document = fresh.document;
@@ -2175,7 +2175,7 @@ impl ConfigManager {
             }
             _ => {}
         }
-        write_atomic(&self.path, text).map_err(|e| ConfigError::Io(e.to_string()))?;
+        atlas_fs::replace_file(&self.path, text).map_err(|e| ConfigError::Io(e.to_string()))?;
         Ok(true)
     }
 
@@ -2196,7 +2196,7 @@ impl ConfigManager {
         let settings = AppSettings::default();
         let document = document_for(&settings);
         let text = document.to_string();
-        write_atomic(&self.path, &text).map_err(|e| ConfigError::Io(e.to_string()))?;
+        atlas_fs::replace_file(&self.path, &text).map_err(|e| ConfigError::Io(e.to_string()))?;
 
         self.document = document;
         self.effective = settings.clone();
@@ -2216,7 +2216,7 @@ impl ConfigManager {
     fn create_fresh_with(path: PathBuf, mut settings: AppSettings) -> Result<Self, ConfigError> {
         let document = document_for(&settings);
         let text = document.to_string();
-        write_atomic(&path, &text).map_err(|e| ConfigError::Io(e.to_string()))?;
+        atlas_fs::replace_file(&path, &text).map_err(|e| ConfigError::Io(e.to_string()))?;
         fallback_unknown_theme(&mut settings);
         Ok(Self {
             path,
@@ -2228,52 +2228,6 @@ impl ConfigManager {
             unknown_keys: Vec::new(),
         })
     }
-}
-
-/// Atomic write: a unique temp file in the same directory (so distinct UI
-/// writes, a first-run create, and any external tooling can never collide on one
-/// fixed `.tmp` name), flushed then renamed over the target.
-pub(crate) fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
-    use std::io::Write;
-
-    if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir)?;
-    }
-    let file_name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| CONFIG_FILE_NAME.to_string());
-    let unique = format!("{file_name}.tmp.{}", uuid::Uuid::new_v4());
-    let tmp = path.with_file_name(unique);
-
-    // `sync_all` before the rename, not just `fs::write`: without it the
-    // rename can reach the disk ahead of the bytes it points at, so power
-    // loss just after the UI said "saved" can leave config.toml pointing at
-    // an empty or half-written inode. On the failure paths the temp file is
-    // removed rather than left as litter next to the real config.
-    let written = (|| -> std::io::Result<()> {
-        let mut f = fs::File::create(&tmp)?;
-        f.write_all(contents.as_bytes())?;
-        f.sync_all()
-    })();
-    if let Err(e) = written {
-        let _ = fs::remove_file(&tmp);
-        return Err(e);
-    }
-    if let Err(e) = fs::rename(&tmp, path) {
-        let _ = fs::remove_file(&tmp);
-        return Err(e);
-    }
-
-    // Make the rename itself durable. Best-effort: some filesystems refuse to
-    // open a directory for sync, and that is not worth failing an otherwise
-    // successful write over.
-    if let Some(dir) = path.parent() {
-        if let Ok(d) = fs::File::open(dir) {
-            let _ = d.sync_all();
-        }
-    }
-    Ok(())
 }
 
 /// `~/.config/atlas/` — deliberately NOT Tauri's `app_config_dir()`, which on
@@ -2408,8 +2362,8 @@ mod tests {
     use super::*;
 
     /// A fresh `config.toml` path inside its own temp directory, so parallel
-    /// tests never collide and `write_atomic`'s `create_dir_all` has
-    /// somewhere real to write the sibling `.tmp.<uuid>` file. Keep the
+    /// tests never collide and `replace_file`'s `create_dir_all` has
+    /// somewhere real to write its sibling temp file. Keep the
     /// `TempDir` alive for the test: dropping it deletes the directory.
     fn tmp_config_path() -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
@@ -3192,45 +3146,6 @@ red = "#ee0000"
         let text = "schemaVersion = 1\n\n[settings]\nenterToSend = false\n";
         assert!(mgr.write_if_unchanged(text).unwrap());
         assert_eq!(fs::read_to_string(&path).unwrap(), text);
-    }
-
-    fn temp_files_beside(path: &Path) -> Vec<String> {
-        fs::read_dir(path.parent().unwrap())
-            .unwrap()
-            .filter_map(Result::ok)
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .filter(|n| n.contains(".tmp."))
-            .collect()
-    }
-
-    /// `write_atomic` must not leave its `.tmp.<uuid>` sibling behind when the
-    /// swap FAILS — that's the path that used to litter, since the success
-    /// path renames the temp away by construction. A directory sitting at the
-    /// destination makes the rename fail deterministically.
-    #[test]
-    fn a_failed_atomic_write_cleans_up_its_temp_file() {
-        let (_dir, path) = tmp_config_path();
-        fs::create_dir_all(&path).unwrap();
-
-        assert!(
-            write_atomic(&path, "schemaVersion = 1\n").is_err(),
-            "renaming onto a dir fails"
-        );
-        assert!(
-            temp_files_beside(&path).is_empty(),
-            "a failed write left litter: {:?}",
-            temp_files_beside(&path)
-        );
-    }
-
-    /// ...and the success path both lands the content and leaves nothing.
-    #[test]
-    fn a_successful_atomic_write_lands_the_content_and_leaves_nothing() {
-        let (_dir, path) = tmp_config_path();
-        write_atomic(&path, "schemaVersion = 1\n").unwrap();
-
-        assert_eq!(fs::read_to_string(&path).unwrap(), "schemaVersion = 1\n");
-        assert!(temp_files_beside(&path).is_empty());
     }
 
     /// A comment line that misses its `\n\` continuation keeps the source's

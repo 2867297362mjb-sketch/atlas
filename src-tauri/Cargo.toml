@@ -37,6 +37,8 @@ atlas-process = { path = "../crates/atlas-process" }
 # Whose data this process owns — the released app's or the dev profile's.
 # Fixed from the bundle identifier at the top of `run()`.
 atlas-profile = { path = "../crates/atlas-profile" }
+# `replace_file`: the one crash-safe "rewrite this file" (config, skills, memory, keys).
+atlas-fs = { path = "../crates/atlas-fs" }
 # Devtools intentionally NOT enabled here. Release builds ship without
 # right-click → Inspect Element / Cmd+Option+I; `tauri dev` still auto-
 # enables devtools because the Tauri runtime turns them on for debug

@@ -577,7 +577,7 @@ impl SharedMemoryStore {
         }
         let id = self.project_id_for(project_path);
         let payload = serde_json::json!({ "projectId": id }).to_string();
-        let _ = atomic_write(&path, &payload);
+        let _ = atlas_fs::replace_file(&path, &payload);
     }
 
     // ── Record ───────────────────────────────────────────────────────────────
@@ -1437,16 +1437,6 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// Atomic write: tmp + rename (mirrors `memory_sharing::atomic_write`).
-fn atomic_write(path: &Path, payload: &str) -> Result<(), String> {
-    if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
-    let tmp = path.with_extension("tmp");
-    fs::write(&tmp, payload).map_err(|e| e.to_string())?;
-    fs::rename(&tmp, path).map_err(|e| e.to_string())
-}
-
 // ── Tauri commands ───────────────────────────────────────────────────────────
 //
 // Async so the record's disk I/O runs on the blocking pool, never on the
@@ -1860,7 +1850,8 @@ fn export_target(path: &Path) -> Result<PathBuf, String> {
 /// the file's path.
 fn export_apply(project_path: &str, ids: &[i64]) -> Result<String, String> {
     let plan = export_plan(project_path, ids)?;
-    atomic_write(&export_target(Path::new(&plan.path))?, &plan.after)?;
+    atlas_fs::replace_file(export_target(Path::new(&plan.path))?, &plan.after)
+        .map_err(|e| e.to_string())?;
     Ok(plan.path)
 }
 

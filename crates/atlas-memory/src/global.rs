@@ -472,17 +472,9 @@ fn append_memory_md(dir: &Path, appends: &[(String, String, f32)]) -> Result<()>
     write_atomic(&path, out.as_bytes())
 }
 
-/// Atomic temp + rename write.
+/// [`atlas_fs::replace_file`], with the path in the error.
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).ok();
-    }
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".tmp");
-    let tmp = PathBuf::from(tmp);
-    std::fs::write(&tmp, bytes).with_context(|| format!("write tmp {tmp:?}"))?;
-    std::fs::rename(&tmp, path).with_context(|| format!("rename {tmp:?} -> {path:?}"))?;
-    Ok(())
+    atlas_fs::replace_file(path, bytes).with_context(|| format!("write {path:?}"))
 }
 
 #[cfg(test)]

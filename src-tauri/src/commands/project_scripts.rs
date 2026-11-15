@@ -42,7 +42,6 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
 
-use crate::state::atlas_config::write_atomic;
 use crate::state::project_config::{self, ProjectConfigs, PROJECT_CONFIG_HEADER};
 
 /// The icons a script may carry; the overlay draws one glyph per id.
@@ -100,7 +99,8 @@ fn read_approvals(path: &Path) -> Approvals {
 
 fn write_approvals(path: &Path, approvals: &Approvals) -> Result<(), String> {
     let text = serde_json::to_string_pretty(approvals).map_err(|e| e.to_string())?;
-    write_atomic(path, &text).map_err(|e| format!("could not write {}: {e}", path.display()))
+    atlas_fs::replace_file(path, &text)
+        .map_err(|e| format!("could not write {}: {e}", path.display()))
 }
 
 /// Mark each script approved when its current command is the approved one.
@@ -291,7 +291,7 @@ pub fn write_scripts(
         }
         document["scripts"] = toml_edit::Item::ArrayOfTables(array);
     }
-    write_atomic(&path, &document.to_string())
+    atlas_fs::replace_file(&path, document.to_string())
         .map_err(|e| format!("could not write {}: {e}", path.display()))?;
     Ok(scripts)
 }
