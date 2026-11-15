@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isTestFile, walk } from "./support/walk";
 import { expectFloor } from "./support/floor";
+import { bracketBody } from "./support/source";
 
 /**
  * Guards the *window event* seam: the DOM `CustomEvent`s on `window` that
@@ -97,11 +98,14 @@ const rel = (file: string) => path.relative(REPO_ROOT, file);
 
 /** The names declared in `AtlasWindowEvents`. */
 function declaredEvents(): string[] {
-  const src = readFileSync(MAP_FILE, "utf8");
-  const start = src.indexOf("export interface AtlasWindowEvents {");
-  if (start < 0) return [];
-  const end = src.indexOf("\n}", start);
-  const body = src.slice(start, end);
+  const body = bracketBody(
+    readFileSync(MAP_FILE, "utf8"),
+    /\bexport interface AtlasWindowEvents\b/,
+    {
+      lang: "ts",
+      where: rel(MAP_FILE),
+    },
+  );
   return [...body.matchAll(/^\s+"(atlas:[a-z0-9:-]+)"\s*:/gm)].map((m) => m[1]);
 }
 

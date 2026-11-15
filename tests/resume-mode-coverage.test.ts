@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { bracketBody } from "./support/source";
 
 /**
  * Every path that binds a tab to a live agent session must put the AGENT into
@@ -76,12 +77,14 @@ const BIND_SITES = [
   },
 ] as const;
 
+const REBIND = "src/features/chat/lib/agent-rebind.ts";
+
 /** The body of the function that actually respawns and rebinds. */
 function rebindBody(): string {
-  const src = read("src/features/chat/lib/agent-rebind.ts");
-  const start = src.indexOf("async function respawnAndRebind");
-  expect(start, "agent-rebind.ts no longer defines respawnAndRebind").toBeGreaterThan(-1);
-  return src.slice(start, src.indexOf("\n}\n", start));
+  return bracketBody(read(REBIND), /\basync function respawnAndRebind\b/, {
+    lang: "ts",
+    where: REBIND,
+  });
 }
 
 describe("resume-mode coverage", () => {
@@ -138,10 +141,10 @@ describe("resume-mode coverage", () => {
     // queue into `handleSend`; without a per-tab guard each caller respawns
     // the agent and rebinds, and the loser can leave the tab on a session the
     // mode was never applied to.
-    const src = read("src/features/chat/lib/agent-rebind.ts");
-    const start = src.indexOf("function rebindDisconnectedSession");
-    expect(start).toBeGreaterThan(-1);
-    const guard = src.slice(start, src.indexOf("\n}\n", start));
+    const guard = bracketBody(read(REBIND), /\bfunction rebindDisconnectedSession\b/, {
+      lang: "ts",
+      where: REBIND,
+    });
     expect(guard).toMatch(/rebindsInFlight\.get\(tabId\)/);
     expect(guard).toMatch(/rebindsInFlight\.delete\(tabId\)/);
   });
@@ -161,7 +164,10 @@ describe("resume-mode coverage", () => {
     const catchStart = body.indexOf("} catch", call);
     expect(catchStart).toBeGreaterThan(-1);
 
-    const handler = body.slice(catchStart, body.indexOf("}", body.indexOf(";", catchStart)));
+    const handler = bracketBody(body.slice(catchStart), "catch", {
+      lang: "ts",
+      where: `${REBIND}: the mode restore's catch`,
+    });
     expect(handler).toMatch(/console\.warn\(/);
     expect(handler).not.toMatch(/return false/);
   });

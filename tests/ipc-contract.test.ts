@@ -4,6 +4,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { walk } from "./support/walk";
 import { expectFloor } from "./support/floor";
+import {
+  INVOKE_DYNAMIC,
+  INVOKE_LITERAL,
+  declaredCommands,
+  registeredCommands,
+  rustCommandFiles,
+  stripTsComments,
+} from "./support/ipc";
 
 /**
  * Guards the Tauri IPC contract: ~350 `#[tauri::command]` handlers on the Rust
@@ -21,12 +29,12 @@ import { expectFloor } from "./support/floor";
  * checked-in generated file. This test costs milliseconds and no build.
  *
  * If you add a command, nothing here needs updating — the sets are derived.
+ * The parsers themselves are in `tests/support/ipc.ts`, shared with
+ * `mock-backend-contract.test.ts`.
  */
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const RUST_SRC = path.join(REPO_ROOT, "src-tauri", "src");
 const TS_SRC = path.join(REPO_ROOT, "src");
-const LIB_RS = path.join(RUST_SRC, "lib.rs");
 
 /**
  * Floors that make a vacuous pass impossible.
@@ -48,101 +56,6 @@ const MIN_INVOKED = 500;
 /** Repo-relative with forward slashes whatever the OS, so paths compare
  *  against the hand-written tables below on Windows too. */
 const posixRelative = (file: string) => path.relative(REPO_ROOT, file).split(path.sep).join("/");
-
-/**
- * Command handlers as *declared*: every `fn` carrying `#[tauri::command]`.
- *
- * The attribute must start its own line. `skills.rs` cites `#[tauri::command]`
- * inside a `//!` module doc comment, and matching that occurrence sent the
- * scan past it to the next unrelated `fn` (an `impl Default`), inventing a
- * command called `default`.
- *
- * Taking the *next* `fn` after the attribute, rather than one regex spanning
- * both, tolerates additional attributes stacked between the two — a
- * fixed-lookahead pattern would silently skip those handlers.
- */
-function declaredCommands(): Map<string, string[]> {
-  const found = new Map<string, string[]>();
-  // `(async)` and other attribute arguments count: `#[tauri::command(async)]`
-  // moves a sync handler off the main thread and is still a command.
-  const attribute = /^[ \t]*#\[tauri::command(\([^)]*\))?\]/gm;
-  for (const file of walk(RUST_SRC, [".rs"])) {
-    const src = readFileSync(file, "utf8");
-    for (const attr of src.matchAll(attribute)) {
-      const match = src.slice(attr.index + attr[0].length).match(/\bfn\s+([a-z_][a-z0-9_]*)/i);
-      if (!match) continue;
-      const name = match[1];
-      const where = posixRelative(file);
-      found.set(name, [...(found.get(name) ?? []), where]);
-    }
-  }
-  return found;
-}
-
-/** Command handlers as *registered* in `tauri::generate_handler![...]`. */
-function registeredCommands(): string[] {
-  const src = readFileSync(LIB_RS, "utf8");
-  const start = src.indexOf("generate_handler![");
-  if (start === -1) throw new Error("no generate_handler! block found in lib.rs");
-
-  // Scan bracket depth from the macro's `[` so a nested `[...]` inside the
-  // list can never end the block early.
-  const open = src.indexOf("[", start);
-  let depth = 0;
-  let end = -1;
-  for (let i = open; i < src.length; i++) {
-    if (src[i] === "[") depth++;
-    else if (src[i] === "]" && --depth === 0) {
-      end = i;
-      break;
-    }
-  }
-  if (end === -1) throw new Error("unterminated generate_handler! block in lib.rs");
-
-  return src
-    .slice(open + 1, end)
-    .split(",")
-    .map((entry) => entry.replace(/\/\/.*$/gm, "").trim())
-    .filter(Boolean)
-    .map((entry) => entry.split("::").pop()!);
-}
-
-/**
- * Comments are removed before scanning, for the same reason as on the Rust
- * side: prose citing a command name should not be able to assert that it
- * exists. `//` only opens a comment when it isn't the tail of `https://`-style
- * text inside a string (the `[^:]` guard); that is imprecise but errs toward
- * keeping code, never toward keeping a comment.
- */
-function stripTsComments(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:\\])\/\/.*$/gm, "$1");
-}
-
-/**
- * The optional type argument between `invoke` and `(`. Balanced angle
- * brackets up to four levels deep — `invoke<Record<string, Array<X>>>("…")` —
- * and `=>` inside a function type doesn't count as a closing bracket. The old
- * `<[^>]*>` stopped at the first `>`, so every call with a nested generic
- * (`models_pricing_get`, `capture_screenshot`, …) went unchecked.
- */
-const TYPE_ARG = (() => {
-  const atom = "(?:=>|[^<>])";
-  let level = `<${atom}*>`;
-  for (let i = 0; i < 3; i++) level = `<(?:${atom}|${level})*>`;
-  return level;
-})();
-
-/** `invoke<…>("name"` — the name may sit on the line after the `(`. */
-const INVOKE_LITERAL = new RegExp(
-  `\\binvoke\\s*(?:${TYPE_ARG})?\\s*\\(\\s*["'\`]([a-zA-Z0-9_]+)["'\`]`,
-  "g",
-);
-
-/** `invoke<…>(someVariable` — a command name this scan cannot read. */
-const INVOKE_DYNAMIC = new RegExp(
-  `\\binvoke\\s*(?:${TYPE_ARG})?\\s*\\(\\s*([A-Za-z_$][\\w$]*)\\s*[,)]`,
-  "g",
-);
 
 /**
  * The call sites that pass `invoke` a variable, with the literal command
@@ -232,7 +145,7 @@ describe("tauri IPC contract", () => {
   // These three run first so that a broken parser reports itself as a broken
   // parser, rather than as a confusing "0 commands differ" pass.
   it("reads a plausible number of files on both sides", () => {
-    expectFloor("Rust files under src-tauri/src", walk(RUST_SRC, [".rs"]).length, MIN_RUST_FILES);
+    expectFloor("Rust files under src-tauri/src", rustCommandFiles().length, MIN_RUST_FILES);
     expectFloor("TypeScript files under src/", frontendFiles().length, MIN_TS_FILES);
   });
 

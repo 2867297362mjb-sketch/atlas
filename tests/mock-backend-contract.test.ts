@@ -8,6 +8,12 @@ import { walk } from "./support/walk";
 import { baseFixtureMaps, baseHandlers } from "@/dev/mock-backend/scenarios/base";
 import { scenarios } from "@/dev/mock-backend/scenarios";
 import { expectFloor } from "./support/floor";
+import {
+  INVOKE_LITERAL,
+  declaredCommands,
+  registeredCommands,
+  stripTsComments,
+} from "./support/ipc";
 
 /**
  * Guards the dev-only browser mock backend (`src/dev/mock-backend/`) against
@@ -36,8 +42,6 @@ import { expectFloor } from "./support/floor";
  */
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const RUST_SRC = path.join(REPO_ROOT, "src-tauri", "src");
-const LIB_RS = path.join(RUST_SRC, "lib.rs");
 
 /**
  * Commands deliberately answered by more than one base fixture map (or by a
@@ -74,18 +78,6 @@ const UNMOCKED_ALLOWED: Record<string, string> = {};
  */
 const PLUGIN_PREFIX = "plugin:";
 
-/** Same literal scan as `ipc-contract.test.ts` (kept in step by hand). */
-const TYPE_ARG = (() => {
-  const atom = "(?:=>|[^<>])";
-  let level = `<${atom}*>`;
-  for (let i = 0; i < 3; i++) level = `<(?:${atom}|${level})*>`;
-  return level;
-})();
-const INVOKE_LITERAL = new RegExp(
-  `\\binvoke\\s*(?:${TYPE_ARG})?\\s*\\(\\s*["'\`]([a-zA-Z0-9_]+)["'\`]`,
-  "g",
-);
-
 /** Dynamic `invoke(cmd)` sites whose literals the scan cannot follow; see the
  *  same table in `ipc-contract.test.ts`. */
 const DYNAMIC_COMMANDS = ["git_stage_hunk", "git_unstage_hunk", "git_discard_hunk"];
@@ -97,63 +89,10 @@ function invokedCommands(): Set<string> {
   const devRoot = path.join(TS_SRC, "dev") + path.sep;
   for (const file of walk(TS_SRC, [".ts", ".tsx"])) {
     if (file.startsWith(devRoot) || /\.test\.tsx?$/.test(file)) continue;
-    const src = readFileSync(file, "utf8")
-      .replace(/\/\*[\s\S]*?\*\//g, " ")
-      .replace(/(^|[^:\\])\/\/.*$/gm, "$1");
+    const src = stripTsComments(readFileSync(file, "utf8"));
     for (const match of src.matchAll(INVOKE_LITERAL)) found.add(match[1]);
   }
   return found;
-}
-
-/**
- * Every `#[tauri::command]` handler name. Same parse as
- * `ipc-contract.test.ts`: the attribute must start its own line (a module doc
- * comment citing it would otherwise name the next unrelated `fn`), and the
- * name is taken from the next `fn` rather than by fixed lookahead, so stacked
- * attributes do not hide a handler.
- */
-function declaredCommands(): Set<string> {
-  const found = new Set<string>();
-  const attribute = /^[ \t]*#\[tauri::command(\([^)]*\))?\]/gm;
-  for (const file of walk(RUST_SRC, [".rs"])) {
-    const src = readFileSync(file, "utf8");
-    for (const attr of src.matchAll(attribute)) {
-      const match = src.slice(attr.index + attr[0].length).match(/\bfn\s+([a-z_][a-z0-9_]*)/i);
-      if (match) found.add(match[1]);
-    }
-  }
-  return found;
-}
-
-/**
- * Command names in `tauri::generate_handler![...]`. Declaring a
- * `#[tauri::command]` is not enough for the real app to answer it; a fake for
- * a declared-but-unregistered command makes the browser work where the app
- * says "command not found". Same bracket-depth scan as `ipc-contract.test.ts`.
- */
-function registeredCommands(): Set<string> {
-  const src = readFileSync(LIB_RS, "utf8");
-  const start = src.indexOf("generate_handler![");
-  if (start === -1) throw new Error("no generate_handler! block found in lib.rs");
-  const open = src.indexOf("[", start);
-  let depth = 0;
-  let end = -1;
-  for (let i = open; i < src.length; i++) {
-    if (src[i] === "[") depth++;
-    else if (src[i] === "]" && --depth === 0) {
-      end = i;
-      break;
-    }
-  }
-  if (end === -1) throw new Error("unterminated generate_handler! block in lib.rs");
-  return new Set(
-    src
-      .slice(open + 1, end)
-      .split(",")
-      .map((entry) => entry.replace(/\/\/.*$/gm, "").trim())
-      .filter(Boolean)
-      .map((entry) => entry.split("::").pop()!),
-  );
 }
 
 /**
@@ -189,7 +128,7 @@ function mockedCommands(): Map<string, string[]> {
 
 describe("browser mock backend contract", () => {
   const declared = declaredCommands();
-  const registered = registeredCommands();
+  const registered = new Set(registeredCommands());
   const mocked = mockedCommands();
 
   // First, so a broken import reports itself as a broken import rather than as

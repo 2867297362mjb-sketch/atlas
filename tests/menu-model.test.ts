@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 import { ACTION_BY_ID, isActionId } from "@/features/keybindings/lib/actions";
 import { MENU_COMMAND_IDS } from "@/features/menu/lib/run-menu-item";
 import { inWindowMenus, MENU_COMMANDS, MENU_EVENT, MENUS } from "@/features/menu/lib/menu-model";
+import { expectFloor } from "./support/floor";
+import { bracketBody } from "./support/source";
 
 /**
  * The app menu bar has one source, `src-tauri/menu.json`: Rust builds the
@@ -36,13 +38,17 @@ describe("menu model", () => {
 
   it("uses only the roles menu.rs knows", () => {
     const rust = read("src-tauri/src/menu.rs");
-    const block = rust.slice(
-      rust.indexOf("pub enum Role {"),
-      rust.indexOf("}", rust.indexOf("pub enum Role {")),
-    );
+    const block = bracketBody(rust, /\bpub enum Role\b/, {
+      lang: "rust",
+      where: "src-tauri/src/menu.rs",
+    });
     const known = new Set(
       [...block.matchAll(/^\s+([A-Z]\w*),/gm)].map((m) => m[1][0].toLowerCase() + m[1].slice(1)),
     );
+    // Both sides, or the loop below checks nothing: an enum that stopped
+    // parsing, or a menu that lost its role items.
+    expectFloor("variants of menu.rs's Role enum", known.size, 11);
+    expectFloor("role items in menu.json", items.filter((item) => item.type === "role").length, 10);
     for (const item of items)
       if (item.type === "role") expect(known.has(item.role), item.role).toBe(true);
   });
