@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { walk } from "./support/walk";
 import { expectFloor } from "./support/floor";
 import {
+  DYNAMIC_INVOKE_SITES,
   INVOKE_DYNAMIC,
   INVOKE_LITERAL,
   declaredCommands,
@@ -56,23 +57,6 @@ const MIN_INVOKED = 500;
 /** Repo-relative with forward slashes whatever the OS, so paths compare
  *  against the hand-written tables below on Windows too. */
 const posixRelative = (file: string) => path.relative(REPO_ROOT, file).split(path.sep).join("/");
-
-/**
- * The call sites that pass `invoke` a variable, with the literal command
- * names that flow into that variable in the same file. A literal scan can't
- * follow data flow, so each site is listed by hand; the tests below check
- * that the list is complete (a new dynamic site fails until it's added
- * here), that each literal still appears in its file, and that each is
- * registered.
- */
-const DYNAMIC_INVOKE_SITES: Record<string, string[]> = {
-  // `runHunkOp(cmd, …)` → `invoke(cmd, …)`
-  "src/features/git/components/git-manager/changes-view.tsx": [
-    "git_stage_hunk",
-    "git_unstage_hunk",
-    "git_discard_hunk",
-  ],
-};
 
 function frontendFiles(): Array<{ where: string; src: string }> {
   return walk(TS_SRC, [".ts", ".tsx"]).map((file) => ({

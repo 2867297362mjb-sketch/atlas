@@ -3,7 +3,7 @@
 // loading hint, with the effects that keep them current while it is open.
 
 import { useEffect, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { onFileIndexUpdated } from "@/features/file-picker/lib/file-picker-api";
 
 import {
   listMessagesInPastSession,
@@ -165,12 +165,12 @@ export function useMentionSearch({
     if (!open) return;
     let cancelled = false;
     let unlisten: (() => void) | null = null;
-    void listen<{ workspaceId?: string }>("atlas:fileindex:updated", (ev) => {
+    void onFileIndexUpdated((payload) => {
       if (cancelled) return;
       // The event carries the owning project — a background reindex for
       // ANOTHER project must not clear this picker's loading hint or
       // re-fire its search.
-      const ws = ev.payload?.workspaceId;
+      const ws = payload?.workspaceId;
       if (ws && ws !== activeProjectId()) return;
       setIndexing(false);
       setIndexNonce((n) => n + 1);

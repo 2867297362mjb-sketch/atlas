@@ -11,11 +11,11 @@
 // stream progress over `atlas:registry-install:progress`.
 
 import { useEffect, useMemo, useSyncExternalStore } from "react";
-import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import { withDeadline } from "@/features/chat/lib/with-deadline";
 import {
   acpRegistry,
+  onRegistryInstallProgress,
   type AcpRegistryEntry,
   type RegistryInstallProgress,
 } from "@/features/agents/lib/agent-registry-api";
@@ -191,8 +191,8 @@ export function useInstalls() {
 /** Feed binary-download progress into the installs while the page is open. */
 export function useInstallProgress() {
   useEffect(() => {
-    const unlisten = listen<RegistryInstallProgress>("atlas:registry-install:progress", (event) => {
-      progressById.set(event.payload.agentId, event.payload);
+    const unlisten = onRegistryInstallProgress((progress) => {
+      progressById.set(progress.agentId, progress);
       notifyInstalling();
     });
     return () => {

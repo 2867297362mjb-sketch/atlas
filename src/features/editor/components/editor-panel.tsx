@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { onExplorerChanged } from "@/features/explorer/lib/fs-api";
+import { onGitChanged } from "@/features/git/lib/git-watch-api";
 import { toast } from "sonner";
 import { Code2, Eye, Pencil, RefreshCw, Table2, WrapText } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -408,7 +409,7 @@ export function EditorPanel({ tabId, filePath, containerHeight }: EditorPanelPro
   // Repaint bars and blame when the working tree changes elsewhere (commits,
   // stage/unstage, external edits) — the event the git store listens to.
   useEffect(() => {
-    const un = listen("atlas:git-changed", () => {
+    const un = onGitChanged(() => {
       refreshDiffGutter();
       refreshBlame();
     });
@@ -433,7 +434,7 @@ export function EditorPanel({ tabId, filePath, containerHeight }: EditorPanelPro
       clearTimeout(timer);
       timer = setTimeout(() => void revalidateRef.current(), REVALIDATE_DEBOUNCE_MS);
     };
-    const un = listen("atlas:explorer:changed", soon);
+    const un = onExplorerChanged(soon);
     const onActive = () => void revalidateRef.current();
     const offWindowActive = onWindowEvent("atlas:window-active", onActive);
     return () => {

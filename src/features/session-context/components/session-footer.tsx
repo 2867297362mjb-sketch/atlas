@@ -22,7 +22,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { listen } from "@tauri-apps/api/event";
+import { onCaptureChanged } from "@/features/capture/lib/capture-api";
 import { safeUnlistenPromise } from "@/lib/safe-unlisten";
 import {
   Layers,
@@ -310,12 +310,9 @@ function useTargetDetail(
     if (!cached) load();
     // Re-read only when capture says THIS session moved (or every cached one
     // is stale — a commit was linked). Everything else is someone else's turn.
-    const un = listen<{ sessionIds?: string[]; all?: boolean } | null>(
-      "atlas:capture-changed",
-      (e) => {
-        if (e.payload?.all || e.payload?.sessionIds?.includes(ref.sessionId)) load();
-      },
-    );
+    const un = onCaptureChanged((payload) => {
+      if (payload?.all || payload?.sessionIds?.includes(ref.sessionId)) load();
+    });
     return () => {
       alive = false;
       safeUnlistenPromise(un);

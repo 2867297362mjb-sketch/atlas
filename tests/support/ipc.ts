@@ -110,3 +110,16 @@ export const INVOKE_DYNAMIC = new RegExp(
   `\\binvoke\\s*(?:${TYPE_ARG})?\\s*\\(\\s*([A-Za-z_$][\\w$]*)\\s*[,)]`,
   "g",
 );
+
+/**
+ * The call sites that pass `invoke` a variable, keyed by file, with the
+ * literal command names that flow into that variable in the same file. A
+ * literal scan can't follow data flow, so each site is listed by hand;
+ * `ipc-contract` checks that the list is complete (a new dynamic site fails
+ * until it is added here), that each literal still appears in its file, and
+ * that each is registered.
+ *
+ * Empty, and best kept so: a wrapper per command (`hunkOps` in
+ * `git-changes-api.ts` is three) keeps every name a literal the scan reads.
+ */
+export const DYNAMIC_INVOKE_SITES: Record<string, string[]> = {};

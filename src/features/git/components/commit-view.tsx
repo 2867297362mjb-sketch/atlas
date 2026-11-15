@@ -2,7 +2,7 @@ import { useTipOnMount } from "@/features/tips/lib/use-tip-on-mount";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { invoke } from "@tauri-apps/api/core";
+import { commitSessions, gitShow } from "../lib/git-history-api";
 import { Popover } from "@base-ui/react/popover";
 import {
   ChevronRight,
@@ -123,7 +123,7 @@ export function CommitView({ repoPath, sha }: { repoPath: string; sha: string })
     error,
   } = useQuery({
     queryKey: ["git-show", repoPath, sha, ignoreWhitespace],
-    queryFn: () => invoke<CommitDetail>("git_show", { path: repoPath, sha, ignoreWhitespace }),
+    queryFn: () => gitShow(repoPath, sha, ignoreWhitespace),
     // A commit never changes under its sha.
     staleTime: Infinity,
     enabled: !!repoPath && !!sha,
@@ -772,7 +772,7 @@ function CommitSessions({ repoPath, sha }: { repoPath: string; sha: string }) {
     if (!repoPath) return;
     let cancelled = false;
     setSessions([]);
-    invoke<CommitSession[]>("capture_commit_sessions", { projectPath: repoPath, commitSha: sha })
+    commitSessions(repoPath, sha)
       .then((found) => {
         // Typed as an array, but guard the null a future backend change (or an
         // unmocked dev command) could send instead of throwing — `sessions.length`

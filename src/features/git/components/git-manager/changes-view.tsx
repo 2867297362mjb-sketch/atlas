@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useState, type KeyboardEvent } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { gitDiffFile, hunkOps } from "../../lib/git-changes-api";
 import {
   Plus,
   Minus,
@@ -337,7 +337,7 @@ export function ChangesView() {
       return;
     }
     let cancelled = false;
-    void invoke<string>("git_diff_file", { path: repoPath, file: selected })
+    void gitDiffFile(repoPath, selected)
       .then((d) => {
         if (!cancelled) setFileDiff(d);
       })
@@ -385,10 +385,10 @@ export function ChangesView() {
     selected?: number[];
   } | null>(null);
 
-  const runHunkOp = (cmd: string, file: string, hunk: DiffHunk, selected?: number[]) =>
+  const runHunkOp = (op: keyof typeof hunkOps, file: string, hunk: DiffHunk, selected?: number[]) =>
     run(async () => {
       if (!repoPath) return;
-      await invoke(cmd, {
+      await hunkOps[op]({
         path: repoPath,
         file,
         lines: hunkWireLines(hunk),
@@ -408,12 +408,7 @@ export function ChangesView() {
       setConfirmHunkDiscard({ file, hunk, selected });
       return;
     }
-    void runHunkOp(
-      action === "stage" ? "git_stage_hunk" : "git_unstage_hunk",
-      file,
-      hunk,
-      selected,
-    );
+    void runHunkOp(action === "stage" ? "stage" : "unstage", file, hunk, selected);
   };
 
   const openFile = useCallback(
@@ -469,7 +464,7 @@ export function ChangesView() {
       if (!repoPath) return;
       // Measured now: a refresh during the read can unmount the row.
       const rect = anchor.getBoundingClientRect();
-      void invoke<string>("git_diff_file", { path: repoPath, file: f.path })
+      void gitDiffFile(repoPath, f.path)
         .catch(() => "")
         .then((diff) => {
           const ctx = fileDiffContext(f.path, diff, stagedState(f.path));
@@ -695,7 +690,7 @@ export function ChangesView() {
         onConfirm={() => {
           if (confirmHunkDiscard) {
             void runHunkOp(
-              "git_discard_hunk",
+              "discard",
               confirmHunkDiscard.file,
               confirmHunkDiscard.hunk,
               confirmHunkDiscard.selected,

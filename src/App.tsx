@@ -1,5 +1,4 @@
 import { startTransition, useState, useEffect, useMemo, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { AppLayout } from "@/features/layout/components/app-layout";
 import { CommandPalette } from "@/features/command-palette/components/command-palette";
 import { AskAgentHost } from "@/features/ask-agent/components/ask-agent-host";
@@ -38,11 +37,23 @@ import { useProjectStore } from "@/features/projects/stores/project-store";
 import { flushAll } from "@/features/projects/lib/flush-registry";
 import { captureSnapshot } from "@/features/projects/lib/project-snapshot";
 import { useGitStore } from "@/features/git/stores/git-store";
-import { listen } from "@tauri-apps/api/event";
+import {
+  bootstrapAppState,
+  clearMentionCache,
+  closeRecentFilesProject,
+  onCliOpenProject,
+  openRecentFilesProject,
+  setWindowTitle,
+  takeInitialCliProjectPath,
+} from "@/features/app/lib/app-lifecycle-api";
+import { setActiveOrg } from "@/features/auth/lib/auth-api";
+import { retargetCloudBoard } from "@/features/artifacts/lib/board-api";
+import { captureActivate } from "@/features/capture/lib/capture-api";
+import { onExplorerChanged } from "@/features/explorer/lib/fs-api";
+import { startGitWatch } from "@/features/git/lib/git-watch-api";
 import {
   useRecentFilesStore,
   ensureRecentFilesListener,
-  type RecentFile,
 } from "@/features/chat/stores/recent-files-store";
 import { openNewAgentChat } from "@/features/chat/lib/open-agent-session";
 import { settleAndAdvance } from "@/features/chat/lib/settle-and-advance";
@@ -254,8 +265,7 @@ export function App() {
   // hydrated, so we just ADD it to the project list and switch to it (no race
   // with hydration). `openProject` → `addProject` dedupes by path.
   useEffect(() => {
-    const unlisten = listen<string>("atlas:cli-open-project", (event) => {
-      const path = event.payload;
+    const unlisten = onCliOpenProject((path) => {
       if (!path) return;
       logEvent({
         source: "atlas",
@@ -368,7 +378,7 @@ export function App() {
     if (!active) return;
     orgReconciledRef.current = true;
     markOrgReconciled();
-    void invoke("auth_set_active_org", { orgId: active.remoteId ?? null }).catch((e) => {
+    void setActiveOrg(active.remoteId ?? null).catch((e) => {
       console.warn("boot org reconciliation failed:", e);
     });
   }, [bootAuthStatus, bootLocalActiveOrg, bootOrganisations]);
@@ -409,14 +419,13 @@ export function App() {
       presenceOrgRef.current = orgId;
       useTeamPresenceStore.getState().actions.reset();
     }
-    void invoke("artifacts_cloud_retarget", {
-      orgId,
-      projectPaths: cloudProjectsKey ? cloudProjectsKey.split("\n") : [],
-    }).catch((e) => {
-      // The Timeline still renders every local Session without this; a toast
-      // for a background target would be noise.
-      console.warn("timeline cloud retarget failed:", e);
-    });
+    void retargetCloudBoard(orgId, cloudProjectsKey ? cloudProjectsKey.split("\n") : []).catch(
+      (e) => {
+        // The Timeline still renders every local Session without this; a toast
+        // for a background target would be noise.
+        console.warn("timeline cloud retarget failed:", e);
+      },
+    );
   }, [bootAuthStatus, bootLocalActiveOrg, bootOrganisations, cloudProjectsKey]);
 
   // Team chat: the renderer is a projection of Rust's chat state. The socket
@@ -495,9 +504,7 @@ export function App() {
       // both clobber the CLI project and swallow the CLI switch (`switching`
       // guard). So we suppress hydrate's auto-switch when a CLI path is present
       // and perform the CLI open as the sole, final switch.
-      const cliPath = await invoke<string | null>("cli_take_initial_project_path").catch(
-        () => null,
-      );
+      const cliPath = await takeInitialCliProjectPath().catch(() => null);
       // `bootstrap_app_state` is the only read of `state.json` Atlas ever
       // performs, so a failure here is NOT "start empty and carry on": the
       // stores keep their empty defaults, `AppState::apply_patch` replaces the
@@ -507,7 +514,7 @@ export function App() {
       let snapshot: AppStateWire | null = null;
       for (let attempt = 1; attempt <= 3 && !snapshot; attempt++) {
         try {
-          snapshot = await invoke<AppStateWire>("bootstrap_app_state");
+          snapshot = await bootstrapAppState();
         } catch (e) {
           console.warn(`bootstrap_app_state attempt ${attempt} failed:`, e);
           if (attempt < 3) {
@@ -697,17 +704,12 @@ export function App() {
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
-    type Payload = {
-      workspaceId?: string;
-      dirs: string[];
-      fullRefresh: boolean;
-    };
-    listen<Payload>("atlas:explorer:changed", (e) => {
+    void onExplorerChanged((payload) => {
       if (cancelled) return;
-      const id = e.payload.workspaceId ?? activeProjectId();
+      const id = payload.workspaceId ?? activeProjectId();
       const root = useProjectStore.getState().projects.find((p) => p.id === id)?.path;
       if (!root) return;
-      refreshProjectTree(root, e.payload.fullRefresh ? undefined : e.payload.dirs);
+      refreshProjectTree(root, payload.fullRefresh ? undefined : payload.dirs);
     }).then((un) => {
       if (cancelled) un();
       else unlisten = un;
@@ -772,11 +774,11 @@ export function App() {
         .getState()
         .actions.setAutoFetchProject(null)
         .catch(() => {});
-      void invoke("recent_files_close_project").catch(() => {});
+      void closeRecentFilesProject().catch(() => {});
       // Drop the mention cache so the @-picker doesn't briefly
       // surface the previous project's notes / symbols on a fresh
       // open. Replays land via knowledge/analysis store hydration.
-      void invoke("mention_cache_clear").catch(() => {});
+      void clearMentionCache().catch(() => {});
       return;
     }
     // Deliberately NOT `markFileIndexClosed()` here: switching projects keeps
@@ -791,10 +793,9 @@ export function App() {
     // branch ops. Replaces the 3-second polling that git-graph-panel
     // used to do via `refetchInterval` on `git_graph_signature`.
     // Keyed by project so each open project keeps its own resident watcher.
-    void invoke("git_watch_start", {
-      projectPath: currentProject.path,
-      workspaceId: projectId,
-    }).catch((e) => console.warn("git watch start failed:", e));
+    void startGitWatch(currentProject.path, projectId).catch((e) =>
+      console.warn("git watch start failed:", e),
+    );
     // Mirrored instructions: tells Rust which project this window works in.
     // With `instructionSync` on it syncs and watches it; off, Rust only
     // remembers it as the project to act on when the setting is switched on.
@@ -810,7 +811,7 @@ export function App() {
     // Capture: a bound Project just became active — open its store (which
     // also heals a folder rename) and kick its transcript import and drain.
     // A no-op for Projects that never enabled capture.
-    void invoke("capture_activate", { projectPath: currentProject.path }).catch((e) =>
+    void captureActivate(currentProject.path).catch((e) =>
       console.warn("capture activate failed:", e),
     );
     // Clear the global recents mirror SYNCHRONOUSLY before the async reload so
@@ -821,10 +822,7 @@ export function App() {
     // and returns the list. We hydrate the JS mirror with it so the
     // mention picker's "Recent files" section is correct from the
     // first render of the new project.
-    void invoke<RecentFile[]>("recent_files_open_project", {
-      projectPath: currentProject.path,
-      workspaceId: projectId,
-    })
+    void openRecentFilesProject(currentProject.path, projectId)
       .then((items) => {
         useRecentFilesStore.getState().actions.hydrate(items);
       })
@@ -838,7 +836,7 @@ export function App() {
   const { productName } = useAppProfile();
   useEffect(() => {
     const title = currentProject ? `${currentProject.name} - ${productName}` : productName;
-    void invoke("set_window_title", { title }).catch(() => {});
+    void setWindowTitle(title).catch(() => {});
   }, [currentProject?.name, productName]);
 
   // Install the singleton listener for `atlas:recent-files-changed`

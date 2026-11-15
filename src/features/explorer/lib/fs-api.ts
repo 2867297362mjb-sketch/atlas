@@ -2,6 +2,7 @@
 // per-entry `ignored` flag, shaped for the virtualised file tree.
 
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export type ProjectEntryKind = "file" | "directory" | "symlink";
 
@@ -81,4 +82,21 @@ export function renameRecentFile(
   workspaceId: string | null,
 ): Promise<unknown> {
   return invoke("recent_files_rename", { oldPath, newPath, workspaceId });
+}
+
+/** What the file watcher saw. An opaque batch (a rename) names no `dirs` and
+ *  asks for a `fullRefresh`; `workspaceId` is the project it belongs to. */
+export interface ExplorerChangedPayload {
+  workspaceId?: string;
+  dirs?: string[];
+  fullRefresh?: boolean;
+}
+
+/** Files changed on disk under an open project. */
+export function onExplorerChanged(
+  handler: (payload: ExplorerChangedPayload) => void,
+): Promise<UnlistenFn> {
+  return listen<ExplorerChangedPayload>("atlas:explorer:changed", (event) =>
+    handler(event.payload),
+  );
 }

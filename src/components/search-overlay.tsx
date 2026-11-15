@@ -3,7 +3,7 @@ import { openFile } from "@/lib/open-file";
 import { useSessionStore } from "@/features/app/stores/session-store";
 import { useAppStore } from "@/features/app/stores/app-store";
 import { FileCode, Clock, X } from "lucide-react";
-import { codeGrep, type CodeGrepMatch, type CodeSearchOptions } from "@/components/code-search-api";
+import { codeGrep, type CodeGrepMatch, type CodeSearchOptions } from "@/lib/code-search-api";
 import {
   Button,
   CommandDialog,

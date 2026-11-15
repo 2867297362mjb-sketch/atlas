@@ -2,11 +2,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { CodeGrepResult } from "@/components/code-search-api";
+import type { CodeGrepResult } from "@/lib/code-search-api";
 
 const mocks = vi.hoisted(() => ({ codeGrep: vi.fn() }));
 
-vi.mock("@/components/code-search-api", () => ({ codeGrep: mocks.codeGrep }));
+vi.mock("@/lib/code-search-api", () => ({ codeGrep: mocks.codeGrep }));
 vi.mock("@/lib/open-file", () => ({ openFile: vi.fn() }));
 vi.mock("@/features/app/stores/app-store", () => ({
   useAppStore: { use: { currentProject: () => ({ path: "/repo" }) } },

@@ -7,8 +7,13 @@ import { ArrowDownToLine, Hammer, Minus, Search, Square, Copy, X } from "lucide-
 import { cn } from "@/lib/utils";
 import { useAppProfile } from "@/lib/app-profile";
 import { TitlebarDock, type DockItem } from "./titlebar-dock";
-import { invoke, isTauri } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { isTauri } from "@tauri-apps/api/core";
+import { zoomWindow } from "@/features/app/lib/app-lifecycle-api";
+import {
+  captureBinding,
+  captureHealth,
+  onCaptureChanged,
+} from "@/features/capture/lib/capture-api";
 import { toast } from "sonner";
 import type { Window as TauriWindow } from "@tauri-apps/api/window";
 import { useUpdaterStore } from "@/features/updater/stores/updater-store";
@@ -70,7 +75,7 @@ export function useWindowDrag() {
   };
   const onDoubleClick = (e: React.MouseEvent) => {
     if (!isWindowSurface(e.target)) return;
-    if (isMac) void invoke("window_zoom").catch(() => {});
+    if (isMac) void zoomWindow().catch(() => {});
     else void nativeWindow?.toggleMaximize();
   };
   return { onMouseDown, onDoubleClick };
@@ -449,13 +454,10 @@ function ProjectLabel({
       setHealth(null);
       return;
     }
-    void invoke<Binding | null>("capture_binding", { projectPath: path })
+    void captureBinding(path)
       .then(setBinding)
       .catch(() => setBinding(null));
-    void invoke<CaptureHealth>("capture_health", {
-      projectPath: path,
-      workspaceId: activeProjectId(),
-    })
+    void captureHealth(path, activeProjectId())
       .then(setHealth)
       .catch(() => setHealth(null));
   }, [path]);
@@ -470,7 +472,7 @@ function ProjectLabel({
   useEffect(() => {
     if (!captureOpen || !isTauri()) return;
     readCapture();
-    const unlisten = listen("atlas:capture-changed", () => readCapture());
+    const unlisten = onCaptureChanged(() => readCapture());
     return () => void unlisten.then((stop) => stop());
   }, [captureOpen, readCapture]);
 

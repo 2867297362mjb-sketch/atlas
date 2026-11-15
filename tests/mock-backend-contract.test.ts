@@ -9,6 +9,7 @@ import { baseFixtureMaps, baseHandlers } from "@/dev/mock-backend/scenarios/base
 import { scenarios } from "@/dev/mock-backend/scenarios";
 import { expectFloor } from "./support/floor";
 import {
+  DYNAMIC_INVOKE_SITES,
   INVOKE_LITERAL,
   declaredCommands,
   registeredCommands,
@@ -78,14 +79,12 @@ const UNMOCKED_ALLOWED: Record<string, string> = {};
  */
 const PLUGIN_PREFIX = "plugin:";
 
-/** Dynamic `invoke(cmd)` sites whose literals the scan cannot follow; see the
- *  same table in `ipc-contract.test.ts`. */
-const DYNAMIC_COMMANDS = ["git_stage_hunk", "git_unstage_hunk", "git_discard_hunk"];
-
 /** Commands the shipping frontend invokes. `src/dev/` forwards names
  *  generically and is the mock itself, so it is not a caller. */
 function invokedCommands(): Set<string> {
-  const found = new Set<string>(DYNAMIC_COMMANDS);
+  // A name handed to `invoke` in a variable is one the literal scan cannot
+  // read; those sites are listed by hand, and still need a fake.
+  const found = new Set<string>(Object.values(DYNAMIC_INVOKE_SITES).flat());
   const devRoot = path.join(TS_SRC, "dev") + path.sep;
   for (const file of walk(TS_SRC, [".ts", ".tsx"])) {
     if (file.startsWith(devRoot) || /\.test\.tsx?$/.test(file)) continue;

@@ -1,11 +1,10 @@
 import { useEffect, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
 import { StepDots } from "@/components/step-dots";
 import { openExternal } from "@/features/feedback/lib/feedback-links";
 import { useSettingsStore } from "@/features/settings/stores/settings-store";
 import { useChatStore } from "@/features/chat/stores/chat-store";
 import { useKeybindingsStore } from "@/features/keybindings/stores/keybindings-store";
-import { TIPS_CHANGED_EVENT, type TipsState } from "../lib/tips-api";
+import { onTipsChanged } from "../lib/tips-api";
 import { pickNextTip } from "../lib/tip-queue";
 import { TIP_BY_ID, type TipDef } from "../lib/tip-registry";
 import { useTipsStore } from "../stores/tips-store";
@@ -71,7 +70,7 @@ export function TipHost() {
 
   useEffect(() => {
     void load();
-    const off = listen<TipsState>(TIPS_CHANGED_EVENT, (e) => applyRemote(e.payload));
+    const off = onTipsChanged((state) => applyRemote(state));
     return () => void off.then((f) => f());
   }, [load, applyRemote]);
 
