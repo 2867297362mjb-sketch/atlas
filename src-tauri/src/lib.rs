@@ -306,8 +306,8 @@ pub fn run() {
             // that store (`~/.agents/skills`) is shared with the released app.
             commands::skills::ensure_bundled_skills();
 
-            // Opt-in product telemetry. Inert unless the user has enabled it AND
-            // a PostHog key resolves (env / telemetry.json / build-time default).
+            // Product telemetry, on by default (opt-out). Inert when the user has turned it off or no
+            // PostHog key resolves (env / telemetry.json / build-time default).
             let (telemetry, flush_rx) =
                 telemetry::TelemetryClient::new(app.handle(), device_id, telemetry_enabled);
             app.manage(telemetry.clone());
@@ -318,8 +318,8 @@ pub fn run() {
                 });
             }
             // Crash capture: best-effort synchronous POST from the panic hook
-            // (the build is `panic = "abort"`, so the async flush task can't be
-            // relied on). Chains to the previously-installed hook. `location` is
+            // (a panicking process may not live to run the async flush task, so
+            // it can't be relied on). Chains to the previously-installed hook. `location` is
             // Atlas's own `file:line`; `message` is redacted of path/URL tokens.
             {
                 let tclient = telemetry.clone();
