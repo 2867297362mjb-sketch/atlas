@@ -31,7 +31,7 @@ wouldn't surface it: a ban with no exit, or a decision whose rule isn't in its t
 
 **Count things, don't quote counts.** Commands, crates, tab types and test suites all
 move weekly — `ls src-tauri/src/commands/*.rs`, `ls tests/*.test.ts`,
-`src/lib/constants.ts`. A number written in prose anywhere, including here, is stale.
+`src/lib/tab-registry.ts`. A number written in prose anywhere, including here, is stale.
 
 ## Commands
 
@@ -208,13 +208,18 @@ Each of these is a multi-file edit where missing one compiles fine.
   `[profile.dev.package.<name>]` stanza, and an entry in `.github/ci-crates.json`.
   If it reads a file outside its own directory, that file also goes in
   `EXTRA_INPUTS` in `scripts/ci-affected.mjs` (`ci-affected.test.ts` checks).
-- **A tab/panel type** — first decide its placement (session, surface or destination;
-  the test is in ADR-0024) and add it to `TAB_PLACEMENT`. Then `TAB_TYPES` in `src/lib/constants.ts`, plus the lazy import
-  and the render branch in `src/features/layout/components/tab-panels.tsx` (the tab registry;
-  `center-panel.tsx` only lays out the columns), and
-  (if ⌘T should offer it) an entry in `SURFACES` in `src/features/layout/lib/surfaces.ts`. If it stays mounted across tab
-  switches it also joins `PERSISTENT_TYPES`, guarded by
-  `persistent-tab-render-contract.test.ts`.
+- **A tab/panel type** — one entry in `TAB_REGISTRY` in `src/lib/tab-registry.ts`. The
+  entry states every fact (placement, scope, mount policy, multiplicity, file-backed,
+  the ⌘T row, the shape of its `data`) and `tsc` refuses one with a fact missing; decide
+  the placement first (session, surface or destination; the test is in ADR-0024). The
+  registry holds no React, because the layout store imports it, so two more edits
+  follow, and `tsc` fails until both are made: its icon in `tabIcons`
+  (`src/features/layout/components/pane-tab.tsx`; also `SURFACE_ICONS` in
+  `src/features/layout/lib/surfaces.ts` if ⌘T offers it), and its lazy import and render
+  branch in `src/features/layout/components/tab-panels.tsx` (in `PersistentPanel` when
+  its mount policy is persistent). Three suites hold a table with a row to add:
+  `src/lib/tab-registry.test.ts`, `tab-multiplicity.test.ts` beside the layout store,
+  and `tests/persistent-tab-render-contract.test.ts`.
 - **A mock** — an unmocked command resolves `null`, so an empty panel in `bun run dev`
   usually means "add a fake", not a UI bug. The badge bottom-right counts them.
 
