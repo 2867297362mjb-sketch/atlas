@@ -33,6 +33,7 @@ import { loadLastModePref, saveLastModePref } from "../lib/last-mode-pref";
 import { modeSelectOf, modelSelectOf } from "../lib/acp-config-options";
 import { exitPlanModeForOption, exitPlanOptionRestartsSession } from "../lib/exit-plan-modes";
 import { saveConfigOptionPref } from "../lib/config-option-prefs";
+import { KNOBS, createSessionConfiguration } from "../lib/session-configuration";
 import {
   loadCachedAcpConfigOptions,
   saveCachedAcpConfigOptions,
@@ -104,77 +105,6 @@ function reconstructTurnSummaries(messages: ChatMessage[]): void {
   flushTurn(turnStart, messages.length);
 }
 
-/**
- * Push a session's permission mode to its bound ACP agent. The mode chip
- * and the ⇧⇥ shortcut both mutate `claudePermissionMode` in the store, but
- * that's only the UI label — without this IPC the agent keeps running in
- * whatever mode it was started in, so "Bypass Permissions" still prompted.
- * No-op until the session is bound (the create-time setMode in session-bind
- * covers the not-yet-bound case).
- */
-function pushPermissionModeToAgent(
-  state: ChatState,
-  sessionId: string,
-  previousMode?: ClaudePermissionMode,
-): void {
-  const session = state.sessions[sessionId];
-  if (!session?.acpAgentId || !session.acpSessionId) return;
-  if (session.agentType !== "claude-code") return;
-  const pushed = session.claudePermissionMode ?? "default";
-  void invoke("agents_set_mode", {
-    key: { agent_id: session.acpAgentId, session_id: session.acpSessionId },
-    modeId: pushed,
-  }).catch((err) => {
-    console.warn("agents_set_mode failed:", err);
-    revertRefusedMode(sessionId, err, (sess) => {
-      if (sess.claudePermissionMode === pushed && previousMode !== undefined) {
-        sess.claudePermissionMode = previousMode;
-      }
-    });
-  });
-}
-
-/** Push a generic ACP session mode (Codex's read-only / auto / full-access)
- *  to its bound agent. Agent-agnostic sibling of `pushPermissionModeToAgent`.
- *  No-op until the session is bound. */
-function pushAcpModeToAgent(state: ChatState, sessionId: string, previousMode?: string): void {
-  const session = state.sessions[sessionId];
-  if (!session?.acpAgentId || !session.acpSessionId || !session.acpCurrentMode) return;
-  // Only push ids this session's agent actually advertised. A mode carried over
-  // from another agent is rejected (`invalidParams`) before it is ever pushed.
-  const modes = session.acpAvailableModes ?? [];
-  if (modes.length > 0 && !modes.some((m) => m.id === session.acpCurrentMode)) return;
-  const pushed = session.acpCurrentMode;
-  void invoke("agents_set_mode", {
-    key: { agent_id: session.acpAgentId, session_id: session.acpSessionId },
-    modeId: pushed,
-  }).catch((err) => {
-    console.warn("agents_set_mode failed:", err);
-    revertRefusedMode(sessionId, err, (sess) => {
-      if (sess.acpCurrentMode === pushed && previousMode !== undefined) {
-        sess.acpCurrentMode = previousMode;
-      }
-    });
-  });
-}
-
-/** The agent refused a mode change the picker already shows (the flip is
- *  optimistic). Leaving the label on the refused mode is the picker lying —
- *  the native agent refuses mid-turn switches precisely because the running
- *  turn keeps the permissions it started with (#61) — so roll the label back
- *  (unless the user has since picked something else) and say why. */
-function revertRefusedMode(
-  sessionId: string,
-  err: unknown,
-  revert: (sess: ChatSession) => void,
-): void {
-  useChatStore.setState((s) => {
-    const sess = s.sessions[sessionId];
-    if (sess) revert(sess);
-  });
-  toast.error(typeof err === "string" ? err : String(err));
-}
-
 /** Hydrate the per-agent persisted mode preference (last explicit pick) into
  *  a freshly-created / freshly-switched tab. A restored pick is marked
  *  explicit so the chat panel pushes it to the agent at session create (after
@@ -218,31 +148,6 @@ function applyPersistedModePref(sess: ChatSession, agentType: AgentType): void {
   if (valid && pref) sess.acpCurrentMode = pref;
 }
 
-/** Push an ACP agent's model selection (Claude Code / Codex) to its bound
- *  agent via `agents_set_model` (ACP `session/set_model`). Plain model id (no
- *  `provider/` prefix — that's the native form). No-op until bound.
- *
- *  The pick is optimistic, like a mode's: a refusal (the native selector
- *  refusing a slug not in its catalogue, an agent that says no) rolls the
- *  pill back to `previousModel` and says why, the way `pushAcpModeToAgent`
- *  does — otherwise the pill shows a model the next turn will not run on. */
-function pushAcpModelToAgent(state: ChatState, sessionId: string, previousModel?: string): void {
-  const session = state.sessions[sessionId];
-  if (!session?.acpAgentId || !session.acpSessionId || !session.acpCurrentModel) return;
-  const pushed = session.acpCurrentModel;
-  void invoke("agents_set_model", {
-    key: { agent_id: session.acpAgentId, session_id: session.acpSessionId },
-    modelId: pushed,
-  }).catch((err) => {
-    console.warn("agents_set_model failed:", err);
-    revertRefusedMode(sessionId, err, (sess) => {
-      if (sess.acpCurrentModel === pushed && previousModel !== undefined) {
-        sess.acpCurrentModel = previousModel;
-      }
-    });
-  });
-}
-
 /** Push the native agent's `provider/model` selection to its bound agent via
  *  `agents_set_model`. The id is forwarded verbatim: `AgentHost::set_model`
  *  (`src-tauri/src/commands/agent_host.rs`) hands it to the connection's model
@@ -260,18 +165,6 @@ function pushNativeModelToAgent(state: ChatState, sessionId: string): void {
     key: { agent_id: session.acpAgentId, session_id: session.acpSessionId },
     modelId: `${provider}/${model}`,
   }).catch((err) => console.warn("agents_set_model failed:", err));
-}
-
-/** Push the native agent's reasoning-effort level to its bound agent via
- *  `agents_set_effort`. No-op until bound / for non-native sessions. */
-function pushNativeEffortToAgent(state: ChatState, sessionId: string): void {
-  const session = state.sessions[sessionId];
-  if (!session?.acpAgentId || !session.acpSessionId) return;
-  if (session.agentType !== "atlas-agent") return;
-  void invoke("agents_set_effort", {
-    key: { agent_id: session.acpAgentId, session_id: session.acpSessionId },
-    effort: session.nativeEffort ?? "",
-  }).catch((err) => console.warn("agents_set_effort failed:", err));
 }
 
 // `pushNativeCompressToAgent` stood here, pushing the RTK compression toggle
@@ -1346,23 +1239,11 @@ export const useChatStore = createSelectors(
             if (session) session.bindCwd = cwd;
           }),
         cycleClaudePermissionMode: (sessionId) => {
-          let next: ClaudePermissionMode | undefined;
-          let previous: ClaudePermissionMode | undefined;
-          set((s) => {
-            const session = s.sessions[sessionId];
-            if (!session) return;
-            const cur = session.claudePermissionMode ?? "default";
-            previous = cur;
-            const i = CLAUDE_PERMISSION_MODES.indexOf(cur);
-            next = CLAUDE_PERMISSION_MODES[(i + 1) % CLAUDE_PERMISSION_MODES.length];
-            session.claudePermissionMode = next;
-            session.claudePermissionModeExplicit = true;
-            session.unrestoredModeId = undefined;
-          });
-          // "default" means "defer to the CLI's own configured default" —
-          // cycling back to it DROPS the persisted pick rather than storing it.
-          if (next) saveLastModePref("claude-code", next === "default" ? null : next);
-          pushPermissionModeToAgent(get(), sessionId, previous);
+          const session = get().sessions[sessionId];
+          if (!session) return;
+          const i = CLAUDE_PERMISSION_MODES.indexOf(session.claudePermissionMode ?? "default");
+          const next = CLAUDE_PERMISSION_MODES[(i + 1) % CLAUDE_PERMISSION_MODES.length];
+          void sessionConfiguration.pick(sessionId, KNOBS.claudeMode, next);
         },
         hydrateClaudePermissionMode: (sessionId, mode) =>
           set((s) => {
@@ -1371,39 +1252,27 @@ export const useChatStore = createSelectors(
             session.claudePermissionMode = mode;
             session.claudePermissionModeExplicit = false;
           }),
-        setClaudePermissionMode: (sessionId, mode) => {
-          const previous = get().sessions[sessionId]?.claudePermissionMode ?? "default";
-          set((s) => {
-            const session = s.sessions[sessionId];
-            if (session) {
-              session.claudePermissionMode = mode;
-              session.claudePermissionModeExplicit = true;
-              session.unrestoredModeId = undefined;
-            }
-          });
-          saveLastModePref("claude-code", mode === "default" ? null : mode);
-          pushPermissionModeToAgent(get(), sessionId, previous);
-        },
+        setClaudePermissionMode: (sessionId, mode) =>
+          void sessionConfiguration.pick(sessionId, KNOBS.claudeMode, mode),
         applyExitPlanSelection: (sessionId, optionId, override) => {
           const session = get().sessions[sessionId];
           if (!session || session.agentType !== "claude-code") return;
           const mode = override ?? exitPlanModeForOption(optionId);
           if (!mode) return;
-          const previous = session.claudePermissionMode ?? "default";
-          set((s) => {
-            const sess = s.sessions[sessionId];
-            if (!sess) return;
-            sess.claudePermissionMode = mode;
-            sess.acpCurrentMode = mode;
-          });
           // A clear-context choice restarts the session; the adapter publishes
           // the mode itself once the replacement is up, and a set_mode sent
           // into the restart is refused. The plain choices are applied by the
           // CLI alone — push so the adapter's own bookkeeping (which builds the
           // NEXT approval prompt from it) agrees, and so an override actually
           // takes effect.
-          if (exitPlanOptionRestartsSession(optionId) && !override) return;
-          pushPermissionModeToAgent(get(), sessionId, previous);
+          if (exitPlanOptionRestartsSession(optionId) && !override) {
+            set((s) => {
+              const sess = s.sessions[sessionId];
+              if (sess) KNOBS.planExitMode.mirror?.pick(sess, mode);
+            });
+            return;
+          }
+          void sessionConfiguration.pick(sessionId, KNOBS.planExitMode, mode);
         },
         setAcpModes: (sessionId, currentMode, availableModes, sourceAgentType) => {
           const at = get().sessions[sessionId]?.agentType;
@@ -1452,23 +1321,8 @@ export const useChatStore = createSelectors(
             const session = s.sessions[sessionId];
             if (session) session.acpModesPending = pending;
           }),
-        setAcpMode: (sessionId, modeId) => {
-          const previous = get().sessions[sessionId]?.acpCurrentMode;
-          set((s) => {
-            const session = s.sessions[sessionId];
-            if (session) {
-              session.acpCurrentMode = modeId;
-              session.acpModeExplicit = true;
-              session.unrestoredModeId = undefined;
-            }
-          });
-          // Persist the explicit pick per agent. agentType IS the plugin id
-          // for registry-installed externals, so every ACP agent — first-party
-          // or installed — keeps its own record.
-          const at = get().sessions[sessionId]?.agentType;
-          if (at && at !== "claude-code") saveLastModePref(at, modeId);
-          pushAcpModeToAgent(get(), sessionId, previous);
-        },
+        setAcpMode: (sessionId, modeId) =>
+          void sessionConfiguration.pick(sessionId, KNOBS.acpMode, modeId),
         dropAcpModePick: (sessionId) =>
           set((s) => {
             const session = s.sessions[sessionId];
@@ -1485,30 +1339,7 @@ export const useChatStore = createSelectors(
             if (session) session.pendingElicitation = undefined;
           }),
         setAcpConfigOption: async (sessionId, configId, value) => {
-          const session = get().sessions[sessionId];
-          if (!session?.acpAgentId || !session.acpSessionId) return;
-          // An explicit pick is worth remembering: the next session on this
-          // agent re-applies it at open, validated against what that session
-          // actually advertises (#33).
-          if (session.agentType) saveConfigOptionPref(session.agentType, configId, value);
-          try {
-            await agents.setConfigOption(
-              {
-                agent_id: session.acpAgentId,
-                session_id: session.acpSessionId,
-              },
-              configId,
-              value,
-            );
-            // No optimistic local write — but not for the reason this once
-            // claimed. A follow-up notification is OPTIONAL and most agents
-            // never send one; the authoritative echo is the set RESPONSE,
-            // which the host now forwards as a `config_options_updated` delta
-            // (#32). The confirmed state arrives through that, so guessing
-            // here would only flicker the control when the agent disagrees.
-          } catch (e) {
-            console.warn("setConfigOption failed:", e);
-          }
+          await sessionConfiguration.pick(sessionId, KNOBS.option(configId), value);
         },
         setAcpAvailableCommands: (sessionId, commands, sourceAgentType) => {
           // Same stale-snapshot hazard `setAcpModes`/`setAcpConfigOptions` are
@@ -1608,14 +1439,8 @@ export const useChatStore = createSelectors(
             saveCachedAcpModels(agentType, { availableModels });
           }
         },
-        setAcpModel: (sessionId, modelId) => {
-          const previous = get().sessions[sessionId]?.acpCurrentModel;
-          set((s) => {
-            const session = s.sessions[sessionId];
-            if (session) session.acpCurrentModel = modelId;
-          });
-          pushAcpModelToAgent(get(), sessionId, previous);
-        },
+        setAcpModel: (sessionId, modelId) =>
+          void sessionConfiguration.pick(sessionId, KNOBS.model, modelId),
         setNativeProvider: (sessionId, provider) =>
           set((s) => {
             const session = s.sessions[sessionId];
@@ -1637,14 +1462,8 @@ export const useChatStore = createSelectors(
           }
           pushNativeModelToAgent(get(), sessionId);
         },
-        setNativeEffort: (sessionId, effort) => {
-          set((s) => {
-            const session = s.sessions[sessionId];
-            if (session) session.nativeEffort = effort;
-          });
-          saveNativeEffort(effort);
-          pushNativeEffortToAgent(get(), sessionId);
-        },
+        setNativeEffort: (sessionId, effort) =>
+          void sessionConfiguration.pick(sessionId, KNOBS.effort, effort),
         replaceMessages: (sessionId, messages) =>
           set((s) => {
             const session = s.sessions[sessionId];
@@ -2111,6 +1930,29 @@ useChatStore.subscribe((state) => {
       else if (!busy && session.turnStartedAt != null) session.turnStartedAt = null;
     }
   });
+});
+
+/**
+ * The app's one path for setting a session's mode, model, effort and options
+ * (`lib/session-configuration.ts`). Made here, beside the store whose sessions
+ * it mirrors picks into, so the store's actions can call it.
+ */
+export const sessionConfiguration = createSessionConfiguration({
+  agents,
+  sessions: {
+    get: (tabId) => useChatStore.getState().sessions[tabId],
+    update: (tabId, recipe) =>
+      useChatStore.setState((s) => {
+        const session = s.sessions[tabId];
+        if (session) recipe(session);
+      }),
+  },
+  prefs: {
+    saveMode: saveLastModePref,
+    saveEffort: saveNativeEffort,
+    saveOption: saveConfigOptionPref,
+  },
+  report: { refused: (message) => void toast.error(message) },
 });
 
 // ── Draft-mutating helpers ────────────────────────────────────────────────
