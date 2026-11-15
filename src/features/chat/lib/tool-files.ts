@@ -1,9 +1,7 @@
-// Shared helpers for extracting file paths + edit diffs from agent tool-call
-// arguments. Hoisted out of `message-item.tsx` so the chat-store reducer (which
-// accumulates per-turn files-touched for the adaptive turn card) and the
-// rendering layer agree exactly on paths + add/remove counts.
-
-import { enginePatchFiles } from "./engine-patch";
+// The pieces a reading of a tool call is built from: which file its arguments
+// name, whether it is a read or an edit, the text its arguments replaced, and
+// how changed lines are counted. What a call CHANGED is `tool-changes.ts`,
+// which every view asks; nothing else should assemble that from these.
 
 const FILE_PATH_KEYS = ["file_path", "path", "filename", "filePath"];
 
@@ -130,42 +128,4 @@ export function countChangedLines(oldStr: string, neu: string): { added: number;
     en--;
   }
   return { removed: Math.max(0, eo - start), added: Math.max(0, en - start) };
-}
-
-/** True when an edit tool call CREATED the file (every edit op had empty prior
- *  content) → git-status "A". A normal edit (non-empty `old`) is "M". The
- *  native engine's edit created its files when each came as whole content. */
-export function isFileCreated(
-  toolName: string,
-  args: Record<string, unknown>,
-  kind?: string | null,
-): boolean {
-  const parts = getEditParts(toolName, args, kind);
-  if (parts.length > 0) return parts.every((p) => p.old === "");
-  const engine = enginePatchFiles(args);
-  return !!engine && engine.every((f) => f.shape === "content");
-}
-
-/** Total added/removed line counts for an edit tool call, across every file
- *  it names. */
-export function countEditLines(
-  toolName: string,
-  args: Record<string, unknown>,
-  kind?: string | null,
-): { added: number; removed: number } {
-  let added = 0;
-  let removed = 0;
-  const parts = getEditParts(toolName, args, kind);
-  for (const p of parts) {
-    const c = countChangedLines(p.old, p.neu);
-    added += c.added;
-    removed += c.removed;
-  }
-  if (parts.length === 0) {
-    for (const f of enginePatchFiles(args) ?? []) {
-      added += f.added;
-      removed += f.removed;
-    }
-  }
-  return { added, removed };
 }

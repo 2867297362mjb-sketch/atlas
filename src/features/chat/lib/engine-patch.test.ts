@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import { applyHunks, enginePatchFiles, hunksExcerpt } from "./engine-patch";
-import { countEditLines, isFileCreated } from "./tool-files";
+import { changesOfToolCall } from "./tool-changes";
 import { turnFilesOfToolCall } from "./turn-files";
 
 const update = "@@ -1,3 +1,4 @@\n use a;\n+use b;\n \n fn f() {}\n";
@@ -118,11 +118,12 @@ describe("a native edit as the turn's record keeps it", () => {
   });
 
   it("counts every file on the call's own marker", () => {
-    expect(countEditLines(call.tool_name, call.arguments, call.kind)).toEqual({
-      added: 3,
-      removed: 0,
-    });
-    expect(isFileCreated(call.tool_name, call.arguments, call.kind)).toBe(false);
+    // The timeline's line sums the call's files, and reads "Created" only
+    // when every one of them is new.
+    const changes = changesOfToolCall(call);
+    expect(changes.reduce((sum, c) => sum + c.added, 0)).toBe(3);
+    expect(changes.reduce((sum, c) => sum + c.removed, 0)).toBe(0);
+    expect(changes.every((c) => c.kind === "added")).toBe(false);
   });
 });
 

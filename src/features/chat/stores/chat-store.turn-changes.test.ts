@@ -22,7 +22,8 @@ import { collectTurnEdits } from "../lib/turn-edits";
 import { buildChangedFilesTree, changedFilesOf, sumStats } from "../lib/changed-files-tree";
 import { countChangedLines } from "../lib/tool-files";
 import { enginePatchFiles } from "../lib/engine-patch";
-import { changesOfTurn } from "../lib/tool-changes";
+import { changesOfToolCall, changesOfTurn } from "../lib/tool-changes";
+import { toRepoRelative } from "../lib/open-turn-diff";
 import { FIXTURES, REPO, fixture } from "../lib/tool-changes.fixtures";
 
 const TAB = "tab-1";
@@ -147,8 +148,8 @@ beforeEach(() => {
 });
 
 describe("what each view says a turn changed", () => {
-  // Pinned as it stands, disagreements included, so a change to any one view
-  // shows here as a changed line.
+  // The record: every view's answer for every fixture, so a change to any one
+  // view shows here as a changed line. `every view agrees` below is the rule.
   it("is recorded for every fixture", () => {
     const said: Record<string, ReturnType<typeof views>> = {};
     for (const fixture of FIXTURES) {
@@ -164,7 +165,7 @@ describe("what each view says a turn changed", () => {
             "added src/other.ts +1 −0",
           ],
           "timeline": [
-            "Created src/known.ts +1 −0 opens diff",
+            "Created src/known.ts +2 −0 opens diff",
           ],
           "tree": "+2 −0",
           "viewer": [
@@ -250,7 +251,7 @@ describe("what each view says a turn changed", () => {
             "added src/x.ts +3 −0",
           ],
           "timeline": [
-            "Edited src/x.ts +0 −0 opens diff",
+            "Created src/x.ts +3 −0 opens diff",
           ],
           "tree": "+3 −0",
           "viewer": [
@@ -310,7 +311,7 @@ describe("what each view says a turn changed", () => {
             "edited src/loc.ts +0 −0",
           ],
           "timeline": [
-            "edit +0 −0 opens none",
+            "Edited src/loc.ts +0 −0 opens diff",
           ],
           "tree": "+0 −0",
           "viewer": [],
@@ -494,5 +495,78 @@ describe("the turn card's counts, as the deltas arrive", () => {
       session().messages.map(({ turnSummary: _summary, ...m }) => m),
     );
     expect(frozenEdits()).toEqual(live);
+  });
+});
+
+describe("every view agrees with the one reading", () => {
+  const pathKey = (path: string) => toRepoRelative(path, REPO);
+  const sum = (files: readonly { added: number; removed: number }[]) => size(sumStats(files));
+
+  /** Fixtures where one file is touched by more than one call, so the two
+   *  ways calls combine (`TurnFoldOptions.combine`) give different answers:
+   *  the turn card adds every call's lines up, the viewer shows the turn's
+   *  first text against its last. Everywhere else they are the same. */
+  const COMBINE_DIFFERENTLY = ["a file written, then edited", "a file created, then renamed"];
+
+  describe.each(FIXTURES.map((f) => [f.name, f.calls] as const))("%s", (name, calls) => {
+    beforeEach(() => playTurn(calls));
+
+    const perCall = () => changesOfTurn(calls, { pathKey });
+    const net = () => changesOfTurn(calls, { pathKey, combine: "net" });
+
+    it("the timeline names each call's first file and counts all of them", () => {
+      const lines = timelineLines();
+      expect(lines).toHaveLength(calls.length);
+      calls.forEach((call, i) => {
+        const changes = changesOfToolCall(call);
+        expect(lines[i].opens === "diff").toBe(changes.length > 0);
+        if (changes.length === 0) return;
+        expect(lines[i].path).toBe(changes[0].path);
+        expect(size(lines[i])).toBe(sum(changes));
+      });
+    });
+
+    it("the turn card lists the reading's files, with its counts", () => {
+      expect(cardFiles().map((f) => [f.path, f.movedFrom, f.added, f.removed, f.created])).toEqual(
+        perCall().map((c) => [c.path, c.previousPath, c.added, c.removed, c.kind === "added"]),
+      );
+    });
+
+    it("the tree totals what the card lists, which is what the timeline counted", () => {
+      const card = cardFiles();
+      const tree = buildChangedFilesTree(card).map((n) => (n.kind === "dir" ? n.stat : n.file));
+      expect(sum(tree)).toBe(sum(card));
+      expect(sum(card)).toBe(sum(timelineLines()));
+    });
+
+    it("the viewer lists the reading's files that have text, at its net counts", () => {
+      expect(viewerFiles().map((f) => [f.path, f.previous, f.status, f.added, f.removed])).toEqual(
+        net()
+          .filter((c) => c.content)
+          .map((c) => [c.path, c.previousPath, c.kind, c.added, c.removed]),
+      );
+    });
+
+    it("the card and the viewer name the same files", () => {
+      // The viewer leaves out only a file no call reported the text of: there
+      // is nothing to diff.
+      const textless = perCall()
+        .filter((c) => !c.content)
+        .map((c) => c.path);
+      expect(viewerFiles().map((f) => f.path)).toEqual(
+        cardFiles()
+          .map((f) => f.path)
+          .filter((path) => !textless.includes(path)),
+      );
+    });
+
+    it("the card and the viewer count the same, unless several calls touched a file", () => {
+      const counts = (files: { path: string; added: number; removed: number }[]) =>
+        files.map((f) => `${f.path} ${size(f)}`);
+      const viewer = viewerFiles();
+      const card = cardFiles().filter((f) => viewer.some((v) => v.path === f.path));
+      if (COMBINE_DIFFERENTLY.includes(name)) expect(counts(card)).not.toEqual(counts(viewer));
+      else expect(counts(card)).toEqual(counts(viewer));
+    });
   });
 });
