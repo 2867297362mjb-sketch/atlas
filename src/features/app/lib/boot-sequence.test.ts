@@ -90,6 +90,7 @@ beforeEach(() => {
   // module's own default to that).
   setAppStateWritable(false);
   vi.spyOn(console, "warn").mockImplementation(() => {});
+  vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
 describe("a load that succeeds", () => {
@@ -251,5 +252,53 @@ describe("a load that never delivers", () => {
 
     expect(steps).toEqual(["take-cli-path", "load"]);
     expect(await savesAfterQuitFlush()).toBe(0);
+  });
+});
+
+describe("a load that only partly applies", () => {
+  // The state loaded, but handing it to the stores threw halfway: some hold
+  // the user's lists, the rest still hold their empty defaults. Saving that
+  // replaces the persisted lists with the empty ones.
+  const halfApplied: Partial<BootSequenceDeps> = {
+    applyState: () => {
+      throw new Error("organisations hydrated, projects did not");
+    },
+    // React's `startTransition` reports what its callback throws and carries
+    // on; the sequence must not depend on the throw reaching it.
+    transition: (apply) => {
+      try {
+        apply();
+      } catch {
+        /* reported, as React does */
+      }
+    },
+  };
+
+  it("never saves", async () => {
+    tauri.handleRaw({ bootstrap_app_state: () => SAVED });
+
+    boot(halfApplied);
+    await settle();
+
+    expect(await savesAfterQuitFlush()).toBe(0);
+  });
+
+  it("says so, skips the CLI folder, and still comes up", async () => {
+    tauri.handleRaw({
+      cli_take_initial_project_path: () => "/work/repo",
+      bootstrap_app_state: () => SAVED,
+    });
+
+    const { steps } = boot(halfApplied);
+    await settle();
+
+    expect(steps).toEqual([
+      "take-cli-path",
+      "load",
+      "persistence:on",
+      "persistence:off",
+      "report-failure",
+      "ready",
+    ]);
   });
 });

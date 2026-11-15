@@ -54,11 +54,14 @@ export function startAppBoot(): () => void {
         .getState()
         .actions.hydrate({ currentProject: null, recentProjects: [], version: 1 }, opts);
     },
-    reportLoadFailure: () => {
+    reportLoadFailure: (stage) => {
       logEvent({
         source: "atlas",
         kind: "bootstrap-failed",
-        summary: "bootstrap_app_state failed after 3 attempts; app-state writes suspended",
+        summary:
+          stage === "load"
+            ? "bootstrap_app_state failed after 3 attempts; app-state writes suspended"
+            : "the loaded app state could not be applied; app-state writes suspended",
         status: "failure",
       });
       toast.error(

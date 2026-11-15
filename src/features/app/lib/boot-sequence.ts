@@ -33,8 +33,9 @@ export interface BootSequenceDeps {
   applyState: (state: AppStateWire, opts: { skipActiveSwitch: boolean }) => void;
   /** Bring the stores up empty, for a session that could not load. */
   applyEmptyState: (opts: { skipActiveSwitch: boolean }) => void;
-  /** Tell the user, and the log, that the saved state could not be loaded. */
-  reportLoadFailure: () => void;
+  /** Tell the user, and the log, that the saved state could not be loaded
+   *  (`load`), or loaded and could not be handed to the stores (`apply`). */
+  reportLoadFailure: (stage: "load" | "apply") => void;
   /** Add the CLI launch's folder as a project and switch to it. */
   openCliProject: (path: string) => Promise<void>;
   /** The boot is over, loaded or not: the boot skeleton can go. */
@@ -54,9 +55,11 @@ export interface BootSequenceDeps {
  *   2. load the state, retrying: a transient IPC failure shouldn't cost a
  *      session;
  *   3. loaded: enable persistence, then apply the state, in one transition.
- *      Not loaded: deny persistence, report it, and apply the empty state;
- *   4. open the CLI folder, only when the state loaded: without it there is
- *      no organisation to own the project;
+ *      Not loaded: deny persistence, report it, and apply the empty state.
+ *      Loaded but applying it threw: deny persistence again and report it,
+ *      because the stores are now part the user's state and part empty;
+ *   4. open the CLI folder, only when the state was applied: without it
+ *      there is no organisation to own the project;
  *   5. signal ready, whichever way step 3 went.
  */
 export function runBootSequence(deps: BootSequenceDeps): () => void {
@@ -77,6 +80,7 @@ export function runBootSequence(deps: BootSequenceDeps): () => void {
     }
     if (cancelled) return;
 
+    let applied = false;
     try {
       if (state) {
         const loaded = state;
@@ -85,8 +89,18 @@ export function runBootSequence(deps: BootSequenceDeps): () => void {
           // them back is safe from here on. Before this line they hold empty
           // defaults and persistence is denied.
           deps.enablePersistence(true);
-          deps.applyState(loaded, { skipActiveSwitch });
+          // Caught HERE, not around `transition`: `startTransition` reports
+          // what its callback throws and returns normally, which used to
+          // leave persistence on over half-applied stores.
+          try {
+            deps.applyState(loaded, { skipActiveSwitch });
+            applied = true;
+          } catch (e) {
+            deps.enablePersistence(false);
+            console.error("applying the boot state failed:", e);
+          }
         });
+        if (!applied) deps.reportLoadFailure("apply");
       } else {
         // Every attempt failed. Come up in an explicitly READ-ONLY session
         // rather than letting the empty stores overwrite `state.json`: the
@@ -94,15 +108,15 @@ export function runBootSequence(deps: BootSequenceDeps): () => void {
         // brings them back. Without this the app looks merely "empty" and
         // then makes that permanent on quit.
         deps.enablePersistence(false);
-        deps.reportLoadFailure();
+        deps.reportLoadFailure("load");
         deps.transition(() => deps.applyEmptyState({ skipActiveSwitch }));
       }
     } finally {
       if (!cancelled) {
-        // Without a loaded state `addProject` would refuse anyway, and its
+        // Without an applied state `addProject` would refuse anyway, and its
         // "no organisation" toast would bury the boot-failure one that
         // actually tells the user what to do.
-        if (cliPath && state) await deps.openCliProject(cliPath);
+        if (cliPath && applied) await deps.openCliProject(cliPath);
         deps.ready();
       }
     }
