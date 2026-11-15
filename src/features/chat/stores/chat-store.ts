@@ -33,7 +33,12 @@ import { loadLastModePref, saveLastModePref } from "../lib/last-mode-pref";
 import { modeSelectOf, modelSelectOf } from "../lib/acp-config-options";
 import { exitPlanModeForOption, exitPlanOptionRestartsSession } from "../lib/exit-plan-modes";
 import { loadConfigOptionPrefs, saveConfigOptionPref } from "../lib/config-option-prefs";
-import { KNOBS, createSessionConfiguration } from "../lib/session-configuration";
+import {
+  KNOBS,
+  cacheAdvertisedOptions,
+  createSessionConfiguration,
+  type AdvertisedOptions,
+} from "../lib/session-configuration";
 import {
   loadCachedAcpConfigOptions,
   saveCachedAcpConfigOptions,
@@ -1734,7 +1739,8 @@ export const useChatStore = createSelectors(
           set((s) => {
             appendThoughtToDraft(s, acpSessionId, text);
           }),
-        applyAgentBatch: ({ texts, thoughts, deltas }) =>
+        applyAgentBatch: ({ texts, thoughts, deltas }) => {
+          const advertised: AdvertisedOptions[] = [];
           set((s) => {
             // Single immer pass for everything buffered in this frame.
             // Order is: text → thoughts → deltas. Within deltas, wire
@@ -1749,9 +1755,11 @@ export const useChatStore = createSelectors(
             }
             const addedToolCalls = new Set<string>();
             for (const env of deltas) {
-              applyDeltaToDraft(s, env, addedToolCalls);
+              applyDeltaToDraft(s, env, addedToolCalls, advertised);
             }
-          }),
+          });
+          advertised.forEach(cacheAdvertisedOptions);
+        },
         setAcpBinding: (tabId, agentId, acpSessionId, cwd) =>
           set((s) => {
             const session = s.sessions[tabId];
@@ -1828,10 +1836,13 @@ export const useChatStore = createSelectors(
           set((s) => {
             delete s.pendingPermissions[acpSessionId];
           }),
-        applyAgentDelta: (env) =>
+        applyAgentDelta: (env) => {
+          const advertised: AdvertisedOptions[] = [];
           set((s) => {
-            applyDeltaToDraft(s, env, new Set());
-          }),
+            applyDeltaToDraft(s, env, new Set(), advertised);
+          });
+          advertised.forEach(cacheAdvertisedOptions);
+        },
         setAgentStartingStatus: (pluginId, status) =>
           set((s) => {
             if (status === null || status === "") {
@@ -2073,7 +2084,14 @@ function isStaleTurn(session: ChatSession, turnSeq: number | undefined): boolean
   return turnSeq < (session.currentTurnSeq ?? 0);
 }
 
-function applyDeltaToDraft(s: ChatDraft, env: AgentDelta, addedToolCalls?: Set<string>): void {
+function applyDeltaToDraft(
+  s: ChatDraft,
+  env: AgentDelta,
+  addedToolCalls?: Set<string>,
+  /** Option lists an agent reported in this pass. The fold only mirrors them;
+   *  the action that ran it caches them once the pass is over. */
+  advertised?: AdvertisedOptions[],
+): void {
   const tid = findTabByAcpSession(s.sessions, env.session_id);
   if (!tid) return;
   const session = s.sessions[tid];
@@ -2656,12 +2674,10 @@ function applyDeltaToDraft(s: ChatDraft, env: AgentDelta, addedToolCalls?: Set<s
       // Keeps the mode/model pickers honest when the change came from inside
       // the agent (its own `/model`, a thinking toggle) rather than from Atlas.
       session.acpConfigOptions = env.config_options;
-      // Survive the next restart (#36) — the same posture as the model-list
-      // save just below. An empty list is cached too: a live session saying
-      // "no knobs" is the answer the pill shows as "Default", and remembering
-      // it is what stops the next cold start from spinning to re-learn it.
+      // What it advertised is also cached for the next launch, by the action
+      // that ran this fold (`cacheAdvertisedOptions`), not from in here.
       if (session.agentType) {
-        saveCachedAcpConfigOptions(session.agentType, env.config_options);
+        advertised?.push({ agentType: session.agentType, configOptions: env.config_options });
       }
       // The model pill rides on this same blob — ACP has no separate model
       // field, so a `category: "model"` select IS the model list. Without this
@@ -2671,11 +2687,6 @@ function applyDeltaToDraft(s: ChatDraft, env: AgentDelta, addedToolCalls?: Set<s
       if (models) {
         session.acpAvailableModels = models.availableModels;
         if (models.currentModel) session.acpCurrentModel = models.currentModel;
-        if (session.agentType) {
-          saveCachedAcpModels(session.agentType, {
-            availableModels: models.availableModels,
-          });
-        }
       }
       // The mode pill rides on it too. The official Claude adapter never
       // sends `current_mode_update` for an ordinary change — its answer to a

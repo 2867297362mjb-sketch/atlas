@@ -30,6 +30,8 @@ import { tauri } from "@/test/tauri-fake";
 import type { AgentDelta } from "@/types/agents";
 import type { AgentType, ChatSession } from "@/types/agent";
 import { parseConfigOptions } from "../lib/acp-config-options";
+import { loadCachedAcpConfigOptions } from "../lib/acp-config-options-cache";
+import { loadCachedAcpModels } from "../lib/acp-models-cache";
 import { loadConfigOptionPrefs } from "../lib/config-option-prefs";
 import { loadLastModePref } from "../lib/last-mode-pref";
 import { loadNativeEffort } from "../lib/native-model-pref";
@@ -356,5 +358,45 @@ describe.each(KNOBS)("picking a session's $name", (knob) => {
     expect(pushes()).toEqual([]);
     expect(knob.shown()).toBe(before);
     expect(knob.remembered()).toBe(remembered);
+  });
+});
+
+// The fold that applies a report only mirrors it. Keeping the report for the
+// next launch is the applying action's, after the fold.
+describe.each([
+  ["one at a time", (env: AgentDelta) => actions().applyAgentDelta(env)],
+  [
+    "in a frame's batch",
+    (env: AgentDelta) => actions().applyAgentBatch({ texts: [], thoughts: [], deltas: [env] }),
+  ],
+])("the options an agent reports, applied %s", (_name, apply) => {
+  const modelSelect = {
+    id: "model",
+    name: "Model",
+    category: "model",
+    type: "select",
+    currentValue: "opus",
+    options: MODELS.map((m) => ({ value: m.id, name: m.name })),
+  };
+
+  it("are mirrored, and cached for the agent's next launch", () => {
+    actions().createSession(TAB, "codex");
+    actions().setAcpBinding(TAB, KEY.agent_id, KEY.session_id, "/tmp");
+    const reported = [thought("high"), modelSelect];
+
+    apply(delta({ kind: "config_options_updated", config_options: reported }));
+
+    expect(session().acpConfigOptions).toEqual(reported);
+    expect(session().acpCurrentModel).toBe("opus");
+    expect(loadCachedAcpConfigOptions("codex")).toEqual(reported);
+    expect(loadCachedAcpModels("codex")?.availableModels.map((m) => m.id)).toEqual(
+      MODELS.map((m) => m.id),
+    );
+    expect(tauri.calls()).toEqual([]);
+  });
+
+  it("are not cached when no tab holds the session they are about", () => {
+    apply(delta({ kind: "config_options_updated", config_options: [thought("high")] }));
+    expect(loadCachedAcpConfigOptions("codex")).toBeNull();
   });
 });

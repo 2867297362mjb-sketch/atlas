@@ -23,7 +23,9 @@
  */
 import type { ChatSession, ClaudePermissionMode } from "@/types/agent";
 import type { SessionKey, SessionModeInfo } from "@/types/agents";
-import { parseConfigOptions } from "./acp-config-options";
+import { modelSelectOf, parseConfigOptions } from "./acp-config-options";
+import { saveCachedAcpConfigOptions } from "./acp-config-options-cache";
+import { saveCachedAcpModels } from "./acp-models-cache";
 import type { agents } from "./agents-api";
 import { configOptionPushes, type ConfigOptionPrefs } from "./config-option-prefs";
 
@@ -243,6 +245,28 @@ export function resolveEffectiveMode(
 }
 
 export const KNOBS = { claudeMode, planExitMode, acpMode, model, effort, option };
+
+/** The option list an agent reported for one of its sessions. */
+export interface AdvertisedOptions {
+  agentType: string;
+  configOptions: unknown[];
+}
+
+/**
+ * Keep what an agent reported for the next launch, so its pills are there
+ * before its first session answers (#36). An empty list is kept too: a live
+ * session saying "no knobs" is an answer, and remembering it is what stops the
+ * next cold start from spinning to re-learn it. The model list rides on the
+ * same blob (`modelSelectOf`), so it is cached from here as well.
+ *
+ * The store's delta fold only mirrors the report; the action that ran the fold
+ * calls this afterwards.
+ */
+export function cacheAdvertisedOptions({ agentType, configOptions }: AdvertisedOptions): void {
+  saveCachedAcpConfigOptions(agentType, configOptions);
+  const models = modelSelectOf(configOptions);
+  if (models) saveCachedAcpModels(agentType, { availableModels: models.availableModels });
+}
 
 /**
  * `applied`: the agent took it. `kept-for-bind`: there is no session yet, the
