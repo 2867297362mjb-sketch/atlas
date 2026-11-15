@@ -687,6 +687,7 @@ dependencies = [
  "atlas-comms",
  "atlas-embed",
  "atlas-fs",
+ "atlas-gh",
  "atlas-git",
  "atlas-gitdiff",
  "atlas-icon-theme",
@@ -3249,6 +3250,15 @@ name = "atlas-fs"
 version = "0.1.0"
 dependencies = [
  "tempfile",
+]
+
+[[package]]
+name = "atlas-gh"
+version = "0.1.0"
+dependencies = [
+ "atlas-process",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { FileBreadcrumbs, type FileBreadcrumbsProps } from "./file-breadcrumbs";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => []) }));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
 vi.mock("@/features/icon-theme/components/file-icon", () => ({
   FileIcon: () => <span data-testid="file-icon" />,
 }));

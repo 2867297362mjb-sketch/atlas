@@ -7,17 +7,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 
-const invoke = vi.fn(async (cmd: string): Promise<Record<string, unknown>> =>
-  cmd === "capture_binding" ? { mode: "cloud", slug: "atlas", orgId: null } : { root: "/p" },
-);
-let emit: ((e: { payload: unknown }) => void) | null = null;
-vi.mock("@tauri-apps/api/core", () => ({ invoke: (cmd: string) => invoke(cmd) }));
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async (_name: string, cb: (e: { payload: unknown }) => void) => {
-    emit = cb;
-    return () => {};
-  }),
-}));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
+import { tauri } from "@/test/tauri-fake";
+
+const answerAs = (mode: "cloud" | "local") =>
+  tauri.handleRaw({
+    capture_binding: () => ({ mode, slug: mode === "cloud" ? "atlas" : null, orgId: null }),
+    capture_detect: () => ({ root: "/p" }),
+  });
+const captureChanged = (payload: unknown) => void tauri.emit("atlas:capture-changed", payload);
 
 const { useProjectFacts, invalidateProjectFacts, resetProjectFactsCache } =
   await import("./project-facts");
@@ -25,11 +24,14 @@ const { useProjectFacts, invalidateProjectFacts, resetProjectFactsCache } =
 beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   resetProjectFactsCache();
-  invoke.mockClear();
+  // Not `tauri.reset()`: the module subscribes once for its lifetime, and a
+  // reset would drop that subscriber for every later test.
+  tauri.invoke.mockClear();
+  answerAs("cloud");
 });
 afterEach(() => vi.useRealTimers());
 
-const reads = () => invoke.mock.calls.filter(([c]) => c === "capture_binding").length;
+const reads = () => tauri.calls("capture_binding").length;
 
 describe("useProjectFacts", () => {
   it("reads once, and a remount paints from the cache with no read", async () => {
@@ -44,10 +46,10 @@ describe("useProjectFacts", () => {
   it("ignores recording writes and re-reads on a sync-state change", async () => {
     const { result } = renderHook(() => useProjectFacts("/p"));
     await waitFor(() => expect(result.current).toBeDefined());
-    act(() => emit?.({ payload: { sessionIds: ["as-1"], all: false } }));
+    act(() => captureChanged({ sessionIds: ["as-1"], all: false }));
     await act(async () => vi.advanceTimersByTime(1000));
     expect(reads()).toBe(1);
-    act(() => emit?.({ payload: null }));
+    act(() => captureChanged(null));
     await act(async () => vi.advanceTimersByTime(1000));
     expect(reads()).toBe(2);
   });
@@ -59,9 +61,7 @@ describe("useProjectFacts", () => {
     await act(async () => invalidateProjectFacts("/p"));
     await waitFor(() => expect(reads()).toBe(2));
     expect(result.current).toBe(before); // same answer, same object
-    invoke.mockImplementation(async (cmd: string) =>
-      cmd === "capture_binding" ? { mode: "local", slug: null, orgId: null } : { root: "/p" },
-    );
+    answerAs("local");
     await act(async () => invalidateProjectFacts("/p"));
     await waitFor(() => expect(result.current?.binding?.mode).toBe("local"));
   });

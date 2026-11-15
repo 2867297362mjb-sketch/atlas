@@ -5,11 +5,8 @@
 // no call at all.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => undefined) }));
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async () => () => {}),
-  emit: vi.fn(async () => {}),
-}));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
 const loadPlans = vi.fn();
 vi.mock("../lib/plans-api", () => ({ loadPlans: (p: string) => loadPlans(p) }));
 

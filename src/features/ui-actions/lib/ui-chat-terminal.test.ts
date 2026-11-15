@@ -2,8 +2,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // The settings store subscribes to config events when it loads.
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}), emit: vi.fn() }));
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => undefined) }));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
 
 import { useLayoutStore } from "@/features/layout/stores/layout-store";
 import { useChatStore } from "@/features/chat/stores/chat-store";

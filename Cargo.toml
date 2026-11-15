@@ -36,6 +36,7 @@ members = [
   "crates/atlas-comms",
   "crates/atlas-embed",
   "crates/atlas-fs",
+  "crates/atlas-gh",
   "crates/atlas-git",
   "crates/atlas-gitdiff",
   "crates/atlas-icon-theme",
@@ -819,6 +820,8 @@ opt-level = 1
 [profile.dev.package.atlas-embed]
 opt-level = 1
 [profile.dev.package.atlas-fs]
+opt-level = 1
+[profile.dev.package.atlas-gh]
 opt-level = 1
 [profile.dev.package.atlas-git]
 opt-level = 1

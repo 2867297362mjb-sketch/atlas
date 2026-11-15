@@ -8,10 +8,7 @@ import { Editor } from "@tiptap/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 // The editor stack (and the fixture module) touch Tauri events on load.
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: () => Promise.resolve(() => {}),
-  emit: () => Promise.resolve(),
-}));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
 
 import { listKnowledgeEntries } from "@/dev/mock-backend/fixtures/knowledge";
 import { buildExtensions } from "../lib/extensions";

@@ -3,8 +3,10 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const invoke = vi.hoisted(() => vi.fn());
-vi.mock("@tauri-apps/api/core", () => ({ invoke }));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+import { tauri } from "@/test/tauri-fake";
+
+const invoke = tauri.invoke;
 
 import { attachMentionedProjects } from "./attach-mentioned-projects";
 import type { MentionData } from "./mentions";

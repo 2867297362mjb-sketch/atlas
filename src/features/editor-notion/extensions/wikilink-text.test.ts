@@ -3,7 +3,7 @@ import { Editor } from "@tiptap/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 // The editor stack imports modules that subscribe to Tauri events on load.
-vi.mock("@tauri-apps/api/event", () => ({ listen: () => Promise.resolve(() => {}) }));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
 
 import { buildExtensions } from "../lib/extensions";
 import { restoreWikilinks } from "./wikilink-text";

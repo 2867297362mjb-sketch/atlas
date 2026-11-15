@@ -150,7 +150,7 @@ One Rust module per IPC domain under `src-tauri/src/commands/`. `commands/mod.rs
 | Agents (ported ACP stack) | agents, agent_host, agent_transcript, agent_analytics, agent_memory, catalog, registry, capture, artifacts_cloud |
 | Agent tool servers | memory_server (ADR-0010), memory_bridge (ADR-0019, ADR-0020), ui_server (ADR-0012), org_server (ADR-0014), code_server (ADR-0015) |
 | Terminal / browser / fs | terminal, browser, fs |
-| Git | git, git_graph, git_watcher, git_autofetch, gitdiff, git_ops, git_conflicts, git_snapshot, git_stage_ops, git_pr (a branch's PR badge, via `gh pr list`), git_avatars (author avatars, via `gh api`) |
+| Git | git, git_graph, git_watcher, git_autofetch, gitdiff, git_ops, git_conflicts, git_snapshot, git_stage_ops, git_avatars (author avatars, via `gh api`) |
 | GitHub | github (search and clone reference repositories), pull_requests (the pull-request surface, via `gh api`; see below) |
 | Knowledge | knowledge, knowledge_meta, knowledge_links, knowledge_export, knowledge_graph_layout |
 | Memory | memory_* — graph, pack, policy, sharing, summarize, timeline, delta, inject, compile, indexer, retrieve, capture (the session recorder, read-only), dream, repo (the Agent Memory Repo mirror); plus shared_memory, instruction_sync |
@@ -183,8 +183,8 @@ src-tauri/src/commands/pull_requests/
   github.rs    the GitHub driver: which requests an operation takes
   parse.rs     GitHub's JSON → the provider-neutral types in model.rs
   queries.rs   the GraphQL documents
-  gh.rs        one `gh api -i` process per request: timeout, permit pool,
-               rate-limit pause, ETag revalidation
+  gh.rs        one `gh api -i` run per request, read as HTTP: quota
+               accounting, ETag revalidation (the process is atlas-gh's)
   images.rs    image proxy for bodies/comments (GitHub image hosts only)
 ```
 
@@ -193,7 +193,7 @@ src-tauri/src/commands/pull_requests/
 - **Images.** CSP `img-src` stays closed: `pr_image` fetches an allowlisted GitHub image with the `gh` credential, caches it, and the page shows it as a `blob:` URL (`pr-image.ts`).
 - **Freshness.** Stale times per read (list 30s, detail 60s / merged 10min, checks 15s, files viewed 15s), a five-minute poll while on screen, a refetch on focus, and an invalidation when an agent's turn ends. REST reads revalidate with an ETag, and GitHub does not charge a 304.
 
-The sidebar's PR badge (`git_pr`) is older and separate: one `gh pr list` per repository, shared by every card.
+Every `gh` process in Atlas, here and elsewhere (`git_avatars`, `project_sources`, `create.rs`, `checkout.rs`), is spawned by the `atlas-gh` crate: one environment, a timeout that kills, one pool of six API permits, and one pause that a rate-limit refusal sets. A call says what it is: reads are refused while the API is paused, what the user did always runs, and a long verb (`gh pr checkout`, `gh repo clone`) or an image fetch holds no API permit.
 
 ### Event channels
 
@@ -322,6 +322,7 @@ All wired in as `path` dependencies from `src-tauri/Cargo.toml`, and all members
 | `atlas-artifacts` | The Timeline's cloud **read** half: remote Sessions, comments, and one WebSocket per connected cloud Project. Tauri-free, `TokenSource` as the only host seam, shaped on `atlas-comms`. Split from `atlas-checkpoint` because reads need tokio and tungstenite and that crate is deliberately synchronous. The invariant that makes a merged board possible: `rowId` on the wire **is** the local row id, so local and remote rows share one identity and a comment anchor resolves against a local row with no mapping table. |
 | `atlas-redact` | Single source of truth for secret redaction: layered scrubbing (Shannon entropy, vendored betterleaks rules, provider prefixes, credentialed URIs, connection strings) with JSON-aware traversal. String in, redacted string out — no I/O, no async. |
 | `atlas-git` | Git execution layer: one spawn chokepoint over the real `git` binary (so hooks run), a typed stderr→error taxonomy with friendly messages, porcelain-v2 status parsing, streaming output for long operations. |
+| `atlas-gh` | The single `gh` spawn chokepoint (`GhCommand`), Tauri-free: a fixed no-prompt environment, a timeout that kills, a shared pool of API permits, the rate-limit pause, and one failure taxonomy for a run that produced no answer. What an answer means stays with the caller (`pull_requests/gh.rs` reads it as HTTP). |
 | `atlas-gitdiff` | Structured side-by-side diff engine: parses unified diffs, computes word-level intra-line change spans (word-diff vendored from `dandavison/delta`, MIT). |
 | `atlas-terminal` | Wraps `portable-pty`, manages `TerminalSession`s, bridges PTY bytes to Tauri events. |
 | `atlas-memory` | On-device RAG/memory engine: MiniLM → a healing per-model vector file plus `corpus.sqlite` behind a `MemorySearchFn` seam; the shared-memory record store (`record`: SQLite per repository scope, redact-on-write, immutable hash-chained revisions as the canonical record (ADR-0017), hybrid BM25 + dense search); the reconciler (`health`); code citations checked at read time (`citation`, ADR-0018); consolidation, handoff notes, the dream pass and the Agent Memory Repo format (`consolidate`, `handoff`, `dream`, `amr`); and global promotion of Facts seen in two or more repositories to `~/.atlas/memory` (`global`). Read its `README.md` and `MIGRATION.md` before changing on-disk index formats. |
@@ -424,6 +425,7 @@ atlas/
 │   ├── atlas-artifacts            Timeline cloud reads + realtime socket
 │   ├── atlas-redact               secret redaction (single source of truth)
 │   ├── atlas-git                  git spawn chokepoint + error taxonomy
+│   ├── atlas-gh                   gh spawn chokepoint: budget, pause, error taxonomy
 │   ├── atlas-gitdiff              structured diff engine
 │   ├── atlas-terminal             PTY (portable-pty)
 │   ├── atlas-memory               on-device RAG/memory engine

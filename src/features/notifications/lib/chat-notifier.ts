@@ -1,7 +1,7 @@
 /**
  * Chat notifications: the Chat (`comms`) adapter onto the shared pipeline.
  *
- * ENTRY POINT — `notifyChatEnvelope(envelope)`. App.tsx's `atlas:comms` drain
+ * ENTRY POINT — `notifyChatEnvelope(envelope)`. The comms envelope stream's drain (`comms-envelope-stream.ts`)
  * calls it after `applyEnvelope`, so the comms store stays a pure mirror (stores
  * never call other stores). Only a live `messageAppended` frame can notify:
  * a reconnect replays as a quiet `resync` and a re-hydrate reads history, so

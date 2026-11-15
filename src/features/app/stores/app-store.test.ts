@@ -3,8 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // The store reaches Tauri IPC, the flush registry and four sibling zustand
 // stores at import time. None of that is exercised by the write guard under
 // test, so it is all stubbed down to the one call we assert on: `invoke`.
-const invoke = vi.fn((..._args: unknown[]) => Promise.resolve());
-vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+import { tauri } from "@/test/tauri-fake";
+
+const invoke = tauri.invoke;
 vi.mock("@/features/log/lib/log", () => ({ logEvent: () => {} }));
 vi.mock("@/features/projects/lib/flush-registry", () => ({ registerFlush: () => {} }));
 vi.mock("@/features/projects/lib/project-snapshot", () => ({ persistHashOf: () => "" }));

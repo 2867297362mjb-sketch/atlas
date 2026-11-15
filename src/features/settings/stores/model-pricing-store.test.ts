@@ -9,8 +9,8 @@ import {
   type ModelPrice,
 } from "./model-pricing-store";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
 
 const catalogPrice: ModelPrice = {
   input: 10,

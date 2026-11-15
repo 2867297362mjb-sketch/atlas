@@ -25,13 +25,6 @@ import {
   type AppStateWire,
 } from "@/features/app/stores/app-store";
 import { useChatStore } from "@/features/chat/stores/chat-store";
-import {
-  listenAgents,
-  pluginIdForAgentId,
-  resetAgentByAgentId,
-} from "@/features/chat/lib/agents-api";
-import type { PendingPermission } from "@/types/acp";
-import type { AgentDelta } from "@/types/agents";
 import { cycleChatAgent } from "@/features/chat/lib/switch-agent";
 import { HintOverlay } from "@/features/hint-nav/components/hint-overlay";
 import { BrowserOverlayWatcher } from "@/features/browser/components/browser-overlay-watcher";
@@ -55,15 +48,13 @@ import {
 import { openNewAgentChat } from "@/features/chat/lib/open-agent-session";
 import { settleAndAdvance } from "@/features/chat/lib/settle-and-advance";
 import { requestCloseTab } from "@/features/chat/lib/close-tab";
-import { pruneContextUsageCache } from "@/features/chat/lib/context-usage-cache";
 import { installDevSessionHold } from "@/features/chat/lib/dev-session-hold";
+import { startAgentEvents } from "@/features/chat/lib/start-agent-events";
 import { isDev } from "@/lib/env";
-import { isScrollHot } from "@/lib/scroll-hot";
 import { useAppProfile } from "@/lib/app-profile";
 import { useNativeContextMenu } from "@/lib/native-context-menu";
 import {
   hydrateAgentRegistry,
-  setAgentUpdatePhase,
   startCatalogListener,
 } from "@/features/agents/stores/agent-registry-store";
 import { AgentOAuthModalHost } from "@/features/agents/components/agent-oauth-modal";
@@ -72,31 +63,18 @@ import { watchTurnBranchChanges } from "@/features/chat/lib/branch-change-watch"
 import { AgentElicitationHost } from "@/features/chat/components/agent-elicitation-host";
 import { UiActionBridge } from "@/features/ui-actions/components/ui-action-bridge";
 import { OrgActionLogBridge } from "@/features/org-actions/components/org-action-log-bridge";
-import { initWindowFocusTracking, isWindowFocused } from "@/lib/window-focus";
-import { initAnimationVisibility } from "@tryatlas/design/session";
-import { initDockBadgeClearing } from "@/lib/dock-badge";
-import { primeNativeNotificationPermission } from "@/lib/native-notify";
-import {
-  isStaleAgentTurn,
-  notifyAgentEvent,
-  notifyPullRequestWatch,
-  resolveAgentPermission,
-} from "@/features/notifications/lib/agent-notifier";
+import { notifyPullRequestWatch } from "@/features/notifications/lib/agent-notifier";
 import { listenSessionPromptInjected } from "@/features/chat/lib/injected-prompt";
-import { initSourceOpenedClearing } from "@/features/notifications/lib/source-opened";
 import { notifyChatEnvelope } from "@/features/notifications/lib/chat-notifier";
 import { noteAtlasSignedIn, notifyAtlasSignedOut } from "@/features/notifications/lib/app-notifier";
-import {
-  notifyAgentUpdateFailed,
-  startAppWarnings,
-} from "@/features/notifications/lib/app-warning-notifier";
+import { startAppWarnings } from "@/features/notifications/lib/app-warning-notifier";
 import {
   notifyModelDownload,
   notifyUpdateReady,
 } from "@/features/notifications/lib/outcome-notifier";
 import { logEvent } from "@/features/log/lib/log";
 import { startSecurityNotifier } from "@/features/security/lib/security-notifier";
-import { warmMarkdownWorker, primeMarkdownRenderer } from "@/lib/markdown-cache";
+import { primeMarkdownRenderer } from "@/lib/markdown-cache";
 import { primeMarkdown } from "@/lib/markdown";
 import { NotificationPanel } from "@/features/notifications/components/notification-panel";
 import { FeedbackPanel } from "@/features/feedback/components/feedback-panel";
@@ -112,7 +90,8 @@ import {
   isOrgReconciled,
   markOrgReconciled,
 } from "@/features/organisations/lib/org-reconciliation";
-import { comms, listenComms, type CommsEnvelope } from "@/features/comms/lib/comms-api";
+import { comms, listenComms } from "@/features/comms/lib/comms-api";
+import { createCommsEnvelopeStream } from "@/features/comms/lib/comms-envelope-stream";
 import { startTeamPresenceListener } from "@/features/artifacts/lib/team-presence";
 import { useTeamPresenceStore } from "@/features/artifacts/stores/team-presence-store";
 import { useSettingsStore } from "@/features/settings/stores/settings-store";
@@ -135,7 +114,6 @@ import { announceLinuxRelease } from "@/features/updater/lib/linux-release-notic
 import { isLinux } from "@/lib/platform";
 import { Toaster, toast } from "sonner";
 import { TOAST_ICONS } from "@/components/toast-icons";
-import { agentMeta } from "@/features/agents/lib/agent-meta";
 import { IconThemeFonts } from "@/features/icon-theme/components/file-icon";
 import { ThemeEditorHost } from "@/features/theme/components/theme-editor/theme-editor-host";
 import {
@@ -446,37 +424,12 @@ export function App() {
   // transport), so this listener runs at app scope rather than with the panel —
   // a panel-scoped one would mean "panel closed, no notifications".
   useEffect(() => {
-    // rAF-coalesced, the agent-delta batcher's shape: a burst of socket frames
-    // (a backfill, a reaction flood, a presence storm) used to be one zustand
-    // `set` — and one React commit — PER FRAME. Buffer and drain once per
-    // animation frame; React 18 batches every `set` inside the synchronous
-    // drain into a single commit. The timeout backstop drains while the
-    // window is hidden, where rAF never fires (same trap as the delta path).
-    let buffer: CommsEnvelope[] = [];
-    let scheduled = 0;
-    let backstop = 0;
-    const drain = () => {
-      scheduled = 0;
-      if (backstop) {
-        window.clearTimeout(backstop);
-        backstop = 0;
-      }
-      const batch = buffer;
-      buffer = [];
-      const apply = commsActions().applyEnvelope;
-      for (const envelope of batch) {
-        apply(envelope);
-        // After the store has the message, so "on screen" and names are current.
-        notifyChatEnvelope(envelope);
-      }
-    };
-    const off = listenComms((envelope) => {
-      buffer.push(envelope);
-      if (!scheduled) {
-        scheduled = window.requestAnimationFrame(drain);
-        backstop = window.setTimeout(drain, 120);
-      }
+    // Frame-coalesced: see `comms-envelope-stream.ts`.
+    const stream = createCommsEnvelopeStream({
+      apply: (envelope) => commsActions().applyEnvelope(envelope),
+      notify: notifyChatEnvelope,
     });
+    const off = listenComms(stream.push);
     // Subscribe FIRST, then ask Rust to re-announce. Tauri events are not
     // buffered and the socket opens seconds after launch — possibly before this
     // component mounts — so a `resync` emitted into a void was leaving the panel
@@ -487,8 +440,7 @@ export function App() {
     return () => {
       void off.then((fn) => fn());
       window.clearInterval(prune);
-      if (scheduled) window.cancelAnimationFrame(scheduled);
-      if (backstop) window.clearTimeout(backstop);
+      stream.dispose();
     };
   }, []);
 
@@ -732,429 +684,10 @@ export function App() {
   useLoadProjectSettings(currentProject?.path);
   useQuitGuard();
 
-  // Global agent event bus. One listener routes atlas-agents SessionDelta
-  // events into the chat-store, queues permission requests for the
-  // PermissionModal, and resets the lazy agent handle on disconnect.
-  //
-  // ACP events arrive at the rate the agent streams them — for a
-  // tool-heavy turn (e.g. "read 30 files") that's ~60 `tool_call` /
-  // `tool_call_update` events plus a continuous text chunk stream. Per
-  // event without batching: 1 immer draft + 1 subscriber notification
-  // + 1 `MessagesList` re-render (and the virtualizer's
-  // `measureElement` runs). On a fast turn that pegs the main thread.
-  //
-  // Coalesce every frame via RAF and apply the whole batch in ONE
-  // immer pass through `applyAgentBatch`. Dedup `tool_call_upserted`
-  // by `(session, tool_call.id)` (last-write-wins, original position
-  // preserved) so a tool that flips through pending → running →
-  // completed in a single frame only contributes once. Other deltas
-  // go in strict wire order — `message_appended` before subsequent
-  // tool calls so a new assistant message anchors them correctly,
-  // etc.
-  useEffect(() => {
-    let cancelled = false;
-    let unlisten: (() => void) | null = null;
-
-    // All deltas — text/thinking chunks INCLUDED — buffer here in strict wire
-    // order. Consecutive same-session text (or thinking) chunks coalesce into
-    // the trailing entry, but a `message_appended`/tool delta between two text
-    // runs breaks the run so ordering is preserved. (Previously text was
-    // bucketed separately and applied BEFORE other deltas, which reordered the
-    // anchoring `message_appended` after its text — invisible for ACP agents
-    // whose IPC latency spread deltas across frames, but the in-process native
-    // agent emits a whole turn in one frame and the text shattered into
-    // mis-ordered fragments.)
-    const pendingDeltas: AgentDelta[] = [];
-    const toolDeltaPos = new Map<string, number>(); // dedup key → index in pendingDeltas
-    const outputChunkPos = new Map<string, number>(); // live-output coalesce key → index
-    let rafId: number | null = null;
-    /** Timer drain that survives RAF being paused — see `schedule` below. */
-    let backstopId: ReturnType<typeof setTimeout> | null = null;
-
-    // Native window focus + the "cold wake" signal live in `src/lib/window-focus.ts`
-    // now — the terminal notifier needs the same answer this file did.
-    const stopFocusTracking = initWindowFocusTracking();
-    const stopAnimationVisibility = initAnimationVisibility();
-    const stopBadgeClearing = initDockBadgeClearing();
-    // Opening a thread/terminal/conversation clears its stale banners + unread items.
-    const stopSourceOpened = initSourceOpenedClearing();
-
-    // ── Idle-while-focused cold wake ─────────────────────────────────────────
-    // The focus/visibility edges above never fire when Atlas stays the focused,
-    // visible window through a long idle stretch (the user steps away without
-    // switching apps or Spaces). WebKit still throttles the idle main thread and
-    // the OS can reclaim JIT/worker pages, so the first interactions on return
-    // are cold and recover only gradually (the "slow for ~10-15s" symptom). Two
-    // mitigations:
-    //   1. Fire the same warm-up on the FIRST real interaction after an idle gap
-    //      so the whole pipeline (chat virtualizer, graphs, markdown worker)
-    //      warms at once instead of path-by-path as each is lazily exercised.
-    //   2. While focused+visible, ping the markdown worker on an idle cadence so
-    //      WebKit doesn't suspend it out from under us (a suspended worker costs
-    //      a 3s watchdog → main-thread sync fallback on the first big message).
-    const IDLE_RETURN_MS = 30_000;
-    const KEEP_WARM_MS = 20_000;
-    const signalActive = () => window.dispatchEvent(new CustomEvent("atlas:window-active"));
-    let lastActivityAt = Date.now();
-    const onUserActivity = () => {
-      const now = Date.now();
-      if (now - lastActivityAt > IDLE_RETURN_MS) signalActive();
-      lastActivityAt = now;
-    };
-    // Discrete inputs only (not pointermove) to keep this effectively free.
-    window.addEventListener("pointerdown", onUserActivity, { passive: true });
-    window.addEventListener("keydown", onUserActivity, { passive: true });
-    window.addEventListener("wheel", onUserActivity, { passive: true });
-    const keepWarm = window.setInterval(() => {
-      if (isWindowFocused() && document.visibilityState === "visible") {
-        warmMarkdownWorker();
-      }
-    }, KEEP_WARM_MS);
-
-    // Housekeeping, well off the startup critical path: sweep stale
-    // per-session context-usage gauges out of localStorage (they had no
-    // other removal path and grew one key per session forever).
-    const pruneTimer = window.setTimeout(() => pruneContextUsageCache(), 15_000);
-
-    // Establish notification permission EAGERLY at startup (see native-notify.ts
-    // for why lazy asking lost the first real background notification).
-    void primeNativeNotificationPermission();
-    /** Longest a batch may be held for an active scroll gesture. Bounded so a
-     *  continuous fling can never starve the stream — worst case the reader
-     *  sees updates land ~2-3× per second instead of per frame while flicking. */
-    const SCROLL_HOLD_MAX_MS = 400;
-    /** When the oldest un-flushed delta was buffered (null = buffer empty). */
-    let oldestBufferedAt: number | null = null;
-
-    const flush = (force = false) => {
-      if (rafId !== null) {
-        cancelAnimationFrame(rafId);
-        rafId = null;
-      }
-      if (backstopId !== null) {
-        clearTimeout(backstopId);
-        backstopId = null;
-      }
-      if (pendingDeltas.length === 0) {
-        oldestBufferedAt = null;
-        return;
-      }
-      // Mid-fling, hold the batch: applying it re-renders ChatPanel →
-      // Transcript → a reconcile of every mounted row, and when that lands in
-      // a momentum-scroll frame WKWebView misses tile deadlines — the
-      // viewport blanks. Deltas keep buffering; they land the moment the
-      // gesture goes quiet or the hold cap expires.
-      if (
-        !force &&
-        isScrollHot() &&
-        oldestBufferedAt !== null &&
-        performance.now() - oldestBufferedAt < SCROLL_HOLD_MAX_MS
-      ) {
-        backstopId = setTimeout(flush, 100);
-        return;
-      }
-      oldestBufferedAt = null;
-      const deltas = pendingDeltas.slice();
-      pendingDeltas.length = 0;
-      toolDeltaPos.clear();
-      outputChunkPos.clear();
-      try {
-        useChatStore.getState().actions.applyAgentBatch({ texts: [], thoughts: [], deltas });
-      } catch (e) {
-        // The batch is already out of the buffer, so it is lost either way —
-        // re-queueing a batch that throws would just loop on it forever. What
-        // must NOT happen is the exception escaping into the RAF/timer callback
-        // and taking the scheduler down with it: every later delta would then
-        // buffer against a drain that never runs again, which presents as the
-        // thread freezing mid-turn.
-        console.error("applyAgentBatch failed; dropped", deltas.length, "deltas:", e);
-      }
-    };
-    // Coalesce a streaming text/thinking chunk into the trailing pendingDeltas
-    // entry when it's the same kind + session; otherwise append in order. Keeps
-    // the per-frame coalescing win without divorcing text from its wire order.
-    const bufferChunk = (env: AgentDelta) => {
-      const last = pendingDeltas[pendingDeltas.length - 1];
-      if (
-        last &&
-        (last.kind === "text_chunk" || last.kind === "thinking_chunk") &&
-        last.kind === env.kind &&
-        last.session_id === env.session_id
-      ) {
-        pendingDeltas[pendingDeltas.length - 1] = {
-          ...last,
-          delta: last.delta + (env as typeof last).delta,
-        };
-      } else {
-        pendingDeltas.push(env);
-      }
-    };
-    // Two independent drains, because RAF alone is not a guarantee that the
-    // buffer is ever emptied.
-    //
-    // WebKit pauses `requestAnimationFrame` whenever the WKWebView isn't
-    // frontmost — not just when it's hidden. A user who leaves Atlas on screen
-    // while working in another app is watching a window whose RAF queue is
-    // stopped: deltas keep arriving over IPC and keep buffering, and NOTHING
-    // renders. The whole turn then lands in one batch the instant something
-    // wakes the webview, which reads as "it was stuck, then it caught up".
-    // `atlas:window-active` covered part of this, but only on a focus/visibility
-    // edge — it can't help a reader watching an unfocused window.
-    //
-    // `setTimeout` is throttled in that state (to roughly a second) but never
-    // paused, so it is the drain that always eventually fires. When RAF is
-    // healthy it wins every race and clears the backstop, so this costs one
-    // cancelled timer per frame and changes nothing about normal streaming.
-    const BACKSTOP_MS = 250;
-    const schedule = () => {
-      if (oldestBufferedAt === null) oldestBufferedAt = performance.now();
-      if (rafId === null) rafId = requestAnimationFrame(() => flush());
-      if (backstopId === null) backstopId = setTimeout(flush, BACKSTOP_MS);
-    };
-
-    // When the webview is hidden/throttled, requestAnimationFrame is paused, so
-    // buffered deltas (incl. a turn's terminal + the next turn's "running") sit
-    // unapplied until the next frame. Flush immediately on wake so status
-    // ordering is applied promptly and a stale "done" can't visibly linger.
-    const flushOnWake = () => flush();
-    window.addEventListener("atlas:window-active", flushOnWake);
-
-    const bufferDelta = (env: AgentDelta) => {
-      // Coalesce same-id `tool_call_upserted` events: replace the
-      // entry at the position the tool first appeared so the latest
-      // state lands and ordering vs other events stays correct.
-      if (env.kind === "tool_call_upserted") {
-        const key = `${env.session_id}::${env.tool_call.id}`;
-        const existing = toolDeltaPos.get(key);
-        if (existing !== undefined) {
-          pendingDeltas[existing] = env;
-          return;
-        }
-        toolDeltaPos.set(key, pendingDeltas.length);
-      }
-      pendingDeltas.push(env);
-    };
-
-    // Coalesce incremental live tool output. Priority order matters for
-    // correctness, not just batching:
-    // 1. A full `tool_call_upserted` snapshot for this tool is already
-    //    buffered — fold the delta into ITS `result`. A separate chunk entry
-    //    would double-apply: a later snapshot replaces that buffer slot with
-    //    a result that already contains every earlier chunk, and the stray
-    //    chunk entry would then append the same bytes again.
-    // 2. This tool's previous buffered entry is a chunk — concatenate.
-    // 3. Fresh chunk entry. (Chunks buffered BEFORE a tool's first snapshot
-    //    of the frame stay safe: they apply first and the later snapshot
-    //    replaces the result wholesale.)
-    const bufferOutputChunk = (env: Extract<AgentDelta, { kind: "tool_call_output_chunk" }>) => {
-      const key = `${env.session_id}::${env.tool_call_id}`;
-      const upsertAt = toolDeltaPos.get(key);
-      if (upsertAt !== undefined) {
-        const entry = pendingDeltas[upsertAt];
-        if (entry?.kind === "tool_call_upserted") {
-          pendingDeltas[upsertAt] = {
-            ...entry,
-            tool_call: {
-              ...entry.tool_call,
-              result: (entry.tool_call.result ?? "") + env.delta,
-            },
-          };
-          return;
-        }
-      }
-      const chunkAt = outputChunkPos.get(key);
-      const prev = chunkAt !== undefined ? pendingDeltas[chunkAt] : undefined;
-      if (prev?.kind === "tool_call_output_chunk" && chunkAt !== undefined) {
-        pendingDeltas[chunkAt] = { ...prev, delta: prev.delta + env.delta };
-        return;
-      }
-      outputChunkPos.set(key, pendingDeltas.length);
-      pendingDeltas.push(env);
-    };
-
-    listenAgents((env) => {
-      if (cancelled) return;
-      const actions = useChatStore.getState().actions;
-      // Session-less: the manager's per-plugin install/launch progress. Not a
-      // delta, so it never enters the RAF buffer — the label it drives is a
-      // single store write per change, and every tab on that agent reads it.
-      if (env.kind === "loading_status") {
-        actions.setAgentStartingStatus(env.plugin_id, env.status);
-        return;
-      }
-      // Session-less too: an installed agent was updated on a registry bump.
-      // Rust waited for it to go idle before restarting it, so nothing was
-      // cut off; open chats already got `agent_disconnected` and reconnect on
-      // their next send. The toast is the only place an update is announced.
-      if (env.kind === "agent_update") {
-        const name = agentMeta(env.plugin_id).label;
-        if (env.phase === "waiting" || env.phase === "restarting" || env.phase === "installing") {
-          setAgentUpdatePhase(env.plugin_id, { phase: env.phase, version: env.version });
-          if (env.phase === "restarting") actions.noteAgentUpdated(env.plugin_id, env.version);
-          return;
-        }
-        setAgentUpdatePhase(env.plugin_id, null);
-        if (env.phase === "ready") {
-          // Same id as the marketplace's own Update toast: a manual update can
-          // also be installed by the background pass, and that is one update.
-          toast.success(`${name} updated to v${env.version}`, {
-            id: `agent-update:${env.plugin_id}:${env.version}`,
-          });
-        } else {
-          notifyAgentUpdateFailed({
-            pluginId: env.plugin_id,
-            name,
-            version: env.version,
-            error: env.error ?? null,
-          });
-        }
-        return;
-      }
-      switch (env.kind) {
-        case "text_chunk":
-          bufferChunk(env);
-          schedule();
-          return;
-        case "thinking_chunk":
-          bufferChunk(env);
-          schedule();
-          return;
-        case "tool_call_output_chunk":
-          bufferOutputChunk(env);
-          schedule();
-          return;
-        case "permission_request": {
-          // Permission requests block the agent waiting for the user
-          // — apply synchronously so the modal opens on the very next
-          // tick, not the next RAF (which can be ~16 ms away or more
-          // if the frame is busy with a flush of accumulated chunks).
-          actions.pushPermission({
-            agentId: env.agent_id,
-            acpSessionId: env.session_id,
-            requestId: env.request_id,
-            toolCall: env.tool_call as PendingPermission["toolCall"],
-            options: env.options as PendingPermission["options"],
-          });
-          notifyAgentEvent(env);
-          return;
-        }
-        case "permission_resolved":
-          actions.popPermission(env.session_id, env.request_id);
-          // Answered anywhere (in-app, another path, cancelled): its banner goes too.
-          resolveAgentPermission(env.session_id, String(env.request_id));
-          return;
-        case "agent_disconnected":
-          // Flush whatever's buffered before tearing the agent down
-          // so we don't lose a final chunk to the post-disconnect
-          // discard. `flush` cancels both pending drains itself.
-          // Forced: teardown correctness outranks the scroll-hold.
-          flush(true);
-          notifyAgentEvent(env);
-          actions.clearPermissionsForAgent(env.agent_id);
-          // Tabs still waiting to be bound on this agent have no session id
-          // for the reducer to route by; fail them by plugin instead. Read
-          // the pairing BEFORE the cache reset below forgets it.
-          {
-            const pluginId = pluginIdForAgentId(env.agent_id);
-            if (pluginId) actions.failPendingBinds(pluginId, env.reason);
-          }
-          // Reset the spawn cache for the plugin that actually died — the old
-          // resetDefaultAgent() only ever cleared claude-code-ts, so a crashed
-          // Codex adapter stayed cached-dead until app restart (H4).
-          resetAgentByAgentId(env.agent_id);
-          // Let the reducer flag the affected session (drives the Restart
-          // affordance + rebind-on-next-send).
-          bufferDelta(env);
-          schedule();
-          logEvent({
-            source: "atlas",
-            kind: "agent-disconnected",
-            summary: "Agent process disconnected; its spawn cache was reset",
-            status: "failure",
-            payload: { agentId: env.agent_id, reason: env.reason },
-          });
-          return;
-        case "turn_finished":
-          // Still pass through to the chat-store so session.status
-          // flips back to "idle" (see chat-store.ts:591).
-          bufferDelta(env);
-          schedule();
-          // Superseded by a newer send → the store ignores the idle flip; skip
-          // the log too (the notifier checks this itself).
-          if (isStaleAgentTurn(env.session_id, env.turn_seq)) return;
-          logEvent({
-            source: "atlas",
-            kind: "agent-turn-finished",
-            summary: `Agent turn finished (${env.stop_reason})`,
-            status: env.stop_reason === "cancelled" ? "failure" : "success",
-            payload: {
-              agentId: env.agent_id,
-              sessionId: env.session_id,
-              stopReason: env.stop_reason,
-            },
-          });
-          // The banner quotes the final message and the turn's stats, which the
-          // store only holds once this delta (and the text before it) is
-          // applied — drain the buffer now rather than at the next frame.
-          // The pipeline skips cancelled and stale turns itself.
-          flush(true);
-          notifyAgentEvent(env);
-          return;
-        case "turn_failed":
-          bufferDelta(env);
-          schedule();
-          notifyAgentEvent(env);
-          return;
-        case "elicitation_requested":
-          // The agent is blocked on the user's answer — same as a permission
-          // request, tell them (center, toast, banner) as well as render it.
-          bufferDelta(env);
-          schedule();
-          notifyAgentEvent(env);
-          return;
-        case "context_usage":
-        case "rate_limits":
-        case "retry_status":
-          // Warning-tier notifications (context window, quota, retrying).
-          bufferDelta(env);
-          schedule();
-          notifyAgentEvent(env);
-          return;
-        default:
-          bufferDelta(env);
-          schedule();
-          return;
-      }
-    }).then((un) => {
-      if (cancelled) un();
-      else unlisten = un;
-    });
-
-    // Agent spawn is deferred until the user first focuses the message input
-    // (see `MessageInput`'s focus handler). `npx -y @zed-industries/claude-code-acp`
-    // can take 10–30s on a cold npm cache; doing it at app boot adds visible
-    // latency to first paint and races the project-rehydration cascade. The
-    // user is unlikely to send a prompt within the first few hundred ms of
-    // focusing the composer, so the spawn finishes in the background while
-    // they type.
-
-    return () => {
-      cancelled = true;
-      if (rafId !== null) cancelAnimationFrame(rafId);
-      if (backstopId !== null) clearTimeout(backstopId);
-      window.removeEventListener("atlas:window-active", flushOnWake);
-      stopFocusTracking();
-      stopAnimationVisibility();
-      stopBadgeClearing();
-      stopSourceOpened();
-      window.removeEventListener("pointerdown", onUserActivity);
-      window.removeEventListener("keydown", onUserActivity);
-      window.removeEventListener("wheel", onUserActivity);
-      window.clearInterval(keepWarm);
-      window.clearTimeout(pruneTimer);
-      unlisten?.();
-    };
-  }, []);
+  // Global agent event bus: one listener routes `atlas:agents` into the chat
+  // store (frame-coalesced), the permission queue and the notification
+  // pipeline. All of it lives in `chat/lib/start-agent-events.ts`.
+  useEffect(() => startAgentEvents(), []);
 
   // Live file-tree updates. The fileindex watcher (started in
   // `fileindex_open_project`) emits `atlas:explorer:changed` with the

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => null) }));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
 
 import { useGitStore } from "@/features/git/stores/git-store";
 import { captureSnapshot, clearPanelStores, restoreSnapshot } from "./project-snapshot";

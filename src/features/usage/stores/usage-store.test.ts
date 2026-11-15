@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  invoke: vi.fn(),
   projects: [] as Array<{ path: string }>,
   orgListeners: [] as Array<(s: { activeOrganisationId: string | null }) => void>,
   org: { activeOrganisationId: "org-a" as string | null },
 }));
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+import { tauri } from "@/test/tauri-fake";
 vi.mock("@/features/projects/lib/org-scope", () => ({
   activeOrgProjectsSnapshot: () => mocks.projects,
 }));
@@ -41,8 +41,8 @@ function reset() {
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-09-17T12:00:00Z"));
-  mocks.invoke.mockReset();
-  mocks.invoke.mockResolvedValue(DASH);
+  tauri.invoke.mockReset();
+  tauri.invoke.mockResolvedValue(DASH);
   mocks.projects = [{ path: "/w/a" }, { path: "/w/b" }];
   reset();
 });
@@ -54,8 +54,8 @@ afterEach(() => {
 describe("refresh", () => {
   it("invokes usage_dashboard with the active org's project paths", async () => {
     await useUsageStore.getState().actions.refresh();
-    expect(mocks.invoke).toHaveBeenCalledTimes(1);
-    expect(mocks.invoke).toHaveBeenCalledWith("usage_dashboard", {
+    expect(tauri.invoke).toHaveBeenCalledTimes(1);
+    expect(tauri.invoke).toHaveBeenCalledWith("usage_dashboard", {
       projectPaths: ["/w/a", "/w/b"],
     });
     const s = useUsageStore.getState();
@@ -69,17 +69,17 @@ describe("refresh", () => {
     await refresh();
     vi.advanceTimersByTime(STALE_MS - 1);
     await refresh();
-    expect(mocks.invoke).toHaveBeenCalledTimes(1);
+    expect(tauri.invoke).toHaveBeenCalledTimes(1);
     vi.advanceTimersByTime(2);
     await refresh();
-    expect(mocks.invoke).toHaveBeenCalledTimes(2);
+    expect(tauri.invoke).toHaveBeenCalledTimes(2);
   });
 
   it("force refetches regardless of age", async () => {
     const { refresh } = useUsageStore.getState().actions;
     await refresh();
     await refresh({ force: true });
-    expect(mocks.invoke).toHaveBeenCalledTimes(2);
+    expect(tauri.invoke).toHaveBeenCalledTimes(2);
   });
 
   it("refetches when the project set changes", async () => {
@@ -87,8 +87,8 @@ describe("refresh", () => {
     await refresh();
     mocks.projects = [{ path: "/w/a" }];
     await refresh();
-    expect(mocks.invoke).toHaveBeenCalledTimes(2);
-    expect(mocks.invoke).toHaveBeenLastCalledWith("usage_dashboard", { projectPaths: ["/w/a"] });
+    expect(tauri.invoke).toHaveBeenCalledTimes(2);
+    expect(tauri.invoke).toHaveBeenLastCalledWith("usage_dashboard", { projectPaths: ["/w/a"] });
   });
 
   it("ignores project order in the signature", async () => {
@@ -96,11 +96,11 @@ describe("refresh", () => {
     await refresh();
     mocks.projects = [{ path: "/w/b" }, { path: "/w/a" }];
     await refresh();
-    expect(mocks.invoke).toHaveBeenCalledTimes(1);
+    expect(tauri.invoke).toHaveBeenCalledTimes(1);
   });
 
   it("records the error and clears loading on failure", async () => {
-    mocks.invoke.mockRejectedValueOnce("boom");
+    tauri.invoke.mockRejectedValueOnce("boom");
     await useUsageStore.getState().actions.refresh();
     const s = useUsageStore.getState();
     expect(s.error).toBe("boom");

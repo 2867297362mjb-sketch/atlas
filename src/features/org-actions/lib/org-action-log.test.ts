@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // The settings store subscribes to config events when it loads.
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}), emit: vi.fn() }));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
 
 import { useLogStore } from "@/features/log/stores/log-store";
 import { logOrgAction } from "./org-action-log";

@@ -6,8 +6,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * `instruction_sync_start` / `instruction_sync_stop` destructure; a rename on
  * either side is a silent no-op at runtime.
  */
-const invoke = vi.hoisted(() => vi.fn());
-vi.mock("@tauri-apps/api/core", () => ({ invoke }));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+import { tauri } from "@/test/tauri-fake";
+
+const invoke = tauri.invoke;
 
 const { instructionSync } = await import("./instruction-sync-api");
 
