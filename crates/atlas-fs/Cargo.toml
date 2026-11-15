@@ -1,0 +1,16 @@
+[package]
+name = "atlas-fs"
+version = "0.1.0"
+edition = "2021"
+description = "Crash-safe file replacement: one implementation of write-temp, fsync, rename, fsync-directory for every Atlas store that rewrites a file in place. No dependencies."
+
+[lib]
+name = "atlas_fs"
+
+# The workspace lint table is only real for members that opt in —
+# without this stanza it is dead configuration (#60).
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile = "3"

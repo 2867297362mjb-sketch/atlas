@@ -22,6 +22,11 @@
     "clippy": true
   },
   {
+    "crate": "atlas-fs",
+    "clippy": true,
+    "cross": true
+  },
+  {
     "crate": "atlas-agent-servers",
     "clippy": true,
     "cross": true

@@ -901,14 +901,9 @@ fn render_skill_md(name: &str, description: &str, body: &str) -> String {
 
 // ── Disk helpers ───────────────────────────────────────────────────────────────
 
-/// Atomic write: tmp + rename (mirrors `shared_memory::atomic_write`).
+/// [`atlas_fs::replace_file`] in this module's error type.
 fn atomic_write(path: &Path, payload: &str) -> Result<(), String> {
-    if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
-    let tmp = path.with_extension("tmp");
-    fs::write(&tmp, payload).map_err(|e| e.to_string())?;
-    fs::rename(&tmp, path).map_err(|e| e.to_string())
+    atlas_fs::replace_file(path, payload).map_err(|e| e.to_string())
 }
 
 /// True if `<root>/<tool.config_dir>` exists.
