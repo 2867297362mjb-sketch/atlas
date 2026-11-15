@@ -51,7 +51,7 @@ const RESUME_MODE = "src/features/chat/lib/resume-mode.ts";
 const BIND_SITES = [
   {
     what: "session/new, at bind time",
-    file: "src/features/chat/hooks/use-agent-bind.ts",
+    file: "src/features/chat/lib/session-bind.ts",
     // The fresh-session arm inlines `resolveEffectiveMode` + `setMode` rather
     // than calling `applyModeOnResume`: it has the `SessionInit` already and
     // seeds Claude's own permission pill, which `applyModeOnResume` only
