@@ -1,4 +1,4 @@
-import { startTransition, useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { AppLayout } from "@/features/layout/components/app-layout";
 import { CommandPalette } from "@/features/command-palette/components/command-palette";
@@ -18,11 +18,8 @@ import { TipTriggers } from "@/features/tips/components/tip-triggers";
 import { useNativeMenu } from "@/features/menu/lib/use-native-menu";
 import { useLayoutStore } from "@/features/layout/stores/layout-store";
 import { useTerminalStore } from "@/features/terminal/stores/terminal-store";
-import {
-  useAppStore,
-  setAppStateWritable,
-  type AppStateWire,
-} from "@/features/app/stores/app-store";
+import { useAppStore } from "@/features/app/stores/app-store";
+import { startAppBoot } from "@/features/app/lib/start-app-boot";
 import { useChatStore } from "@/features/chat/stores/chat-store";
 import { cycleChatAgent } from "@/features/chat/lib/switch-agent";
 import { HintOverlay } from "@/features/hint-nav/components/hint-overlay";
@@ -73,8 +70,6 @@ import {
 } from "@/features/notifications/lib/outcome-notifier";
 import { logEvent } from "@/features/log/lib/log";
 import { startSecurityNotifier } from "@/features/security/lib/security-notifier";
-import { primeMarkdownRenderer } from "@/lib/markdown-cache";
-import { primeMarkdown } from "@/lib/markdown";
 import { NotificationPanel } from "@/features/notifications/components/notification-panel";
 import { FeedbackPanel } from "@/features/feedback/components/feedback-panel";
 import { UpdateAvailableModal } from "@/features/updater/components/update-available-modal";
@@ -85,10 +80,7 @@ import { useQuitGuard } from "@/features/app/lib/use-quit-guard";
 import { RemoveAgentDialog } from "@/features/agents/components/remove-agent-dialog";
 import { useOrgStore } from "@/features/organisations/stores/org-store";
 import { useActiveOrgProjects, activeOrgProjectsSnapshot } from "@/features/projects/lib/org-scope";
-import {
-  isOrgReconciled,
-  markOrgReconciled,
-} from "@/features/organisations/lib/org-reconciliation";
+import { pushActiveOrgAtBoot } from "@/features/organisations/lib/active-org-change";
 import { comms, listenComms } from "@/features/comms/lib/comms-api";
 import { createCommsEnvelopeStream } from "@/features/comms/lib/comms-envelope-stream";
 import { startTeamPresenceListener } from "@/features/artifacts/lib/team-presence";
@@ -353,23 +345,15 @@ export function App() {
   // pushed on an explicit switch. Push it once at boot too, so the auth
   // snapshot — and everything keyed off it: the chat socket's target and the
   // gateway `atlas-org` billing header — follows the org actually on screen
-  // rather than whichever one the server listed first.
-  const orgReconciledRef = useRef(false);
+  // rather than whichever one the server listed first. Once per launch, and
+  // not at all after a switch: `pushActiveOrgAtBoot` owns that.
   const bootAuthStatus = useAuthStore((s) => s.snapshot.status);
   const bootLocalActiveOrg = useOrgStore.use.activeOrganisationId();
   const bootOrganisations = useOrgStore.use.organisations();
   useEffect(() => {
-    // `isOrgReconciled` covers the other pusher: an explicit `switchOrg` that
-    // ran before sign-in settled has already told Rust, and this push landing
-    // after it would drag the chat socket back to the org just left.
-    if (orgReconciledRef.current || isOrgReconciled()) return;
-    if (bootAuthStatus !== "signed-in" || !bootLocalActiveOrg) return;
-    const active = bootOrganisations.find((o) => o.id === bootLocalActiveOrg);
-    if (!active) return;
-    orgReconciledRef.current = true;
-    markOrgReconciled();
-    void invoke("auth_set_active_org", { orgId: active.remoteId ?? null }).catch((e) => {
-      console.warn("boot org reconciliation failed:", e);
+    pushActiveOrgAtBoot({
+      signedIn: bootAuthStatus === "signed-in",
+      activeOrg: bootOrganisations.find((o) => o.id === bootLocalActiveOrg),
     });
   }, [bootAuthStatus, bootLocalActiveOrg, bootOrganisations]);
 
@@ -466,142 +450,9 @@ export function App() {
   // `version`/`migrate`, so stale keys from old builds are handled per-store.
 
   // One-shot bootstrap of the Rust-owned `AppState` (currentProject +
-  // recentProjects). Replaces the zustand `persist` middleware that used
-  // to hydrate from localStorage. The Tauri invoke is async but fast
-  // (~5–20 ms warm); until it resolves the WelcomeScreen and project-aware
-  // panels render their empty/loading states.
-  //
-  // `startTransition` marks the welcome → project layout swap as non-urgent
-  // so React can pause reconciliation between component subtrees and keep
-  // the welcome UI interactive while the project layout mounts.
-  //
-  // Once hydration is done (success or failure) we dispatch `atlas:app-ready`
-  // — the inline script in `index.html` listens for it and removes the
-  // boot skeleton.
-  useEffect(() => {
-    let cancelled = false;
-    const signalReady = () => {
-      const flag = window as unknown as { __atlasAppReady?: boolean };
-      if (flag.__atlasAppReady) return;
-      flag.__atlasAppReady = true;
-      emitWindowEvent("atlas:app-ready");
-    };
-
-    (async () => {
-      // A terminal `atlas <path>` launch stashes the path in Rust (single-shot,
-      // so a window reload won't re-trigger). Consume it BEFORE hydrating: the
-      // CLI project must be ADDED to the project list and switched to, but
-      // hydrate replaces that list and fires its own `switchTo` — which would
-      // both clobber the CLI project and swallow the CLI switch (`switching`
-      // guard). So we suppress hydrate's auto-switch when a CLI path is present
-      // and perform the CLI open as the sole, final switch.
-      const cliPath = await invoke<string | null>("cli_take_initial_project_path").catch(
-        () => null,
-      );
-      // `bootstrap_app_state` is the only read of `state.json` Atlas ever
-      // performs, so a failure here is NOT "start empty and carry on": the
-      // stores keep their empty defaults, `AppState::apply_patch` replaces the
-      // persisted lists wholesale, and the unconditional quit flush would then
-      // write that emptiness over the user's real projects and orgs. Retry
-      // first — a transient IPC hiccup shouldn't cost a session.
-      let snapshot: AppStateWire | null = null;
-      for (let attempt = 1; attempt <= 3 && !snapshot; attempt++) {
-        try {
-          snapshot = await invoke<AppStateWire>("bootstrap_app_state");
-        } catch (e) {
-          console.warn(`bootstrap_app_state attempt ${attempt} failed:`, e);
-          if (attempt < 3) {
-            await new Promise((resolve) => setTimeout(resolve, 150 * attempt));
-          }
-        }
-      }
-      if (cancelled) return;
-      try {
-        if (snapshot) {
-          const payload = snapshot;
-          startTransition(() => {
-            // The stores are about to hold the user's real state, so writing
-            // them back is safe from here on. Before this line they hold empty
-            // defaults and persistence is denied — see `appStateWritable`.
-            setAppStateWritable(true);
-            useAppStore.getState().actions.hydrate(payload, { skipActiveSwitch: !!cliPath });
-            // Hydration replaces the org list wholesale, so re-apply any server
-            // orgs from a snapshot that may have already arrived — otherwise a
-            // sign-in that landed before this bootstrap would be overwritten.
-            const snap = useAuthStore.getState().snapshot;
-            if (snap.status === "signed-in" && snap.orgs) {
-              useOrgStore.getState().actions.mergeServerOrgs(snap.orgs);
-            }
-          });
-        } else {
-          // Every attempt failed. Come up in an explicitly READ-ONLY session
-          // rather than letting the empty stores overwrite `state.json`: the
-          // user's projects and orgs are still on disk, and a restart is what
-          // brings them back. Without this the app looks merely "empty" and
-          // then makes that permanent on quit.
-          setAppStateWritable(false);
-          logEvent({
-            source: "atlas",
-            kind: "bootstrap-failed",
-            summary: "bootstrap_app_state failed after 3 attempts; app-state writes suspended",
-            status: "failure",
-          });
-          toast.error(
-            "Atlas couldn't load your projects. Your saved data is safe on disk — restart Atlas to get it back.",
-            { duration: Infinity },
-          );
-          startTransition(() => {
-            useAppStore.getState().actions.hydrate(
-              {
-                currentProject: null,
-                recentProjects: [],
-                version: 1,
-              },
-              { skipActiveSwitch: !!cliPath },
-            );
-          });
-        }
-      } finally {
-        if (!cancelled) {
-          // Only open the CLI path when we actually have a snapshot. Without
-          // one there is no org to own the project, so `addProject` would
-          // refuse anyway — and its "no organisation" toast would bury the
-          // boot-failure one that actually tells the user what to do.
-          if (cliPath && snapshot) {
-            logEvent({
-              source: "atlas",
-              kind: "cli-launch-open-project",
-              summary: `Adding project from CLI argv: ${cliPath}`,
-              status: "success",
-              payload: { path: cliPath },
-            });
-            await useAppStore
-              .getState()
-              .actions.openProject(cliPath)
-              .catch((err) => {
-                logEvent({
-                  source: "atlas",
-                  kind: "cli-launch-open-project-failed",
-                  summary: `openProject failed: ${String(err)}`,
-                  status: "failure",
-                  payload: { error: String(err) },
-                });
-              });
-          }
-          signalReady();
-          // First paint is done — pull in the main-thread markdown renderer
-          // now so the first small chat block still parses synchronously. It
-          // is deliberately NOT a static import (it would land in the eager
-          // entry chunk); see `primeMarkdownRenderer`.
-          primeMarkdownRenderer();
-          primeMarkdown();
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  // recentProjects), and the decision whether this session may write it
+  // back. All of it lives in `app/lib/boot-sequence.ts`.
+  useEffect(() => startAppBoot(), []);
 
   const [newTabPaletteOpen, setNewTabPaletteOpen] = useState(false);
   // The project rail's "Open module" row opens the same palette ⌘⌥N does.
