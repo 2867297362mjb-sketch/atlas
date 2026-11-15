@@ -686,6 +686,7 @@ dependencies = [
  "atlas-checkpoint",
  "atlas-comms",
  "atlas-embed",
+ "atlas-gh",
  "atlas-git",
  "atlas-gitdiff",
  "atlas-icon-theme",
@@ -3241,6 +3242,15 @@ dependencies = [
  "tokio",
  "url",
  "wiremock",
+]
+
+[[package]]
+name = "atlas-gh"
+version = "0.1.0"
+dependencies = [
+ "atlas-process",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

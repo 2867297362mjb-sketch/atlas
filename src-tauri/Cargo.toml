@@ -151,6 +151,7 @@ atlas-gitdiff = { path = "../crates/atlas-gitdiff" }
 # error taxonomy with friendly messages, porcelain-v2 status, streaming
 # output. Drives `commands::git`, `commands::git_ops`, `commands::git_snapshot`.
 atlas-git = { path = "../crates/atlas-git" }
+atlas-gh = { path = "../crates/atlas-gh" }
 # Single source of truth for secret redaction. Capture scrubs agent content on
 # the way *into* the local store rather than on the way out to the network, so
 # nothing downstream — sync, export, share, support bundles — has to remember to
