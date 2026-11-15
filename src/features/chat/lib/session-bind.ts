@@ -312,6 +312,14 @@ export function createSessionBind(deps: SessionBindDeps): SessionBind {
         reportedBindFailures.delete(`${tabId}:${pluginId}`);
         signInAttempted.delete(`${tabId}:${pluginId}`);
         retriedBinds.delete(`${tabId}:${pluginId}`);
+        // The attempt is over here, and what follows is seeding the tab from
+        // the session it now holds. `stale()` is the wrong question for that:
+        // binding is exactly what makes the panel let go of the bind (its
+        // effect re-runs on `acpSessionId`), so by the time the snapshot's
+        // round trip answers this attempt is always stale, and guarding on it
+        // skipped everything below on every bind. What can go wrong from here
+        // is the tab moving to ANOTHER session before the snapshot is back.
+        const moved = () => deps.chat().sessions[tabId]?.acpSessionId !== key.session_id;
         // Seed the composer mode picker from the freshly-created session's
         // advertised modes (Codex: read-only / auto / full-access). The modes
         // are seeded into the Rust SessionState by `new_session`, so the
@@ -319,7 +327,7 @@ export function createSessionBind(deps: SessionBindDeps): SessionBind {
         // of its own permission pill.
         try {
           const snap = await deps.agents.snapshotMeta(key);
-          if (!stale()) {
+          if (!moved()) {
             // Defensive `?.` — a snapshot from an older agent build may omit
             // these arrays; a throw here used to silently skip ALL seeding.
             const modes = snap.available_modes ?? [];
@@ -386,7 +394,7 @@ export function createSessionBind(deps: SessionBindDeps): SessionBind {
                 } catch (err) {
                   console.warn("re-applying a config-option pref failed:", err);
                 }
-                if (stale()) return;
+                if (moved()) return;
               }
             }
             // Boot finished (with or without modes) — drop the loading state.
@@ -394,7 +402,7 @@ export function createSessionBind(deps: SessionBindDeps): SessionBind {
           }
         } catch (err) {
           console.warn("snapshot for modes failed:", err);
-          if (!stale()) deps.chat().actions.setAcpModesPending(tabId, false);
+          if (!moved()) deps.chat().actions.setAcpModesPending(tabId, false);
         }
       } catch (err) {
         console.warn("Agent session creation failed:", err);

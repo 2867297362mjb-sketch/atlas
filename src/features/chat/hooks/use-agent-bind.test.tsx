@@ -30,6 +30,7 @@ import { useLogStore } from "@/features/log/stores/log-store";
 import type { AgentCatalogEntry } from "@/types/agent-catalog";
 import { useChatStore } from "../stores/chat-store";
 import { resetAgent } from "../lib/agents-api";
+import { saveConfigOptionPref } from "../lib/config-option-prefs";
 import { sessionBind } from "../lib/session-bind";
 import { takeSignInCallback } from "../lib/agent-signin";
 import { useAgentBind, type BindControl } from "./use-agent-bind";
@@ -276,6 +277,112 @@ describe("a new session", () => {
     spawn.resolve(AGENT);
     await flush();
     expect(count("agents_new_session")).toBe(1);
+  });
+});
+
+describe("once the binding lands", () => {
+  const MODELS = [
+    { id: "m-small", name: "Small" },
+    { id: "m-large", name: "Large" },
+  ];
+  const KNOBS = [
+    {
+      id: "thought",
+      name: "Thinking",
+      category: "thought_level",
+      type: "select",
+      currentValue: "medium",
+      options: [
+        { value: "low", name: "Low" },
+        { value: "high", name: "High" },
+        { value: "medium", name: "Medium" },
+      ],
+    },
+  ];
+  const advertising = () =>
+    meta("sess-1", {
+      current_model: "m-large",
+      available_models: MODELS,
+      available_commands: [{ name: "review", description: "Review the diff" }],
+      config_options: KNOBS,
+    });
+
+  // The snapshot is an IPC round trip, so it always answers after the commit
+  // in which the panel saw its tab bound and let go of the bind. Held here to
+  // say so: answering in the same tick would hide what this pins.
+  function heldSnapshot() {
+    const snap = deferred<unknown>();
+    tauri.handleRaw({
+      // The first session's snapshot is the held one; a later session's
+      // answers at once and advertises nothing.
+      agents_snapshot_meta: ({ key }) => {
+        const id = (key as { session_id: string }).session_id;
+        return id === "sess-1" ? snap.promise : meta(id);
+      },
+    });
+    return snap;
+  }
+
+  it("seeds what session/new advertised and no delta will repeat, and ends the loading state", async () => {
+    const snap = heldSnapshot();
+    mountPanel();
+    await flush();
+    expect(session().acpSessionId).toBe("sess-1");
+    expect(session().acpModesPending).toBe(true);
+
+    snap.resolve(advertising());
+    await flush();
+    expect(session().availableCommands).toHaveLength(1);
+    expect(session().acpConfigOptions).toHaveLength(1);
+    expect(session().acpAvailableModels).toHaveLength(2);
+    expect(session().acpModesPending).toBe(false);
+  });
+
+  it("re-applies the user's remembered config-option picks to the new session", async () => {
+    saveConfigOptionPref("codex", "thought", "high");
+    const snap = heldSnapshot();
+    mountPanel();
+    await flush();
+    snap.resolve(advertising());
+    await flush();
+
+    expect(tauri.calls("agents_set_config_option")).toEqual([
+      {
+        cmd: "agents_set_config_option",
+        args: {
+          key: { agent_id: AGENT.agent_id, session_id: "sess-1" },
+          configId: "thought",
+          value: "high",
+        },
+      },
+    ]);
+  });
+
+  it("ends the loading state when the snapshot cannot be read", async () => {
+    const snap = heldSnapshot();
+    mountPanel();
+    await flush();
+    snap.reject({ message: "busy" });
+    await flush();
+    expect(session().acpModesPending).toBe(false);
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("drops a snapshot that answers after the tab moved to another session", async () => {
+    saveConfigOptionPref("codex", "thought", "high");
+    const snap = heldSnapshot();
+    mountPanel();
+    await flush();
+
+    // "New session" in the same tab, before the first one's snapshot is back.
+    act(() => store().actions.clearSession(TAB));
+    await flush();
+    expect(session().acpSessionId).toBe("sess-2");
+    snap.resolve(advertising());
+    await flush();
+    expect(session().availableCommands ?? []).toHaveLength(0);
+    expect(session().acpAvailableModels ?? []).toHaveLength(0);
+    expect(count("agents_set_config_option")).toBe(0);
   });
 });
 
