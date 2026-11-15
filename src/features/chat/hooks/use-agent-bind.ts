@@ -17,6 +17,7 @@ import { configOptionPushes, loadConfigOptionPrefs } from "../lib/config-option-
 import { bindFailureAction, errInfo, promptSignIn } from "../lib/agent-signin";
 import { projectPathForTab } from "../lib/tab-project";
 import { resolveEffectiveMode } from "../lib/resume-mode";
+import { onWindowEvent } from "@/lib/window-events";
 
 /** Tab+agent pairs whose bind failure has already been surfaced, so the
  *  focus-triggered retry doesn't re-toast the same error on every focus.
@@ -469,17 +470,15 @@ export function useAgentBind(
     // Focus event acts as a retry — if the initial bind threw (e.g. the
     // agent process couldn't spawn yet because Claude Code finished
     // installing mid-session), refocusing the composer will try again.
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent<{ tabId?: string }>).detail;
+    const offChatInputFocused = onWindowEvent("atlas:chat-input-focused", (detail) => {
       if (!detail || detail.tabId !== tabId) return;
       if (useChatStore.getState().sessions[tabId]?.acpSessionId) return;
       void ensureBound();
-    };
-    window.addEventListener("atlas:chat-input-focused", handler);
+    });
     return () => {
       cancelled = true;
       bindControlRef.current = null;
-      window.removeEventListener("atlas:chat-input-focused", handler);
+      offChatInputFocused();
     };
     // `!!session` is in the dep list so the bind effect actually
     // fires after the parallel `createSession` effect (chat-panel) flips

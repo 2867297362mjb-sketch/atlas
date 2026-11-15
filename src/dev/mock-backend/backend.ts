@@ -15,6 +15,7 @@ import { mountBadge } from "./badge";
 import { resetStores } from "./reset-stores";
 import { mockAssetUrl } from "./fixtures/files";
 import type { MockArgs, MockHandlers, Scenario } from "./types";
+import { onWindowEvent } from "@/lib/window-events";
 
 declare global {
   interface Window {
@@ -100,15 +101,13 @@ export function startMockBackend(name: string): MockBackend {
 
   if (scenario?.setup) {
     const run = scenario.setup;
-    window.addEventListener(
-      "atlas:app-ready",
-      () => {
-        // Let the first commit settle so stores have hydrated before the
-        // scenario opens tabs or fires events.
-        setTimeout(() => void run(), 0);
-      },
-      { once: true },
-    );
+    // Once: the unsubscribe is the first thing the listener does.
+    const off = onWindowEvent("atlas:app-ready", () => {
+      off();
+      // Let the first commit settle so stores have hydrated before the
+      // scenario opens tabs or fires events.
+      setTimeout(() => void run(), 0);
+    });
   }
 
   console.info(`[mock-backend] active — scenario "${name}"`);

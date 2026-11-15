@@ -57,6 +57,7 @@ import {
 } from "./file-surface-chrome";
 import { FILE_DOCK_RESERVE } from "@/features/explorer/lib/file-tabs";
 import { Button } from "@tryatlas/design";
+import { onWindowEvent } from "@/lib/window-events";
 
 /**
  * A file tab: the file's text in the code editor (`codemirror-file-view.tsx`),
@@ -434,11 +435,11 @@ export function EditorPanel({ tabId, filePath, containerHeight }: EditorPanelPro
     };
     const un = listen("atlas:explorer:changed", soon);
     const onActive = () => void revalidateRef.current();
-    window.addEventListener("atlas:window-active", onActive);
+    const offWindowActive = onWindowEvent("atlas:window-active", onActive);
     return () => {
       clearTimeout(timer);
       void un.then((u) => u());
-      window.removeEventListener("atlas:window-active", onActive);
+      offWindowActive();
     };
   }, [path, hasBuffer, isUntitled]);
 

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { useComposerFold } from "./use-composer-fold";
+import { emitWindowEvent } from "@/lib/window-events";
 
 /** The composer's focused / folded form: focus moving into it opens it; focus
  *  moving elsewhere, a press outside, or Esc folds it (when `collapsible`). */
@@ -67,6 +68,6 @@ export function useChatInputFocusedSignal(tabId: string, disabled: boolean) {
     if (disabled) return;
     if (focusedOnceRef.current) return;
     focusedOnceRef.current = true;
-    window.dispatchEvent(new CustomEvent("atlas:chat-input-focused", { detail: { tabId } }));
+    emitWindowEvent("atlas:chat-input-focused", { tabId });
   }, [tabId, disabled]);
 }

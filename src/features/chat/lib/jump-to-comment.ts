@@ -9,6 +9,7 @@
 
 import { useChatCommentsStore } from "../stores/chat-comments-store";
 import { useChatStore } from "../stores/chat-store";
+import { emitWindowEvent } from "@/lib/window-events";
 
 export interface ChatJumpDetail {
   index: number;
@@ -77,5 +78,5 @@ function focusThreadFor(tabId: string, rowId: string): void {
 }
 
 function dispatchJump(detail: ChatJumpDetail): void {
-  window.dispatchEvent(new CustomEvent<ChatJumpDetail>("atlas:chat-jump", { detail }));
+  emitWindowEvent("atlas:chat-jump", detail);
 }

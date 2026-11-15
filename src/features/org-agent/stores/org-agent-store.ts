@@ -53,6 +53,7 @@ import type {
   Mention,
 } from "../lib/org-agent-types";
 import { ATLAS_LIMITS } from "../lib/org-agent-types";
+import { emitWindowEvent } from "@/lib/window-events";
 
 export const NEW_CHAT_TITLE = "New chat";
 
@@ -373,15 +374,11 @@ export const useOrgAgentStore = createSelectors(
             later("effort", 400, () => void get().actions.refreshEffort());
             later("notifications", 400, () => void get().actions.refreshNotifications());
             if (event.kind === "report") {
-              window.dispatchEvent(
-                new CustomEvent("atlas:org-agent-report", {
-                  detail: {
-                    askId: event.ask_id,
-                    title: event.payload.title,
-                    partial: event.payload.partial,
-                  },
-                }),
-              );
+              emitWindowEvent("atlas:org-agent-report", {
+                askId: event.ask_id,
+                title: event.payload.title,
+                partial: event.payload.partial,
+              });
             }
           }
           const ended =

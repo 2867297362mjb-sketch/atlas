@@ -15,6 +15,7 @@ vi.mock("@/features/settings/lib/open-settings", () => ({ openSettingsSection: v
 import { searchGithub } from "@/features/github/lib/github-api";
 import type { GithubRepo } from "@/features/github/types";
 import { ComposerAddMenu } from "./composer-add-menu";
+import { emitWindowEvent, onWindowEvent } from "@/lib/window-events";
 
 afterEach(cleanup);
 
@@ -39,13 +40,12 @@ const trigger = () => screen.getByRole("button", { name: /Attach files/ });
 describe("ComposerAddMenu", () => {
   it("announces itself when it opens, so the other composer menus close", async () => {
     const heard = vi.fn();
-    const on = (e: Event) => heard((e as CustomEvent<string>).detail);
-    window.addEventListener("atlas:composer-menu-open", on);
+    const off = onWindowEvent("atlas:composer-menu-open", (opened) => heard(opened));
     renderMenu();
     await act(async () => {
       fireEvent.click(trigger());
     });
-    window.removeEventListener("atlas:composer-menu-open", on);
+    off();
     expect(heard).toHaveBeenCalledWith("add");
     expect(screen.getByText("Attach media")).toBeTruthy();
   });
@@ -65,7 +65,7 @@ describe("ComposerAddMenu", () => {
     });
     expect(screen.queryByText("Attach media")).not.toBeNull();
     await act(async () => {
-      window.dispatchEvent(new CustomEvent("atlas:composer-menu-open", { detail: "options" }));
+      emitWindowEvent("atlas:composer-menu-open", "options");
     });
     await vi.waitFor(() => expect(screen.queryByText("Attach media")).toBeNull());
   });
@@ -93,7 +93,7 @@ describe("ComposerAddMenu", () => {
 
     // Another composer menu takes over; then the + menu opens again.
     await act(async () => {
-      window.dispatchEvent(new CustomEvent("atlas:composer-menu-open", { detail: "options" }));
+      emitWindowEvent("atlas:composer-menu-open", "options");
     });
     await vi.waitFor(() => expect(screen.queryByText("Attach media")).toBeNull());
     await act(async () => {

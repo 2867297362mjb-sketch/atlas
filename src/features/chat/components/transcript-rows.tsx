@@ -55,6 +55,7 @@ import { ProseRowActions } from "./prose-row-actions";
 import { RemoteAuthor } from "./remote-author";
 import { StreamingMarkdown } from "./streaming-markdown";
 import { UserRowActions } from "./user-row-actions";
+import { emitWindowEvent } from "@/lib/window-events";
 
 /** What every desktop slot below reads: resolved once by the transcript. */
 interface TranscriptScope {
@@ -194,10 +195,7 @@ export function DesktopTranscriptProvider({
       onRetry: () => void retryLastTurn(tabId),
       // Continue is an ordinary message, sent through `atlas:chat-send` like a
       // suggestion chip, so every agent gets it.
-      onContinue: () =>
-        window.dispatchEvent(
-          new CustomEvent("atlas:chat-send", { detail: { tabId, text: CONTINUE_AFTER_SLEEP } }),
-        ),
+      onContinue: () => emitWindowEvent("atlas:chat-send", { tabId, text: CONTINUE_AFTER_SLEEP }),
     }),
     [tabId, onToggleExpand, onToggleGroup],
   );

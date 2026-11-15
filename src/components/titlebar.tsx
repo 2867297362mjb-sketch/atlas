@@ -24,13 +24,13 @@ import { isLinux, isMac, isWindows } from "@/lib/platform";
 import { AppMenuButton } from "@/features/menu/components/menu-bar";
 import { OrgSwitcher } from "@/features/organisations/components/org-switcher";
 import { BreadcrumbButton, BreadcrumbSeparator } from "./breadcrumb-button";
-import { OPEN_CAPTURE_EVENT } from "@/features/capture/lib/open-capture";
 import { RightPanelToggle } from "@/features/layout/components/right-panel-toggle";
 import { AccountButton } from "@/features/auth/components/account-button";
 import { HelpSubmenu } from "./help-submenu";
 import { endPeek, releasePeek, requestPeek } from "@/features/sidebar/lib/sidebar-peek";
 import { RailGlyph, HintGroup, HintItem, Spinner } from "@tryatlas/design";
 import { beginDragOnMove, isWindowSurface } from "./titlebar-chrome";
+import { emitWindowEvent, onWindowEvent } from "@/lib/window-events";
 
 /**
  * The native window, for dragging and zooming. Resolved once per module and
@@ -233,7 +233,7 @@ function PaletteSearchButton({ className }: { className?: string }) {
     <HintItem label={hint ? `Search (${hint})` : "Search"} className={className}>
       <button
         type="button"
-        onClick={() => window.dispatchEvent(new CustomEvent("atlas:command-palette"))}
+        onClick={() => emitWindowEvent("atlas:command-palette")}
         aria-label="Search"
         className="flex size-6 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 hover:bg-element-hover hover:text-secondary-foreground"
       >
@@ -482,8 +482,7 @@ function ProjectLabel({
     const onOpenCapture = () => {
       if (path && rootRef.current?.offsetParent) setCaptureOpen(true);
     };
-    window.addEventListener(OPEN_CAPTURE_EVENT, onOpenCapture);
-    return () => window.removeEventListener(OPEN_CAPTURE_EVENT, onOpenCapture);
+    return onWindowEvent("atlas:open-capture", onOpenCapture);
   }, [path]);
 
   return (

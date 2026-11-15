@@ -32,8 +32,8 @@ import { useChatStore } from "../stores/chat-store";
 import { useLiveElsewhereStore } from "../stores/live-elsewhere-store";
 import { pluginIdForAgent } from "@/types/agent";
 import { resetAgent } from "../lib/agents-api";
-import { CHAT_STOP_EVENT } from "../lib/switch-agent";
 import { ChatPanel } from "./chat-panel";
+import { emitWindowEvent } from "@/lib/window-events";
 
 const TAB = "tab-1";
 const AGENT = "agent-1";
@@ -75,13 +75,13 @@ function mount() {
 /** A send from outside the composer: a chip, a handoff, another agent's `ui_chat`. */
 function chatSend(text: string) {
   act(() => {
-    window.dispatchEvent(new CustomEvent("atlas:chat-send", { detail: { tabId: TAB, text } }));
+    emitWindowEvent("atlas:chat-send", { tabId: TAB, text });
   });
 }
 
 function stop() {
   act(() => {
-    window.dispatchEvent(new CustomEvent(CHAT_STOP_EVENT, { detail: { tabId: TAB } }));
+    emitWindowEvent("atlas:chat-stop", { tabId: TAB });
   });
 }
 

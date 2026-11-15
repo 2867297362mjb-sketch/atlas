@@ -10,7 +10,6 @@ import { copyText } from "@/lib/clipboard";
 import { openFile } from "@/lib/open-file";
 import { skills as skillsApi } from "@/features/skills/lib/skills-api";
 import { packs as packsApi } from "@/features/packs/lib/packs-api";
-import { SKILLS_CHANGED_EVENT } from "@/features/skills/lib/skills-events";
 import {
   deliveredToolNames,
   githubUrlFor,
@@ -36,6 +35,7 @@ import {
   SkillManageDialogView,
   type PackUpdateState,
 } from "./views/installed-skills-view";
+import { onWindowEvent } from "@/lib/window-events";
 
 type ModalTarget =
   | { kind: "pack"; pack: InstalledPack }
@@ -122,8 +122,7 @@ export function InstalledSkills({
   // Reflect installs/mutations happening elsewhere (e.g. Discover).
   useEffect(() => {
     const onChanged = () => void refresh().catch(() => {});
-    window.addEventListener(SKILLS_CHANGED_EVENT, onChanged);
-    return () => window.removeEventListener(SKILLS_CHANGED_EVENT, onChanged);
+    return onWindowEvent("atlas:skills-changed", onChanged);
   }, [refresh]);
 
   const tools = view?.tools ?? [];

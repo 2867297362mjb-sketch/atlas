@@ -5,7 +5,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { ResponseSelectionActions } from "./response-selection-actions";
 import { selectionCommentBody } from "@/features/artifacts/lib/selection-comment";
 import { CommentBody } from "@/features/artifacts/components/comment-thread";
-import { COMMENT_LINK_EVENT, type CommentLinkDetail } from "../lib/comment-mentions";
+import { type CommentLinkDetail } from "../lib/comment-mentions";
+import { onWindowEvent } from "@/lib/window-events";
 
 const state = vi.hoisted(() => ({
   shared: true,
@@ -100,12 +101,11 @@ function click(node: Element, at = { clientX: 100, clientY: 200 }) {
 function linked() {
   const details: CommentLinkDetail[] = [];
   // A composer marks the event handled; the popover closes only on that.
-  const listener = (e: Event) => {
-    details.push((e as CustomEvent<CommentLinkDetail>).detail);
+  const stop = onWindowEvent("atlas:chat-link-comment", (detail, e) => {
+    details.push(detail);
     e.preventDefault();
-  };
-  window.addEventListener(COMMENT_LINK_EVENT, listener);
-  return { details, stop: () => window.removeEventListener(COMMENT_LINK_EVENT, listener) };
+  });
+  return { details, stop };
 }
 
 /** Select `testId`'s text and open Cite's popover; its note field. */

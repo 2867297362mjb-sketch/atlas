@@ -16,9 +16,11 @@ import { fileURLToPath } from "node:url";
  * during the 2026-08-22 module removals (memory-chat's model events died with
  * `memory_chat.rs`); this test makes the next one loud.
  *
- * Window `CustomEvent`s (`dispatchEvent`/`addEventListener`) are TS↔TS and
- * type-checked routes exist for neither side, but they never cross the IPC
- * boundary — they are out of scope here on purpose.
+ * Window `CustomEvent`s are TS↔TS and never cross the IPC boundary — they
+ * are out of scope here on purpose. They have their own map and helpers
+ * (`src/lib/window-events.ts`) and their own suite
+ * (`window-event-contract.test.ts`), which also keeps their names off the
+ * channels checked here.
  *
  * Only *shipping* code counts on either side. `src/dev/` (the browser mock
  * backend, which emits most channels itself so `bun run dev` has data) and

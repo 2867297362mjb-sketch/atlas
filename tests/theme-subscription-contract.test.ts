@@ -27,7 +27,7 @@ import { fileURLToPath } from "node:url";
  *
  *   `onThemeApplied(cb)`   imperative owners (xterm, the two pixi scenes)
  *   `useThemeVersion()`    React (recharts, mermaid)
- *   a raw `window.addEventListener(THEME_APPLIED_EVENT, …)` (CodeMirror,
+ *   a direct `onWindowEvent("atlas:theme-applied", …)` (CodeMirror,
  *                          which reconfigures a compartment rather than
  *                          re-rendering)
  *
@@ -42,8 +42,7 @@ const SRC = path.join(REPO_ROOT, "src");
 const READER = /\b(?:themeColor|themeBase|themeDerived|themeHex|getActiveTheme)\s*\(/;
 
 /** Any of these means the file is told when the theme changed. */
-const SUBSCRIBER =
-  /\b(?:onThemeApplied|useThemeVersion)\s*\(|THEME_APPLIED_EVENT|atlas:theme-applied/;
+const SUBSCRIBER = /\b(?:onThemeApplied|useThemeVersion)\s*\(|atlas:theme-applied/;
 
 const ALLOW_MARKER = /theme-subscription-allow:\s*(.*)$/m;
 
@@ -161,7 +160,7 @@ describe("theme subscription contract", () => {
     // Self-test for the comment stripping the checks above rely on.
     const commented = [
       "// listens for atlas:theme-applied via onThemeApplied(cb)",
-      "/* useThemeVersion() would go here; THEME_APPLIED_EVENT */",
+      "/* useThemeVersion() would go here; atlas:theme-applied */",
       'const url = "https://example.invalid/x"; // onThemeApplied(',
     ].join("\n");
     expect(SUBSCRIBER.test(stripComments(commented))).toBe(false);
@@ -179,7 +178,7 @@ describe("theme subscription contract", () => {
         "These read a RESOLVED theme colour and would keep the palette they were",
         "constructed with after a switch — the failure a freshly-mounted check",
         "cannot see. Subscribe with `onThemeApplied` / `useThemeVersion` / a",
-        "`THEME_APPLIED_EVENT` listener, or add a `theme-subscription-allow:`",
+        "`atlas:theme-applied` listener, or add a `theme-subscription-allow:`",
         "comment saying why the value cannot go stale.",
         ...deaf.map((f) => `  ${f}`),
       ].join("\n"),

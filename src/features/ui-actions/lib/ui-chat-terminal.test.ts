@@ -13,6 +13,7 @@ import { useProjectStore } from "@/features/projects/stores/project-store";
 import { performUiAction } from "./ui-actions";
 import { seedWindow, tab, uiRequest } from "./test-fixtures";
 import type { UiActionReply } from "./types";
+import { onWindowEvent } from "@/lib/window-events";
 
 const result = (reply: UiActionReply) => {
   if (!reply.ok) throw new Error(`expected ok, got: ${reply.error}`);
@@ -24,20 +25,25 @@ const error = (reply: UiActionReply) => {
 };
 const act = (tool: string, args: Record<string, unknown>) => performUiAction(uiRequest(tool, args));
 
-/** Every `atlas:chat-*` window event dispatched while `run` runs. */
-async function heard(run: () => Promise<unknown>): Promise<Array<[string, unknown]>> {
-  const got: Array<[string, unknown]> = [];
-  const names = [
-    "atlas:chat-focus",
-    "atlas:chat-prefill",
-    "atlas:chat-insert",
-    "atlas:chat-send",
-    "atlas:chat-jump",
+/** Every `atlas:chat-*` window event dispatched while `run` runs: the
+ *  details, by what the event asks of the composer. */
+async function heard(run: () => Promise<unknown>) {
+  const got = {
+    focus: [] as unknown[],
+    prefill: [] as unknown[],
+    insert: [] as unknown[],
+    send: [] as unknown[],
+    jump: [] as unknown[],
+  };
+  const offs = [
+    onWindowEvent("atlas:chat-focus", (detail) => void got.focus.push(detail)),
+    onWindowEvent("atlas:chat-prefill", (detail) => void got.prefill.push(detail)),
+    onWindowEvent("atlas:chat-insert", (detail) => void got.insert.push(detail)),
+    onWindowEvent("atlas:chat-send", (detail) => void got.send.push(detail)),
+    onWindowEvent("atlas:chat-jump", (detail) => void got.jump.push(detail)),
   ];
-  const on = (e: Event) => got.push([e.type, (e as CustomEvent).detail]);
-  names.forEach((n) => window.addEventListener(n, on));
   await run();
-  names.forEach((n) => window.removeEventListener(n, on));
+  for (const off of offs) off();
   return got;
 }
 
@@ -78,10 +84,7 @@ beforeEach(() => {
 describe("ui_chat", () => {
   it("prefills the calling session's own composer by default", async () => {
     const events = await heard(() => act("ui_chat", { op: "prefill", text: "Fix the build" }));
-    expect(events).toContainEqual([
-      "atlas:chat-prefill",
-      { tabId: "chat-1", text: "Fix the build" },
-    ]);
+    expect(events.prefill).toContainEqual({ tabId: "chat-1", text: "Fix the build" });
     expect(useLayoutStore.getState().activeTabId).toBe("chat-1");
   });
 
@@ -90,14 +93,14 @@ describe("ui_chat", () => {
       act("ui_chat", { op: "insert", tabId: "chat-2", text: "and the tests" }),
     );
     expect(useChatStore.getState().activeSessionId).toBe("chat-2");
-    expect(events).toContainEqual(["atlas:chat-insert", { text: "and the tests" }]);
+    expect(events.insert).toContainEqual({ text: "and the tests" });
   });
 
   it("focuses a composer and jumps to a message", async () => {
     const focus = await heard(() => act("ui_chat", { op: "focus", tabId: "chat-2" }));
-    expect(focus).toContainEqual(["atlas:chat-focus", { tabId: "chat-2" }]);
+    expect(focus.focus).toContainEqual({ tabId: "chat-2" });
     const jump = await heard(() => act("ui_chat", { op: "jump", tabId: "chat-2", index: 3 }));
-    expect(jump).toContainEqual(["atlas:chat-jump", { index: 3 }]);
+    expect(jump.jump).toContainEqual({ index: 3 });
   });
 
   /// Own-session refusal: the agent may not speak for the user in its own
@@ -106,7 +109,7 @@ describe("ui_chat", () => {
     const send = await heard(async () =>
       expect(error(await act("ui_chat", { op: "send", text: "go" }))).toMatch(/prefill/),
     );
-    expect(send.filter(([n]) => n === "atlas:chat-send")).toEqual([]);
+    expect(send.send).toEqual([]);
     expect(error(await act("ui_chat", { op: "switch_agent", agent: "claude-acp" }))).toMatch(
       /your own/,
     );
@@ -127,7 +130,7 @@ describe("ui_chat", () => {
         /prefill/,
       ),
     );
-    expect(send.filter(([n]) => n === "atlas:chat-send")).toEqual([]);
+    expect(send.send).toEqual([]);
     expect(
       error(await act("ui_chat", { op: "switch_agent", tabId: "chat-1", agent: "claude-acp" })),
     ).toMatch(/your own/);
@@ -137,7 +140,7 @@ describe("ui_chat", () => {
     const events = await heard(() =>
       act("ui_chat", { op: "send", tabId: "chat-2", text: "status?" }),
     );
-    expect(events).toContainEqual(["atlas:chat-send", { tabId: "chat-2", text: "status?" }]);
+    expect(events.send).toContainEqual({ tabId: "chat-2", text: "status?" });
   });
 
   it("refuses send into a chat whose session another process is writing, until Send anyway", async () => {
@@ -149,7 +152,7 @@ describe("ui_chat", () => {
         /active in another process.*prefill/,
       ),
     );
-    expect(held.filter(([n]) => n === "atlas:chat-send")).toEqual([]);
+    expect(held.send).toEqual([]);
     // Prefill is still allowed: the user decides.
     expect(result(await act("ui_chat", { op: "prefill", tabId: "chat-2", text: "go" })).op).toBe(
       "prefill",
@@ -157,7 +160,7 @@ describe("ui_chat", () => {
 
     useLiveElsewhereStore.getState().actions.sendAnyway("sess-2");
     const sent = await heard(() => act("ui_chat", { op: "send", tabId: "chat-2", text: "go" }));
-    expect(sent).toContainEqual(["atlas:chat-send", { tabId: "chat-2", text: "go" }]);
+    expect(sent.send).toContainEqual({ tabId: "chat-2", text: "go" });
   });
 
   it("refuses a chat another project owns, naming it", async () => {

@@ -34,7 +34,6 @@ import { adoptSessionDrawer } from "@/features/terminal/lib/session-drawer";
 import { SessionDockLane } from "./session-dock-lane";
 import { projectPathForTab } from "../lib/tab-project";
 import { MemoryUpdatedCard } from "@/features/memory/components/memory-updated-card";
-import { OPEN_TURN_DIFF_EVENT, type TurnDiffRequest } from "../lib/open-turn-diff";
 import { showTurnDiff } from "../lib/show-turn-diff";
 import { PermissionModal } from "./permission-modal";
 import { ChatCommentsController } from "./chat-comments-controller";
@@ -88,6 +87,7 @@ const ChatSearchPalette = lazy(() =>
 // messages.
 const Transcript = lazy(() => import("./transcript").then((m) => ({ default: m.Transcript })));
 import type { TranscriptHandle } from "./transcript";
+import { emitWindowEvent, useWindowEvent } from "@/lib/window-events";
 // Diffs + tool output live here rather than inline in the thread — see the
 // module header for why that's a perf decision as much as a UX one.
 const DetailPanel = lazy(() => import("./detail-panel").then((m) => ({ default: m.DetailPanel })));
@@ -150,14 +150,9 @@ export const ChatPanel = memo(function ChatPanel({ tabId }: ChatPanelProps) {
   // event rather than a prop chain so a row opening it re-renders nothing in
   // the transcript. Every mounted chat hears it; only the one holding the turn
   // finds edits for it, so only that one opens anything.
-  useEffect(() => {
-    const onOpen = (e: Event) => {
-      const detail = (e as CustomEvent<TurnDiffRequest>).detail;
-      if (detail?.turnId) showTurnDiff(tabId, detail);
-    };
-    window.addEventListener(OPEN_TURN_DIFF_EVENT, onOpen);
-    return () => window.removeEventListener(OPEN_TURN_DIFF_EVENT, onOpen);
-  }, [tabId]);
+  useWindowEvent("atlas:open-turn-diff", (detail) => {
+    if (detail?.turnId) showTurnDiff(tabId, detail);
+  });
 
   // Warm the review panel's chunk while the reader is idle, so opening a
   // turn's diff is a paint rather than a fetch. Not its workers: they start
@@ -297,7 +292,7 @@ export const ChatPanel = memo(function ChatPanel({ tabId }: ChatPanelProps) {
         toast.error("That message is no longer in this thread");
         return;
       }
-      window.dispatchEvent(new CustomEvent("atlas:chat-jump", { detail: { index, tabId } }));
+      emitWindowEvent("atlas:chat-jump", { index, tabId });
     },
     [tabId],
   );
@@ -426,9 +421,7 @@ export const ChatPanel = memo(function ChatPanel({ tabId }: ChatPanelProps) {
           <BashHistoryPanel
             messages={session.messages}
             onJump={(idx) => {
-              window.dispatchEvent(
-                new CustomEvent("atlas:chat-jump", { detail: { index: idx, tabId } }),
-              );
+              emitWindowEvent("atlas:chat-jump", { index: idx, tabId });
             }}
             onClose={() => closeSidePanel(tabId)}
           />
@@ -463,11 +456,7 @@ export const ChatPanel = memo(function ChatPanel({ tabId }: ChatPanelProps) {
             open={searchPaletteOpen}
             onOpenChange={setSearchPaletteOpen}
             messages={session.messages}
-            onJump={(idx) =>
-              window.dispatchEvent(
-                new CustomEvent("atlas:chat-jump", { detail: { index: idx, tabId } }),
-              )
-            }
+            onJump={(idx) => emitWindowEvent("atlas:chat-jump", { index: idx, tabId })}
           />
         </Suspense>
       )}
@@ -486,9 +475,7 @@ function WelcomeState() {
     <WelcomeStateView
       greeting={greeting}
       backdrop={<WelcomeGlow />}
-      onPick={(text) =>
-        window.dispatchEvent(new CustomEvent("atlas:chat-prefill", { detail: { text } }))
-      }
+      onPick={(text) => emitWindowEvent("atlas:chat-prefill", { text })}
     />
   );
 }

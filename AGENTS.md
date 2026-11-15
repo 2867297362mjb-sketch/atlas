@@ -148,6 +148,9 @@ free; xterm, pixi, recharts and friends cannot, so they must hear the change.
 and by nothing else. The exception is the session-delta payload, whose TypeScript is
 generated from `crates/atlas-agent-wire` into `src/bindings/agent-wire/`, so `tsc`
 checks its fields. Check `event-contract.test.ts` before inventing a channel name.
+The window events that share the `atlas:` prefix are a separate, typed namespace:
+`window-event-contract.test.ts` keeps every one of them in the map in
+`src/lib/window-events.ts` and behind its helpers, and off the channel names.
 
 **Three cargo-workspace rules, each failing quietly** (`cargo-workspace.test.ts`):
 `[patch]` tables are honored only in the manifest cargo was invoked on — always the
@@ -232,7 +235,9 @@ kebab-case** (`center-panel.tsx`), the exceptions being `src/App.tsx` and the
 generated `src/bindings/`, named after their Rust types. Zustand +
 Immer stores wrapped in `createSelectors` so `useStore.use.x()` works; stores never call
 other stores — cross-feature coordination is `getState()` at an action boundary or a
-`window.dispatchEvent(new CustomEvent("atlas:…"))`. Tailwind composed via `cn()`.
+window event, declared in the map in `src/lib/window-events.ts` and sent and heard
+only through its `emitWindowEvent` / `onWindowEvent` / `useWindowEvent`. Tailwind
+composed via `cn()`.
 
 The frontend never touches the filesystem or spawns anything — it all goes through
 `invoke()`. **Rust owns authoritative state** for the heavy subsystems (chat log,

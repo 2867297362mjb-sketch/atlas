@@ -103,6 +103,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@tryatlas/design";
+import { emitWindowEvent } from "@/lib/window-events";
 
 /**
  * One footer icon button: a 24px ghost square around a 12px glyph, filling on
@@ -428,7 +429,7 @@ export function UserRowActions({
   // this prompt again" button did. The composer owns the draft, so this goes
   // through its tab-scoped `atlas:chat-prefill` seam.
   const onEdit = useCallback(() => {
-    window.dispatchEvent(new CustomEvent("atlas:chat-prefill", { detail: { text, tabId } }));
+    emitWindowEvent("atlas:chat-prefill", { text, tabId });
   }, [text, tabId]);
 
   const onPin = useCallback(() => {

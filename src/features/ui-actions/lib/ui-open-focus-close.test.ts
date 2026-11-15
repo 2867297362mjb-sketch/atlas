@@ -75,6 +75,7 @@ import { performUiAction } from "./ui-actions";
 import { seedWindow, tab, uiRequest } from "./test-fixtures";
 import type { UiActionReply } from "./types";
 import { RESTING_LIFECYCLE } from "@/features/chat/lib/session-lifecycle";
+import { onWindowEvent } from "@/lib/window-events";
 
 const layout = () => useLayoutStore.getState();
 const result = (reply: UiActionReply) => {
@@ -210,17 +211,17 @@ describe("ui_open", () => {
 
   it("navigates an existing browser tab instead of opening a second", async () => {
     const heard = vi.fn();
-    window.addEventListener("atlas:browser-navigate", heard);
+    const off = onWindowEvent("atlas:browser-navigate", heard);
     const first = result(await act("ui_open", { target: "url", url: "https://a.dev" })).tabId;
     const second = result(await act("ui_open", { target: "url", url: "https://b.dev" })).tabId;
     expect(second).toBe(first);
     expect(layout().tabs.filter((t) => t.type === "browser")).toHaveLength(1);
     expect(heard).toHaveBeenCalledOnce();
-    expect((heard.mock.calls[0][0] as CustomEvent).detail).toEqual({
+    expect(heard.mock.calls[0][0]).toEqual({
       tabId: first,
       url: "https://b.dev",
     });
-    window.removeEventListener("atlas:browser-navigate", heard);
+    off();
   });
 
   it("focuses a thread whose chat is already open", async () => {

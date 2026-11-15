@@ -1,8 +1,8 @@
-/** What the title bar's project label hears to open its capture popover. */
-export const OPEN_CAPTURE_EVENT = "atlas:open-capture";
+import { emitWindowEvent } from "@/lib/window-events";
 
 /** ⌘⌥C and the palette's "Open Session Capture": the project label's
- *  capture popover. */
+ *  capture popover, which the title bar's project label opens on hearing
+ *  `atlas:open-capture`. */
 export function openCapture(): void {
-  window.dispatchEvent(new CustomEvent(OPEN_CAPTURE_EVENT));
+  emitWindowEvent("atlas:open-capture");
 }

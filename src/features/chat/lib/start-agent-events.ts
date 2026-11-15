@@ -28,6 +28,7 @@ import { useChatStore } from "../stores/chat-store";
 import { createAgentEventRouter, startIdleWake } from "./agent-event-router";
 import { listenAgents, pluginIdForAgentId, resetAgentByAgentId } from "./agents-api";
 import { pruneContextUsageCache } from "./context-usage-cache";
+import { emitWindowEvent, onWindowEvent } from "@/lib/window-events";
 
 export function startAgentEvents(): () => void {
   let cancelled = false;
@@ -42,7 +43,7 @@ export function startAgentEvents(): () => void {
   const stopSourceOpened = initSourceOpenedClearing();
 
   const stopIdleWake = startIdleWake({
-    signalActive: () => window.dispatchEvent(new CustomEvent("atlas:window-active")),
+    signalActive: () => emitWindowEvent("atlas:window-active"),
     isForeground: () => isWindowFocused() && document.visibilityState === "visible",
     keepWarm: warmMarkdownWorker,
   });
@@ -78,7 +79,7 @@ export function startAgentEvents(): () => void {
   // (The stream's own backstop timer covers a reader watching an unfocused
   // window, where there is no wake edge to hear.)
   const flushOnWake = () => router.flush();
-  window.addEventListener("atlas:window-active", flushOnWake);
+  const offWindowActive = onWindowEvent("atlas:window-active", flushOnWake);
 
   void listenAgents(router.route).then((un) => {
     if (cancelled) un();
@@ -96,7 +97,7 @@ export function startAgentEvents(): () => void {
   return () => {
     cancelled = true;
     router.dispose();
-    window.removeEventListener("atlas:window-active", flushOnWake);
+    offWindowActive();
     stopFocusTracking();
     stopAnimationVisibility();
     stopBadgeClearing();

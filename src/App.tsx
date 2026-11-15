@@ -17,7 +17,6 @@ import { TipHost } from "@/features/tips/components/tip-host";
 import { TipTriggers } from "@/features/tips/components/tip-triggers";
 import { useNativeMenu } from "@/features/menu/lib/use-native-menu";
 import { useLayoutStore } from "@/features/layout/stores/layout-store";
-import { OPEN_SURFACE_MENU_EVENT } from "@/features/layout/lib/surfaces";
 import { useTerminalStore } from "@/features/terminal/stores/terminal-store";
 import {
   useAppStore,
@@ -145,6 +144,7 @@ import { toggleDestination } from "@/features/layout/lib/destinations";
 import { toggleAgentPanel } from "@/features/layout/lib/org-agent";
 import { startOrgAgentBridge } from "@/features/org-agent/lib/org-agent-bridge";
 import { TooltipProvider } from "@tryatlas/design";
+import { emitWindowEvent, onWindowEvent } from "@/lib/window-events";
 
 // Developer console toggle for session holds (Universal RC groundwork).
 if (isDev) installDevSessionHold();
@@ -340,9 +340,9 @@ export function App() {
       isSignedIn: () => useAuthStore.getState().snapshot.status === "signed-in",
       minIntervalMs: AUTH_WAKE_REFRESH_MS,
     });
-    window.addEventListener("atlas:window-active", refreshOnWake);
+    const offWindowActive = onWindowEvent("atlas:window-active", refreshOnWake);
     return () => {
-      window.removeEventListener("atlas:window-active", refreshOnWake);
+      offWindowActive();
       for (const p of offs) void p.then((off) => off());
     };
   }, []);
@@ -484,7 +484,7 @@ export function App() {
       const flag = window as unknown as { __atlasAppReady?: boolean };
       if (flag.__atlasAppReady) return;
       flag.__atlasAppReady = true;
-      window.dispatchEvent(new CustomEvent("atlas:app-ready"));
+      emitWindowEvent("atlas:app-ready");
     };
 
     (async () => {
@@ -609,15 +609,13 @@ export function App() {
   // than the state being lifted into a store for one caller.
   useEffect(() => {
     const open = () => setNewTabPaletteOpen(true);
-    window.addEventListener("atlas:new-tab-palette", open);
-    return () => window.removeEventListener("atlas:new-tab-palette", open);
+    return onWindowEvent("atlas:new-tab-palette", open);
   }, []);
   // ⌘K's overlay keeps its state in its own store (it shares the overlay
   // with ⌘P); the rail's org-row search button still asks for it by event.
   useEffect(() => {
     const open = () => useCommandPaletteStore.getState().actions.setOpen(true);
-    window.addEventListener("atlas:command-palette", open);
-    return () => window.removeEventListener("atlas:command-palette", open);
+    return onWindowEvent("atlas:command-palette", open);
   }, []);
   const [layoutSwitcherOpen, setLayoutSwitcherOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -960,9 +958,7 @@ export function App() {
       const target = focusedGroupId === groupOrder[0] ? groupOrder[1] : focusedGroupId;
       if (layout.surfaces === "hidden") actions.setSurfaces("shown");
       actions.setFocusedGroup(target);
-      window.dispatchEvent(
-        new CustomEvent(OPEN_SURFACE_MENU_EVENT, { detail: { groupId: target } }),
-      );
+      emitWindowEvent("atlas:open-surface-menu", { groupId: target });
     },
     // New agent chat, unbound by default (⌘T A opens one). Singleton: focuses
     // the existing chat tab and resets it to a fresh session rather than

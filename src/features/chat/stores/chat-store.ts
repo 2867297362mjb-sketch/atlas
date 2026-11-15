@@ -51,6 +51,7 @@ import { toolCallFacts } from "../lib/tool-changes";
 import { inlineQueuedText } from "../lib/queued-text";
 import type { MentionData } from "../lib/mentions";
 import type { TurnFile, TurnInterruption } from "@/types/agent";
+import { emitWindowEvent } from "@/lib/window-events";
 
 /** `firstUserContent` is a preview field, never the full text — see the note
  *  at its appendMessage write. 200 chars covers every consumer (they slice to
@@ -788,7 +789,7 @@ async function capturePlanIfPresent(
   try {
     await invoke("plans_append", { projectPath, record });
     // Let an open Plans panel refresh without re-opening.
-    window.dispatchEvent(new CustomEvent("atlas:plan-saved"));
+    emitWindowEvent("atlas:plan-saved");
   } catch {
     /* non-fatal — persistence failure shouldn't affect the permission flow */
   }
@@ -2510,18 +2511,14 @@ function applyDeltaToDraft(s: ChatDraft, env: AgentDelta, addedToolCalls?: Set<s
       // (Claude → login dialog, Codex → sign-in pill); native/BYOK keys are
       // covered by the error text pointing at Settings → Agents → Provider keys.
       if (env.error_kind === "auth") {
-        window.dispatchEvent(
-          new CustomEvent("atlas:auth-required", {
-            // `reason` carries the agent's own words through to the dialog,
-            // which reads them to tell "needs a provider API key Atlas can
-            // collect in-app" apart from "needs a login flow".
-            detail: {
-              sessionId: env.session_id,
-              agentType: session.agentType,
-              reason: env.error,
-            },
-          }),
-        );
+        emitWindowEvent("atlas:auth-required", {
+          sessionId: env.session_id,
+          agentType: session.agentType,
+          // `reason` carries the agent's own words through to the dialog,
+          // which reads them to tell "needs a provider API key Atlas can
+          // collect in-app" apart from "needs a login flow".
+          reason: env.error,
+        });
       }
       delete s.pendingPermissions[env.session_id];
       return;

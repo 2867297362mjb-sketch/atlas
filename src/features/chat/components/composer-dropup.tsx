@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { emitWindowEvent, onWindowEvent } from "@/lib/window-events";
 
 /**
  * The composer footer's dropup grammar, in one place.
@@ -59,16 +60,15 @@ export function useComposerDropup(
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setOpen(false);
     };
-    const onOther = (e: Event) => {
-      if ((e as CustomEvent<string>).detail !== menuId) setOpen(false);
-    };
     window.addEventListener("mousedown", onDown);
     window.addEventListener("keydown", onKey);
-    window.addEventListener("atlas:composer-menu-open", onOther);
+    const offComposerMenuOpen = onWindowEvent("atlas:composer-menu-open", (opened) => {
+      if (opened !== menuId) setOpen(false);
+    });
     return () => {
       window.removeEventListener("mousedown", onDown);
       window.removeEventListener("keydown", onKey);
-      window.removeEventListener("atlas:composer-menu-open", onOther);
+      offComposerMenuOpen();
     };
   }, [open, menuId]);
 
@@ -90,7 +90,7 @@ export function useComposerDropup(
     if (disabled) return;
     setOpen((cur) => {
       if (cur) return false;
-      window.dispatchEvent(new CustomEvent("atlas:composer-menu-open", { detail: menuId }));
+      emitWindowEvent("atlas:composer-menu-open", menuId);
       return true;
     });
   }, [disabled, menuId]);

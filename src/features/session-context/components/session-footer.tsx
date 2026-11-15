@@ -12,7 +12,7 @@
  *
  * The cloud actions need a synced session (`chat_comment_target`, resolved by
  * `ChatCommentsController`); without one they are disabled, and say why.
- * Find is the thread's own search (`OPEN_CHAT_FIND_EVENT`) and works either
+ * Find is the thread's own search (`atlas:chat-open-find`) and works either
  * way.
  *
  * Restored from the card's former Session section (`session-actions.tsx`,
@@ -40,7 +40,6 @@ import { readCachedDetail, writeCachedDetail } from "@/features/artifacts/lib/de
 import { readSessionDetail } from "@/features/artifacts/lib/read-session-detail";
 import { useArtifactsStore } from "@/features/artifacts/stores/artifacts-store";
 import type { SessionDetail } from "@/features/artifacts/types";
-import { OPEN_CHAT_FIND_EVENT } from "@/features/chat/lib/use-pane-find";
 import { useActionShortcut } from "@/features/keybindings/lib/use-action-shortcut";
 import { useLayoutStore } from "@/features/layout/stores/layout-store";
 import { cn } from "@/lib/utils";
@@ -51,6 +50,7 @@ import {
   type CommentTargetIds,
 } from "@/features/chat/stores/chat-comments-store";
 import { HintGroup, HintItem } from "@tryatlas/design";
+import { emitWindowEvent } from "@/lib/window-events";
 
 /** `--morph-close-dur` plus a beat: the portal outlives the shrink. */
 const MORPH_UNMOUNT_MS = 300;
@@ -113,8 +113,7 @@ export function SessionFooter({
     });
   };
 
-  const openFind = () =>
-    window.dispatchEvent(new CustomEvent(OPEN_CHAT_FIND_EVENT, { detail: { tabId } }));
+  const openFind = () => emitWindowEvent("atlas:chat-open-find", { tabId });
 
   // What the actions act on ("Session") on the left, every action together on
   // the right.

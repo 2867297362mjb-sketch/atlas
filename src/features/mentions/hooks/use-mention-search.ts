@@ -14,9 +14,9 @@ import {
   type MentionKind,
   type PastSessionRef,
 } from "@/features/chat/lib/mentions";
-import { SKILLS_CHANGED_EVENT } from "@/features/skills/lib/skills-events";
 import { ensureFileIndex } from "@/features/file-picker/lib/file-picker-api";
 import { activeProjectId } from "@/features/projects/lib/active-project";
+import { onWindowEvent } from "@/lib/window-events";
 
 export function useMentionSearch({
   open,
@@ -190,8 +190,7 @@ export function useMentionSearch({
   useEffect(() => {
     if (!open) return;
     const onChanged = () => setIndexNonce((n) => n + 1);
-    window.addEventListener(SKILLS_CHANGED_EVENT, onChanged);
-    return () => window.removeEventListener(SKILLS_CHANGED_EVENT, onChanged);
+    return onWindowEvent("atlas:skills-changed", onChanged);
   }, [open]);
 
   return {

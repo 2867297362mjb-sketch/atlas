@@ -6,6 +6,7 @@ import { listen } from "@tauri-apps/api/event";
 import { logEvent } from "@/features/log/lib/log";
 import type { GitErrorPayload } from "../lib/git-errors";
 import { pullPreference } from "../lib/git-remote-api";
+import type { GitChangedPayload } from "@/features/git/lib/git-changed-events";
 
 /** Background-fetch outcome for one project (`atlas:git-autofetch`). */
 /** Mirror of `PullStrategy` in `commands/git_ops.rs`: how a pull reconciles a
@@ -231,7 +232,7 @@ function ensureGitStatusFreshListener(): void {
   // status, branches, ahead/behind, stashes and in-progress state (the old
   // six-loader fan-out was 10-25 git spawns per change); the log is the
   // only extra load.
-  void listen<{ project: string }>("atlas:git-changed", (e) => {
+  void listen<GitChangedPayload>("atlas:git-changed", (e) => {
     const current = useGitStore.getState().repoPath;
     if (!current || current !== e.payload.project) return;
     const actions = useGitStore.getState().actions;
