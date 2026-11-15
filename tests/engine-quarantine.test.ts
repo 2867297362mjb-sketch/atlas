@@ -3,6 +3,8 @@ import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { walk } from "./support/walk";
+import { expectFloor } from "./support/floor";
 
 /**
  * Keeps the engine quarantined (issue #42, spec D2 / Phase 1).
@@ -76,13 +78,10 @@ function atlasManifests(): string[] {
 /** Engine crate directories (recursive — some live under `ext/` and `utils/`). */
 function vendoredManifests(dir = VENDOR): string[] {
   if (!existsSync(dir)) return [];
-  const out: string[] = [];
-  for (const e of readdirSync(dir, { withFileTypes: true })) {
-    const p = path.join(dir, e.name);
-    if (e.isDirectory()) out.push(...vendoredManifests(p));
-    else if (e.name === "Cargo.toml") out.push(p);
-  }
-  return out;
+  // No skips: a manifest under a directory named `target` is still a crate.
+  return walk(dir, ["Cargo.toml"], { skip: [] }).filter(
+    (file) => path.basename(file) === "Cargo.toml",
+  );
 }
 
 /** `atlas-engine-foo = …` / `atlas-engine-foo.workspace = true` in a dependency table. */
@@ -141,7 +140,7 @@ describe("the engine is present and whole", () => {
 
 describe("nothing that ships depends on the engine", () => {
   it("finds Atlas's manifests (parser health)", () => {
-    expect(atlasManifests().length).toBeGreaterThan(10);
+    expectFloor("Atlas manifests: src-tauri and crates/*", atlasManifests().length, 26);
   });
 
   it("no Atlas crate declares a atlas-agent dependency", () => {

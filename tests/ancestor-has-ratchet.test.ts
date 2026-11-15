@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { walk } from "./support/walk";
+import { expectFloor } from "./support/floor";
 
 /**
  * No `group-has-[…]` / `peer-has-[…]`.
@@ -29,20 +31,19 @@ import { fileURLToPath } from "node:url";
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const BANNED = /\b(?:group|peer)-has-[[\w]/;
 
-function walk(dir: string): string[] {
-  const out: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const p = path.join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...walk(p));
-    else if (/\.(tsx?|css)$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) out.push(p);
-  }
-  return out;
+/** Everything that can carry a class name; a test may quote the banned form. */
+function scanned(): string[] {
+  return walk(path.join(REPO_ROOT, "src"), [".ts", ".tsx", ".css"]).filter(
+    (file) => !/\.test\.tsx?$/.test(file),
+  );
 }
 
 describe("ancestor :has() ratchet", () => {
   it("src/ uses no group-has-[…] or peer-has-[…] variant", () => {
     const hits: string[] = [];
-    for (const file of walk(path.join(REPO_ROOT, "src"))) {
+    const files = scanned();
+    expectFloor("non-test TypeScript and CSS files under src/", files.length, 1350);
+    for (const file of files) {
       readFileSync(file, "utf8")
         .split(/\r?\n/)
         .forEach((line, i) => {

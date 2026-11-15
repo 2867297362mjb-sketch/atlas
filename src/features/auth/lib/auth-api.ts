@@ -273,3 +273,9 @@ export const listenAuthSignedOut = (
   handler: (e: { message: string }) => void,
 ): Promise<UnlistenFn> =>
   listen<{ message: string }>("atlas:auth-signed-out", (e) => handler(e.payload));
+
+/** Tell Rust which organisation the window is on (`null` for a local one).
+ *  Triggers the auth broadcast, which re-points the team-chat socket. */
+export function setActiveOrg(orgId: string | null): Promise<void> {
+  return invoke("auth_set_active_org", { orgId });
+}

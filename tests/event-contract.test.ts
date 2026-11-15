@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { walk } from "./support/walk";
+import { expectFloor } from "./support/floor";
 
 /**
  * Guards the Tauri *event* seam, the way `ipc-contract.test.ts` guards the
@@ -41,24 +43,15 @@ const RUST_ROOTS = [path.join(REPO_ROOT, "src-tauri", "src"), path.join(REPO_ROO
 
 /**
  * Floors that make a vacuous pass impossible: if a refactor breaks the
- * extraction regexes, the derived sets collapse and the subset assertion
- * passes trivially. These are well under the real counts at the time of
- * writing (32 listened / 58+ produced) — a smoke alarm for "the parser
- * broke", not a coverage target.
+ * extraction regexes or a root moves, the derived sets collapse and the
+ * subset assertion passes trivially. Each is a little under the real count: a
+ * smoke alarm for "the parser broke", not a coverage target.
  */
-const MIN_LISTENED = 15;
-const MIN_PRODUCED = 30;
-
-function walk(dir: string, extensions: string[]): string[] {
-  const out: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name === "target" || entry.name === "node_modules") continue;
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...walk(full, extensions));
-    else if (extensions.some((e) => entry.name.endsWith(e))) out.push(full);
-  }
-  return out;
-}
+const MIN_TS_FILES = 1250;
+const MIN_RUST_FILES = 450;
+const MIN_CONSTANTS = 10;
+const MIN_LISTENED = 48;
+const MIN_PRODUCED = 80;
 
 /** The mock backend under `src/dev/` and test files are not shipping code:
  *  neither may produce, nor count as listening to, a real channel. */
@@ -131,8 +124,19 @@ describe("tauri event contract", () => {
   const produced = producedEvents();
 
   it("extracted enough of both sides to be meaningful", () => {
-    expect(listened.size).toBeGreaterThanOrEqual(MIN_LISTENED);
-    expect(produced.size).toBeGreaterThanOrEqual(MIN_PRODUCED);
+    expectFloor("shipping TypeScript files under src/", shippingTsFiles().length, MIN_TS_FILES);
+    expectFloor(
+      "Rust files under src-tauri/src and crates/",
+      RUST_ROOTS.flatMap((root) => walk(root, [".rs"])).length,
+      MIN_RUST_FILES,
+    );
+    expectFloor(
+      'exported `"atlas:…"` constants in shipping TypeScript',
+      constants.size,
+      MIN_CONSTANTS,
+    );
+    expectFloor("channels the frontend listens on", listened.size, MIN_LISTENED);
+    expectFloor("channels with a producer", produced.size, MIN_PRODUCED);
   });
 
   it("resolves listens that name their channel through an exported constant", () => {

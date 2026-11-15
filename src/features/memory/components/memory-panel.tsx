@@ -1,11 +1,11 @@
 import { useTipOnMount } from "@/features/tips/lib/use-tip-on-mount";
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { Download, FileOutput, FolderInput, MoreHorizontal, RefreshCw, Trash2 } from "lucide-react";
 import { FileTreeConfirmDelete } from "@/features/explorer/components/file-tree-confirm-delete";
 import { chainBroken, healthLine, useMemoryHealth } from "../lib/use-memory-health";
 import { reviewCount } from "../lib/memory-review-items";
+import { acceptMemoryHistory } from "../lib/shared-memory-api";
 import { MemoryActivity } from "./memory-activity";
 import { MemoryAgentFiles } from "./memory-agent-files";
 import { MemoryEntries } from "./memory-entries";
@@ -293,7 +293,7 @@ function MemoryHealthLine({ projectPath }: { projectPath: string | null }) {
   const accept = async () => {
     setConfirm(false);
     try {
-      await invoke<boolean>("memory_accept_history", { projectPath });
+      await acceptMemoryHistory(projectPath);
       toast.success("Memory history accepted");
     } catch (err) {
       toast.error(`Couldn't accept: ${err instanceof Error ? err.message : String(err)}`);

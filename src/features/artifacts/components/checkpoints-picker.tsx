@@ -16,13 +16,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Popover } from "@base-ui/react/popover";
-import { invoke } from "@tauri-apps/api/core";
 import { GitBranch, GitCommitHorizontal, Loader2, Unlink } from "lucide-react";
 
 import { timeAgo } from "@/lib/time-ago";
 
 import { DOCK_TRIGGER } from "./header-dock";
 
+import { readCheckpoints } from "../lib/board-api";
 import type { BoardCheckpoint } from "../types";
 import { HintItem } from "@tryatlas/design";
 
@@ -67,7 +67,7 @@ export function CheckpointsPicker({
     if (!open) return;
     const mine = ++seq.current;
     setRows(null);
-    invoke<BoardCheckpoint[]>("artifacts_checkpoints", { projects })
+    readCheckpoints(projects)
       .then((result) => {
         if (mine === seq.current) setRows(result);
       })

@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { walk } from "./support/walk";
+import { expectFloor } from "./support/floor";
 
 /**
  * Every consumer that reads a RESOLVED theme colour must have a way to hear
@@ -104,15 +106,8 @@ const EXEMPT: Record<string, string> = {
     "Same as `canvas-export.ts`: a one-shot export. The Usage tab's PDF/JPEG capture reads the background once, at the moment the user asks for the file.",
 };
 
-function walk(dir: string): string[] {
-  const out: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...walk(full));
-    else if (/\.(ts|tsx)$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) out.push(full);
-  }
-  return out;
-}
+/** Shipping sources: a test mounts under one theme and never sees a switch. */
+const scanned = walk(SRC, [".ts", ".tsx"]).filter((file) => !/\.test\.tsx?$/.test(file));
 
 interface Reader {
   where: string;
@@ -120,7 +115,7 @@ interface Reader {
   allowReason: string | null;
 }
 
-const readers: Reader[] = walk(SRC).flatMap((file) => {
+const readers: Reader[] = scanned.flatMap((file) => {
   const raw = readFileSync(file, "utf8");
   const code = stripComments(raw);
   if (!READER.test(code)) return [];
@@ -137,9 +132,10 @@ const readers: Reader[] = walk(SRC).flatMap((file) => {
 
 describe("theme subscription contract", () => {
   it("finds the readers at all (no vacuous pass)", () => {
-    // Well under the real count (13 at the time of writing): a smoke alarm for
-    // "the regex stopped matching", not a coverage target.
-    expect(readers.length).toBeGreaterThanOrEqual(8);
+    // A smoke alarm for "the root moved" and "the regex stopped matching",
+    // not a coverage target.
+    expectFloor("shipping TypeScript files under src/", scanned.length, 1350);
+    expectFloor("files that read a resolved theme value", readers.length, 12);
     // And the seven subsystems the 2026-09-18 review named as the risk are all
     // still in the set, by the path they live at.
     for (const file of [

@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isTestFile, walk } from "./support/walk";
+import { expectFloor } from "./support/floor";
+import { bracketBody } from "./support/source";
 
 /**
  * Guards the *window event* seam: the DOM `CustomEvent`s on `window` that
@@ -83,25 +85,27 @@ const KNOWN_ONE_ENDED: Record<string, "no emitter" | "no listener"> = {
 /**
  * Floors that make a vacuous pass impossible: if a refactor moves the map or
  * breaks a regex, the derived sets collapse and every assertion below passes
- * by matching nothing. Well under the real counts when written (35 events,
- * ~110 emit sites, ~100 listen sites, ~2000 files, 60+ channels): an alarm
- * for "the scan broke", not a target.
+ * by matching nothing. A little under the real counts: an alarm for "the scan
+ * broke", not a target.
  */
-const MIN_EVENTS = 25;
-const MIN_FILES = 800;
-const MIN_EMIT_SITES = 50;
-const MIN_LISTEN_SITES = 40;
-const MIN_CHANNELS = 30;
+const MIN_EVENTS = 30;
+const MIN_FILES = 1800;
+const MIN_EMIT_SITES = 75;
+const MIN_LISTEN_SITES = 68;
+const MIN_CHANNELS = 52;
 
 const rel = (file: string) => path.relative(REPO_ROOT, file);
 
 /** The names declared in `AtlasWindowEvents`. */
 function declaredEvents(): string[] {
-  const src = readFileSync(MAP_FILE, "utf8");
-  const start = src.indexOf("export interface AtlasWindowEvents {");
-  if (start < 0) return [];
-  const end = src.indexOf("\n}", start);
-  const body = src.slice(start, end);
+  const body = bracketBody(
+    readFileSync(MAP_FILE, "utf8"),
+    /\bexport interface AtlasWindowEvents\b/,
+    {
+      lang: "ts",
+      where: rel(MAP_FILE),
+    },
+  );
   return [...body.matchAll(/^\s+"(atlas:[a-z0-9:-]+)"\s*:/gm)].map((m) => m[1]);
 }
 
@@ -201,17 +205,21 @@ describe("window event contract", () => {
   const channels = tauriChannels(files);
 
   it("scanned enough to be meaningful", () => {
-    expect(events.length).toBeGreaterThanOrEqual(MIN_EVENTS);
+    expectFloor("events declared in AtlasWindowEvents", events.length, MIN_EVENTS);
     expect(new Set(events).size).toBe(events.length);
-    expect(files.size).toBeGreaterThanOrEqual(MIN_FILES);
-    expect(windowSites.filter((s) => s.helper === "emitWindowEvent").length).toBeGreaterThanOrEqual(
+    expectFloor("TypeScript files under src/", files.size, MIN_FILES);
+    expectFloor(
+      "emitWindowEvent call sites",
+      windowSites.filter((s) => s.helper === "emitWindowEvent").length,
       MIN_EMIT_SITES,
     );
-    expect(
+    expectFloor(
+      "onWindowEvent and useWindowEvent call sites",
       windowSites.filter((s) => s.helper === "onWindowEvent" || s.helper === "useWindowEvent")
         .length,
-    ).toBeGreaterThanOrEqual(MIN_LISTEN_SITES);
-    expect(channels.size).toBeGreaterThanOrEqual(MIN_CHANNELS);
+      MIN_LISTEN_SITES,
+    );
+    expectFloor("Tauri channels named in Rust", channels.size, MIN_CHANNELS);
     // `index.html`'s boot-skeleton listener is the one native listener there
     // is; if it stops matching, rule 3 loses the listener it counts on.
     expect(htmlListeners).toContain("atlas:app-ready");

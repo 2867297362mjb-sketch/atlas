@@ -3,6 +3,7 @@
 // `tests/ipc-contract.test.ts` checks the names against `generate_handler![]`.
 
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   Binding,
   CaptureHealth,
@@ -172,4 +173,25 @@ export function captureSlugAvailable(
     orgId,
     slug,
   });
+}
+
+/** Bring the project's capture store up: heal its registration and start its
+ *  transcript import. A no-op for a project that never enabled capture. */
+export function captureActivate(projectPath: string): Promise<unknown> {
+  return invoke("capture_activate", { projectPath });
+}
+
+/** Which sessions a capture write touched; `all` when it cannot say. */
+export interface CaptureChangedPayload {
+  sessionIds?: string[];
+  all?: boolean;
+}
+
+/** Capture wrote something: a session, a checkpoint, a commit link. */
+export function onCaptureChanged(
+  handler: (payload: CaptureChangedPayload | null) => void,
+): Promise<UnlistenFn> {
+  return listen<CaptureChangedPayload | null>("atlas:capture-changed", (event) =>
+    handler(event.payload),
+  );
 }

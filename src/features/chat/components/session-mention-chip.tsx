@@ -11,7 +11,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { convertFileSrc } from "@tauri-apps/api/core";
+import { allowAssetDir, readFileBase64 } from "@/features/editor/lib/editor-fs-api";
 import {
   BookOpen,
   Boxes,
@@ -329,7 +330,7 @@ function imageMime(path: string): string {
 async function mediaSrc(path: string, media: "image" | "video"): Promise<string | null> {
   if (media === "image") {
     try {
-      const b64 = await invoke<string>("read_file_base64", { path });
+      const b64 = await readFileBase64(path);
       return `data:${imageMime(path)};base64,${b64}`;
     } catch {
       return null;
@@ -337,7 +338,7 @@ async function mediaSrc(path: string, media: "image" | "video"): Promise<string 
   }
   const i = path.lastIndexOf("/");
   try {
-    await invoke("asset_allow_dir", { path: i > 0 ? path.slice(0, i) : path });
+    await allowAssetDir(i > 0 ? path.slice(0, i) : path);
   } catch {
     /* may already be allowed, or denied — try to render anyway */
   }

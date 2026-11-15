@@ -14,9 +14,9 @@
 
 import { Check, Link2, PanelLeft, PanelRight, X } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { copyText } from "@/lib/clipboard";
 import { cn } from "@/lib/utils";
+import { shares } from "../lib/shares-api";
 import type { SessionDetail as Detail } from "../types";
 import { sessionState, shortSessionId } from "../lib/board";
 import { SessionStatusIcon, STATE_LABEL } from "./session-status-icon";
@@ -77,10 +77,7 @@ function CopyLink({
   const copy = () => {
     void (async () => {
       const url = remoteProjectId
-        ? await invoke<string | null>("artifacts_cloud_session_url", {
-            projectId: remoteProjectId,
-            sessionId,
-          }).catch(() => null)
+        ? await shares.orgUrl(remoteProjectId, sessionId).catch(() => null)
         : null;
       await copyText(url ?? sessionId);
     })();

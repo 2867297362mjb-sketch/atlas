@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
-import { invoke } from "@tauri-apps/api/core";
+import { clipboardFilePaths } from "@/lib/clipboard-api";
 import { toast } from "sonner";
 import { filesFromClipboard, hasFiles, scratchPathForFile } from "@/lib/scratch-file";
 import { useCommsStore } from "../stores/comms-store";
@@ -141,7 +141,7 @@ export function CommsComposer({
     }
     if (hasFiles(dt)) {
       e.preventDefault();
-      void invoke<string[]>("clipboard_file_paths")
+      void clipboardFilePaths()
         .then((paths) => {
           if (paths.length > 0) actions.attachFiles(convId, paths);
         })

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { bracketBody } from "./support/source";
 
 /**
  * Small, independent wire-shape pins. The first four are regressions found by
@@ -747,12 +748,11 @@ describe("linked pull requests: session row, store and commands (#15)", () => {
     // frontend knows, and the event carries the wake's own.
     expect(watch).toMatch(/source:\s*wake\.source\.token\(\)\.into\(\)/);
     const wake = read("src-tauri", "src", "commands", "agent_host", "wake.rs");
-    const tokenFn = wake.slice(wake.indexOf("pub fn token"));
-    const rustTokens = [
-      ...tokenFn.slice(0, tokenFn.indexOf("\n    }\n")).matchAll(/=> "([a-z-]+)"/g),
-    ]
-      .map((m) => m[1])
-      .sort();
+    const tokenFn = bracketBody(wake, /\bpub fn token\b/, {
+      lang: "rust",
+      where: "src-tauri/src/commands/agent_host/wake.rs",
+    });
+    const rustTokens = [...tokenFn.matchAll(/=> "([a-z-]+)"/g)].map((m) => m[1]).sort();
     const union = /InjectedPromptSource = ([^;]+);/.exec(injected)?.[1] ?? "";
     const tsTokens = [...union.matchAll(/"([a-z-]+)"/g)].map((m) => m[1]).sort();
     expect(rustTokens).toEqual(["pull-request-watch", "restart"]);

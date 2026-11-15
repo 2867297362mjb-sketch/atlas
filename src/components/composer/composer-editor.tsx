@@ -38,7 +38,7 @@ import StarterKit from "@tiptap/starter-kit";
 import { Fragment, Slice } from "@tiptap/pm/model";
 import { Selection, TextSelection, type Transaction } from "@tiptap/pm/state";
 import type { EditorView } from "@tiptap/pm/view";
-import { invoke } from "@tauri-apps/api/core";
+import { clipboardFilePaths, clipboardPastePaths } from "@/lib/clipboard-api";
 
 import { cn } from "@/lib/utils";
 import { markInputActivity } from "@/lib/input-activity";
@@ -139,7 +139,7 @@ export interface ComposerEditorProps {
 
 /** Linux: what GTK's clipboard holds that the paste event did not carry —
  *  copied files, else an image spooled to a scratch file. */
-const linuxClipboardPaths = () => invoke<string[]>("clipboard_paste_paths");
+const linuxClipboardPaths = () => clipboardPastePaths();
 
 /** Wrap a path in double quotes if it holds whitespace, so a reader takes it
  *  as one token. */
@@ -315,7 +315,7 @@ export const ComposerEditor = memo(
           // ask Rust for the native pasteboard's file URLs.
           if (hasFiles(dt)) {
             event.preventDefault();
-            void pasteNativePaths(view, () => invoke<string[]>("clipboard_file_paths"));
+            void pasteNativePaths(view, () => clipboardFilePaths());
             return true;
           }
           const text = dt.getData("text/plain").replace(/\r\n?/g, "\n");
