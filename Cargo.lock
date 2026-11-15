@@ -686,6 +686,7 @@ dependencies = [
  "atlas-checkpoint",
  "atlas-comms",
  "atlas-embed",
+ "atlas-fs",
  "atlas-git",
  "atlas-gitdiff",
  "atlas-icon-theme",
@@ -3244,6 +3245,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "atlas-fs"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+]
+
+[[package]]
 name = "atlas-git"
 version = "0.1.0"
 dependencies = [
@@ -3293,6 +3301,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "atlas-embed",
+ "atlas-fs",
  "atlas-memory",
  "atlas-profile",
  "atlas-redact",

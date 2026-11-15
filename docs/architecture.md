@@ -330,6 +330,7 @@ All wired in as `path` dependencies from `src-tauri/Cargo.toml`, and all members
 | `atlas-search` | In-process code search: grep on ripgrep's crates and glob/fuzzy file finding over a session root, with one compact, byte-budgeted output format for the `atlas_code` tools (ADR-0015). On demand only — nothing is indexed, cached or watched (ADR-0021). |
 | `atlas-retrieval` | Memory's retrieval core: content-keyed embedding cache codec, per-model usearch vector files that heal on open, RRF fusion, the `Embedder` trait. |
 | `atlas-profile` | Which data this process owns: the default profile or the dev profile `bun run dev:app` runs under. Derived once from the bundle identifier; every `.atlas` and `~/.config/atlas` name goes through it. Names only — no I/O, no dependencies. |
+| `atlas-fs` | Crash-safe file replacement (`replace_file`): unique sibling temp file, fsync, rename, directory fsync, temp removed on failure. The one implementation for stores that rewrite a file in place. No dependencies. |
 | `atlas-kb-server` | Standalone static-server binary produced by the knowledge base's "Export server" action. Embeds the exported HTML/CSS via `include_dir!`, serves on `localhost:4747`. |
 
 ## Persistence
@@ -431,6 +432,7 @@ atlas/
 │   ├── atlas-search               in-process grep / find_files
 │   ├── atlas-retrieval            memory's retrieval core (vectors, RRF)
 │   ├── atlas-profile              default vs dev data profile (directory names)
+│   ├── atlas-fs                   crash-safe file replacement (replace_file)
 │   └── atlas-kb-server            self-contained KB static-server binary
 │
 ├── docs/                          architecture.md (this file), ADRs, reference
