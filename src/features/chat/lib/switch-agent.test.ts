@@ -28,6 +28,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useChatStore } from "../stores/chat-store";
 import { useRcStore } from "../stores/rc-store";
 import type { RcRoom } from "./rc-api";
+import { sessionSend } from "./session-send";
 import { useMemorySharingStore } from "@/features/memory/stores/memory-sharing-store";
 import { useSettingsStore } from "@/features/settings/stores/settings-store";
 import { DEFAULT_SETTINGS, type AppSettings } from "@/features/settings/lib/app-settings";
@@ -38,7 +39,6 @@ import {
   REMEMBER_STOP_GRACE_MS,
   SESSION_HANDOFF_EVENT,
   isStartingOnly,
-  isSwitchPending,
   switchAgentForTab,
   type SessionHandoffDetail,
 } from "./switch-agent";
@@ -588,8 +588,8 @@ describe("switchAgentForTab with rememberBeforeSwitch", () => {
     expect(agent()).toBe("atlas-agent");
   });
 
-  // The chat panel does not drain a queue while a switch is pending
-  // (`isSwitchPending`); clearing the session for an in-place switch used to
+  // The chat panel does not drain a queue while a switch is pending (the
+  // "switch" hold, read as `switchPending`); clearing the session for an in-place switch used to
   // drop whatever the user typed during the save.
   it("a message typed during the save goes to the new agent when switching in place", async () => {
     setup();
@@ -597,12 +597,12 @@ describe("switchAgentForTab with rememberBeforeSwitch", () => {
 
     switchAgentForTab(TAB, "claude-code");
     status("running");
-    expect(isSwitchPending(TAB)).toBe(true);
+    expect(sessionSend.state(TAB).switchPending).toBe(true);
     useChatStore.getState().actions.enqueueMessage(TAB, "now add a retry", []);
     status("idle");
     await vi.waitFor(() => expect(agent()).toBe("claude-code"));
 
-    expect(isSwitchPending(TAB)).toBe(false);
+    expect(sessionSend.state(TAB).switchPending).toBe(false);
     // Held for the new bind, like a first message sent while starting.
     const sess = useChatStore.getState().sessions[TAB];
     expect(sess.pendingSend).toEqual({ content: "now add a retry", mentions: [] });

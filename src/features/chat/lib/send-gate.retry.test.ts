@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { NATIVE_AGENT_ID, type ChatSession } from "@/types/agent";
-import { sessionCanRetry } from "./retry-gate";
+import { sessionCanRetry } from "./send-gate";
 
 /** Only the fields the gate reads; the rest of `ChatSession` is irrelevant. */
 function session(over: Partial<ChatSession> = {}): ChatSession {

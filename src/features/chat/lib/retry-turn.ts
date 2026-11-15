@@ -8,7 +8,7 @@
 // the second attempt to trip over. A retry has to REMOVE the turn first, which
 // is a destructive backend operation, not a UI one.
 //
-// Native-agent-only, for the reason set out in `retry-gate.ts`.
+// Native-agent-only, for the reason set out at `retryRefusal` (`send-gate.ts`).
 //
 // # Why rewind and send are two calls
 //
@@ -20,10 +20,10 @@ import { toast } from "sonner";
 import type { SessionKey } from "@/types/agents";
 import { useChatStore } from "../stores/chat-store";
 import { agents } from "./agents-api";
-import { sessionCanRetry } from "./retry-gate";
+import { sessionCanRetry } from "./send-gate";
 import { drivenElsewhere } from "./rc-api";
 import { useRcStore } from "../stores/rc-store";
-import { enqueuePrompt } from "./turn-queue";
+import { sessionSend } from "./session-send";
 import { catalogEntry } from "@/features/agents/lib/agent-meta";
 import { logEvent } from "@/features/log/lib/log";
 
@@ -134,7 +134,7 @@ async function runRetry(tabId: string, key: SessionKey): Promise<void> {
   // user can edit or send, and the drain effect only fires on a status or
   // binding transition, so nothing re-sends behind their back.
   const preserve = (why: string) => {
-    enqueuePrompt(tabId, prompt as string, []);
+    sessionSend.enqueue(tabId, prompt as string, []);
     toast.error(`${why} — your prompt is waiting in the composer`);
     logEvent({
       source: "agent",

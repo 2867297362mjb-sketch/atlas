@@ -5,6 +5,7 @@
 
 import { switchableAgentOf } from "@/features/agents/lib/agent-meta";
 import type { SwitchableAgent } from "@/types/agent";
+import { composerGates, sendStateOf } from "../lib/send-gate";
 import { useAiGrantBarShown } from "../components/ai-grant-bar";
 import { grantLocksComposer, useAiGrantProbe, useNoAiGrant } from "../stores/ai-grant-store";
 import { useChatStore } from "../stores/chat-store";
@@ -63,14 +64,13 @@ export function useComposerGates({
   //
   // Never while a turn runs (`grantLocksComposer`): the lock used to disable
   // the Stop button of a turn already admitted when the answer turned to no.
-  const blockedByGrant = grantLocksComposer(noAiGrant, agentType, running);
+  const grantHold = grantLocksComposer(noAiGrant, agentType, false);
   // While the no-grant strip shows it is the only one: the native agent cannot
   // run at all, and any other notice above a locked input is noise beside it.
   const grantBarShown = useAiGrantBarShown(running) && agentType === "atlas-agent";
-  const disabled = disabledProp || blockedByGrant;
   // A resume could not restore the user's mode (`ModeRestoreBar`): no send
   // until they pick one. Only the send — typing and the mode picker stay live.
-  const modeUnrestored = useChatStore((s) => !!s.sessions[tabId]?.unrestoredModeId);
+  const unrestoredModeId = useChatStore((s) => s.sessions[tabId]?.unrestoredModeId);
   // Another process is still writing this session: sends wait for "Send anyway".
   // The composer feeds the live set itself, so the guard holds whichever view
   // (sidebar, History, another project) the session was opened from.
@@ -78,12 +78,23 @@ export function useComposerGates({
   // The same read keeps the session's attached projects current for the
   // project chips' access toggles (`session-projects-store`).
   useLiveElsewhereFeed(!!acpSessionId);
-  const heldForTerminal = useSendHeldForTerminal(acpSessionId);
+  const heldElsewhere = useSendHeldForTerminal(acpSessionId);
   // Someone else holds the session's remote-control seat (`RcDriverBar`):
   // nothing sends or queues from here until the owner takes over. Rust's
   // steering entry refuses it too; this is what lets the composer say so
   // rather than bounce an error. Stop stays live — it is the owner's.
-  const remoteDriving = useRcRemoteDriver(acpSessionId) !== null;
+  const remoteDriver = useRcRemoteDriver(acpSessionId) !== null;
+  // The facts above, read through the one gate the send handler and the drain
+  // read too (`send-gate.ts`): these four are what `planSubmit` and the send
+  // button take.
+  const { blockedByGrant, modeUnrestored, heldForTerminal, remoteDriving } = composerGates(
+    sendStateOf(
+      { acpSessionId, unrestoredModeId },
+      { heldElsewhere, grantHold, remoteDriving: remoteDriver },
+    ),
+    running,
+  );
+  const disabled = disabledProp || blockedByGrant;
   // The BYOK provider/model bindings for the native agent stood here — the
   // provider pick, the model re-push on bind, the whole BYOK selection path.
   // Gone: the native agent's model comes from the seam's published catalogue

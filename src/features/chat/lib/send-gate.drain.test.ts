@@ -1,5 +1,50 @@
 import { describe, expect, it } from "vitest";
-import { drainEdge } from "./drain-gate";
+import { decide, sendStateOf } from "./send-gate";
+
+// These cases were written against `drainEdge`, which took the previous and
+// current values as one flat record. The decision is `decide(cur, { kind:
+// "drain", prev })` now; this maps the old record onto it so every case reads
+// as it did. A `prevStatus` of `null` is a previous snapshot with no status
+// yet. (A panel's FIRST tick, with no previous snapshot at all, is in
+// `send-gate.test.ts`.)
+function drainEdge(i: {
+  prevStatus: string | null;
+  curStatus: string;
+  prevAcp: string | undefined;
+  curAcp: string | undefined;
+  prevResuming: boolean;
+  curResuming: boolean;
+  prevHeldElsewhere?: boolean;
+  curHeldElsewhere?: boolean;
+  prevGrantHold: boolean;
+  curGrantHold: boolean;
+}) {
+  const snapshot = (
+    status: string | null,
+    acp: string | undefined,
+    resuming: boolean,
+    heldElsewhere: boolean | undefined,
+    grantHold: boolean,
+  ) =>
+    sendStateOf(
+      {
+        status: (status ?? undefined) as "idle" | undefined,
+        acpAgentId: acp ? "agent-1" : undefined,
+        acpSessionId: acp,
+        resumePending: resuming,
+      },
+      { heldElsewhere: !!heldElsewhere, grantHold },
+    );
+  const decision = decide(
+    snapshot(i.curStatus, i.curAcp, i.curResuming, i.curHeldElsewhere, i.curGrantHold),
+    {
+      kind: "drain",
+      prev: snapshot(i.prevStatus, i.prevAcp, i.prevResuming, i.prevHeldElsewhere, i.prevGrantHold),
+    },
+  );
+  if (decision.do !== "drain") throw new Error("a drain intent decides a drain");
+  return { ...decision.edges, drainQueue: decision.queue };
+}
 
 const base = {
   prevStatus: "running" as string | null,
