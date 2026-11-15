@@ -62,6 +62,18 @@ impl GitRawOutput {
     }
 }
 
+/// What [`GitCommand::stdout_capped`] read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CappedStdout {
+    /// At most one byte more than the cap; the caller trims to a boundary
+    /// that means something to it (a file header, a line).
+    pub bytes: Vec<u8>,
+    /// The cap cut the output short and git was killed.
+    pub truncated: bool,
+    /// Whether git exited 0. Unknowable once killed, so `true` then.
+    pub success: bool,
+}
+
 /// Why a git run has no output at all: no process ran to its end.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GitRunError {
@@ -124,7 +136,7 @@ fn push_capped(buf: &mut String, line: &str) {
 pub struct GitCommand {
     program: OsString,
     cwd: Option<PathBuf>,
-    args: Vec<String>,
+    args: Vec<OsString>,
     envs: Vec<(String, String)>,
     success_exit_codes: HashSet<i32>,
     stdin: Option<Vec<u8>>,
@@ -144,7 +156,7 @@ impl GitCommand {
         GitCommand {
             program: "git".into(),
             cwd: Some(cwd.into()),
-            args,
+            args: args.into_iter().map(OsString::from).collect(),
             envs: Vec::new(),
             success_exit_codes: HashSet::from([0]),
             stdin: None,
@@ -166,6 +178,20 @@ impl GitCommand {
     /// the call can redirect a real run.
     pub fn program(mut self, program: impl Into<OsString>) -> Self {
         self.program = program.into();
+        self
+    }
+
+    /// One more argument. Takes a path as it is, so a file name that is not
+    /// UTF-8 reaches git intact.
+    pub fn arg(mut self, arg: impl Into<OsString>) -> Self {
+        self.args.push(arg.into());
+        self
+    }
+
+    /// More arguments, after the ones already given.
+    pub fn args<S: AsRef<std::ffi::OsStr>>(mut self, args: &[S]) -> Self {
+        self.args
+            .extend(args.iter().map(|a| a.as_ref().to_os_string()));
         self
     }
 
@@ -228,13 +254,16 @@ impl GitCommand {
     fn display(&self) -> String {
         let mut s = String::from("git");
         for a in &self.args {
+            let a = a.to_string_lossy();
             s.push(' ');
-            // Keep messages readable — elide long stdin-ish args.
-            if a.len() > 60 {
-                s.push_str(&a[..57]);
-                s.push('…');
-            } else {
-                s.push_str(a);
+            // Keep messages readable — elide long stdin-ish args. Cut on a
+            // character boundary: an argument can be a path in any script.
+            match a.char_indices().nth(57) {
+                Some((cut, _)) if a.len() > 60 => {
+                    s.push_str(&a[..cut]);
+                    s.push('…');
+                }
+                _ => s.push_str(&a),
             }
         }
         s
@@ -332,6 +361,49 @@ impl GitCommand {
             exit_code: out.status.code(),
             stdout: out.stdout,
             stderr: out.stderr,
+        })
+    }
+
+    /// Run and keep at most `cap` bytes of stdout. Past the cap git is killed
+    /// rather than drained: a 50 MB patch should cost `cap` bytes of reading.
+    /// stderr is discarded, and stdin and the timeout are not used.
+    pub fn stdout_capped(self, cap: usize) -> Result<CappedStdout, GitRunError> {
+        use std::io::Read;
+        let display = self.display();
+        let mut child = self
+            .command()
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .stdin(Stdio::null())
+            .spawn()
+            .map_err(|e| spawn_error(&display, &e))?;
+        let mut bytes = Vec::new();
+        let Some(mut stdout) = child.stdout.take() else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(GitRunError::Failed(format!("{display}: no stdout pipe")));
+        };
+        // One byte past the cap tells "exactly cap" from "more than cap".
+        let read = (&mut stdout).take(cap as u64 + 1).read_to_end(&mut bytes);
+        drop(stdout);
+        // Reaped on every path: a read error must not leave a zombie behind.
+        if read.is_err() || bytes.len() > cap {
+            let _ = child.kill();
+            let _ = child.wait();
+            read.map_err(|e| GitRunError::Failed(format!("{display}: {e}")))?;
+            return Ok(CappedStdout {
+                bytes,
+                truncated: true,
+                success: true,
+            });
+        }
+        let status = child
+            .wait()
+            .map_err(|e| GitRunError::Failed(format!("{display}: {e}")))?;
+        Ok(CappedStdout {
+            bytes,
+            truncated: false,
+            success: status.success(),
         })
     }
 
@@ -460,6 +532,18 @@ impl GitCommand {
             Err(error::payload(display, status.code(), &stderr, &stdout))
         }
     }
+}
+
+/// Clone the tip of `url`'s default branch into `dest`: one commit, no tags,
+/// and no LFS downloads. For a copy that is read and never worked in (a
+/// skill pack, a reference repository). The run's own answer is returned so
+/// each caller words its failure.
+pub fn shallow_clone(url: &str, dest: &std::path::Path) -> Result<GitRawOutput, GitRunError> {
+    // `--` so neither the URL nor the path can ever parse as a flag.
+    GitCommand::without_repo(&["clone", "--depth", "1", "--no-tags", "--", url])
+        .arg(dest)
+        .env("GIT_LFS_SKIP_SMUDGE", "1")
+        .output()
 }
 
 /// How long [`GitCommand::run_streaming`] keeps reading after git exits.

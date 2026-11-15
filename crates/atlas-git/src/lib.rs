@@ -20,4 +20,4 @@ pub mod progress;
 pub mod status;
 
 pub use error::{GitErrorCode, GitErrorPayload};
-pub use exec::{GitCommand, GitOutput, GitRawOutput, GitRunError, OpSink, Stream};
+pub use exec::{shallow_clone, CappedStdout, GitCommand, GitOutput, GitRawOutput, GitRunError, OpSink, Stream};

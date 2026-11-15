@@ -187,3 +187,36 @@ fn the_raw_run_returns_any_exit_and_the_bytes_untouched() {
     assert_eq!(out.stdout, b"caf\xe9\x00\xff");
     assert_eq!(out.stderr_text(), "why");
 }
+
+#[test]
+fn a_capped_read_stops_at_the_cap_and_kills_the_child() {
+    // Endless output: only a kill ends this run.
+    let (_dir, script) = fake_git("while :; do echo 0123456789; done");
+    let started = Instant::now();
+    let out = git(&script, &[]).stdout_capped(100).unwrap();
+    assert!(out.truncated);
+    assert_eq!(out.bytes.len(), 101, "one byte past the cap");
+    assert!(started.elapsed() < Duration::from_secs(10));
+
+    // Under the cap: everything, and git's own verdict.
+    let (_dir, script) = fake_git("printf abc; exit 1");
+    let out = git(&script, &[]).stdout_capped(100).unwrap();
+    assert_eq!((out.bytes.as_slice(), out.truncated, out.success), (&b"abc"[..], false, false));
+    // Exactly the cap is not truncated.
+    let out = git(&script, &[]).stdout_capped(3).unwrap();
+    assert!(!out.truncated);
+}
+
+#[test]
+fn appended_arguments_follow_the_first_ones_and_keep_their_bytes() {
+    use std::os::unix::ffi::OsStrExt;
+    let (_dir, script) = fake_git(r#"shift; printf '%s,' "$@""#);
+    // A file name that is not UTF-8 reaches the child as the same bytes.
+    let name = std::ffi::OsStr::from_bytes(b"caf\xe9.txt");
+    let out = git(&script, &["first"])
+        .args(&["diff", "--"])
+        .arg(name)
+        .output()
+        .unwrap();
+    assert_eq!(out.stdout, b"diff,--,caf\xe9.txt,");
+}
