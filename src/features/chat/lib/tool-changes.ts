@@ -36,7 +36,7 @@ import {
   classifyToolFileKind,
   countChangedLines,
   getEditParts,
-  getFilePathFromInput,
+  getToolFilePath,
   type EditPart,
 } from "./tool-files";
 
@@ -75,16 +75,6 @@ export interface FileChange {
 }
 
 const NO_CHANGES: readonly FileChange[] = Object.freeze([]);
-
-/** The first path in a call's locations: the wire's `{ path }` objects, or
- *  the store's mirror of them as plain paths. */
-function firstLocation(locations: readonly unknown[] | undefined): string | null {
-  for (const l of locations ?? []) {
-    const path = typeof l === "string" ? l : (l as { path?: unknown } | null)?.path;
-    if (typeof path === "string" && path.length > 0) return path;
-  }
-  return null;
-}
 
 /** Two spellings of one file: equal, or one the other's tail (`src/a.ts`
  *  against `/repo/src/a.ts`). */
@@ -143,7 +133,7 @@ export function changesOfToolCall(call: ToolCallFacts): readonly FileChange[] {
   if (isEdit) {
     const parts = getEditParts(call.tool_name, args, call.kind);
     if (parts.length > 0) {
-      const path = getFilePathFromInput(args) ?? firstLocation(call.locations);
+      const path = getToolFilePath(args, call.locations);
       if (path) {
         let added = 0;
         let removed = 0;
@@ -204,7 +194,7 @@ export function changesOfToolCall(call: ToolCallFacts): readonly FileChange[] {
   }
 
   if (out.length === 0 && isEdit) {
-    const path = getFilePathFromInput(args) ?? firstLocation(call.locations);
+    const path = getToolFilePath(args, call.locations);
     if (path) out.push({ path, kind: "modified", added: 0, removed: 0, content: null });
   }
   return out;

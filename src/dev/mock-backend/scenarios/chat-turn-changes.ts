@@ -51,14 +51,10 @@ function write(path: string, content: string): ToolCall {
   };
 }
 
-/** An ACP `diff` block (the whole file either side), with the location the
- *  agent names it by — which is what puts it in the turn's file summary. */
+/** An ACP `diff` block, the whole file either side, and nothing else: no
+ *  path in the arguments, no location. The block alone names the file. */
 function patch(path: string, before: string, after: string): ToolCall {
-  return {
-    ...tool.edit(path, before, after),
-    // `turnFilesOfToolCall` finds the path here, and counts the arguments.
-    arguments: { file_path: abs(path), old_string: before, new_string: after },
-  };
+  return tool.edit(path, before, after);
 }
 
 const sessionBefore = `export interface Session {

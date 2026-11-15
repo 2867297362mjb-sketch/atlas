@@ -22,7 +22,8 @@ import { collectTurnEdits } from "../lib/turn-edits";
 import { buildChangedFilesTree, changedFilesOf, sumStats } from "../lib/changed-files-tree";
 import { countChangedLines } from "../lib/tool-files";
 import { enginePatchFiles } from "../lib/engine-patch";
-import { FIXTURES, REPO } from "../lib/tool-changes.fixtures";
+import { changesOfTurn } from "../lib/tool-changes";
+import { FIXTURES, REPO, fixture } from "../lib/tool-changes.fixtures";
 
 const TAB = "tab-1";
 const AGENT = "agent-1";
@@ -160,11 +161,12 @@ describe("what each view says a turn changed", () => {
         "a diff block beside arguments naming another file": {
           "card": [
             "added src/known.ts +1 −0",
+            "added src/other.ts +1 −0",
           ],
           "timeline": [
             "Created src/known.ts +1 −0 opens diff",
           ],
-          "tree": "+1 −0",
+          "tree": "+2 −0",
           "viewer": [
             "added src/known.ts +1 −0",
             "added src/other.ts +1 −0",
@@ -256,33 +258,37 @@ describe("what each view says a turn changed", () => {
           ],
         },
         "diff block only": {
-          "card": [],
+          "card": [
+            "edited src/app.ts +2 −1",
+          ],
           "timeline": [
             "Edited src/app.ts +2 −1 opens diff",
           ],
-          "tree": "+0 −0",
+          "tree": "+2 −1",
           "viewer": [
             "modified src/app.ts +2 −1",
           ],
         },
         "diff block only, classed as an edit with a location": {
           "card": [
-            "edited src/app.ts +0 −0",
+            "edited src/app.ts +2 −1",
           ],
           "timeline": [
             "Edited src/app.ts +2 −1 opens diff",
           ],
-          "tree": "+0 −0",
+          "tree": "+2 −1",
           "viewer": [
             "modified src/app.ts +2 −1",
           ],
         },
         "diff block that creates a file": {
-          "card": [],
+          "card": [
+            "added src/new.ts +2 −0",
+          ],
           "timeline": [
             "Created src/new.ts +2 −0 opens diff",
           ],
-          "tree": "+0 −0",
+          "tree": "+2 −0",
           "viewer": [
             "added src/new.ts +2 −0",
           ],
@@ -384,5 +390,109 @@ describe("what each view says a turn changed", () => {
         },
       }
     `);
+  });
+});
+
+/** The turn card's edits as the store froze them, by the paths the calls gave. */
+function frozenEdits() {
+  const settled = session().messages.filter((m) => m.turnSummary);
+  const files = settled[settled.length - 1]?.turnSummary?.files ?? [];
+  return files
+    .filter((f) => f.kind === "edit")
+    .map((f) => ({
+      path: f.path,
+      previousPath: f.movedFrom,
+      added: f.added,
+      removed: f.removed,
+      created: f.created === true,
+    }));
+}
+
+/** The one reading's answer for a turn of `calls`, in the card's terms. */
+function readingOf(calls: ToolCall[]) {
+  return changesOfTurn(calls).map((c) => ({
+    path: c.path,
+    previousPath: c.previousPath,
+    added: c.added,
+    removed: c.removed,
+    created: c.kind === "added",
+  }));
+}
+
+describe("the turn card's counts, as the deltas arrive", () => {
+  it.each(FIXTURES.map((f) => [f.name, f.calls] as const))(
+    "equal the reading of the turn's final calls: %s",
+    (_, calls) => {
+      playTurn(calls);
+      expect(frozenEdits()).toEqual(readingOf(calls));
+    },
+  );
+
+  it("counts an edit reported only as a diff block", () => {
+    // It was in the timeline and the viewer and counted nothing here: the
+    // card read a call's arguments and locations, never its blocks.
+    const { calls } = fixture("diff block only");
+    playTurn(calls);
+    expect(frozenEdits()).toEqual([
+      {
+        path: "/repo/src/app.ts",
+        previousPath: undefined,
+        added: 2,
+        removed: 1,
+        created: false,
+      },
+    ]);
+  });
+
+  it("counts a file a diff block created as created", () => {
+    playTurn(fixture("diff block that creates a file").calls);
+    expect(frozenEdits().map((f) => [f.path, f.added, f.created])).toEqual([
+      ["/repo/src/new.ts", 2, true],
+    ]);
+  });
+
+  it("is the same when the diff block arrives after the arguments", () => {
+    const [final] = fixture("edit with a path in its arguments and a diff block").calls;
+    const { content_blocks: _blocks, ...early } = final;
+    openTurn();
+    apply(upsert({ ...early, status: "running" }));
+    const before = Object.values(session().turnScratch!.tools);
+    apply(upsert(final));
+    // One file under the call's id, replaced whole by the later sighting.
+    expect(Object.values(session().turnScratch!.tools)).toEqual(before);
+    closeTurn();
+    expect(frozenEdits()).toEqual(readingOf([final]));
+  });
+
+  it("counts a call that names nothing until its diff block arrives", () => {
+    const [final] = fixture("diff block only").calls;
+    const { content_blocks: _blocks, ...early } = final;
+    openTurn();
+    apply(upsert({ ...early, status: "pending" }));
+    expect(session().turnScratch!.tools).toEqual({});
+    apply(upsert({ ...early, status: "running" }), upsert(final));
+    closeTurn();
+    expect(frozenEdits()).toEqual(readingOf([final]));
+  });
+
+  it("keeps what a call recorded when a later sighting carries nothing", () => {
+    const [final] = fixture("diff block only").calls;
+    openTurn();
+    apply(upsert(final), upsert({ ...final, arguments: {}, content_blocks: undefined }));
+    closeTurn();
+    expect(frozenEdits()).toEqual(readingOf([final]));
+  });
+
+  it("is the same for a session reloaded from its log", () => {
+    // `replaceMessages` rebuilds every turn's card from the loaded calls.
+    const { calls } = fixture("a file edited, then renamed");
+    playTurn(calls);
+    const live = frozenEdits();
+    const { actions } = useChatStore.getState();
+    actions.replaceMessages(
+      TAB,
+      session().messages.map(({ turnSummary: _summary, ...m }) => m),
+    );
+    expect(frozenEdits()).toEqual(live);
   });
 });

@@ -5,7 +5,8 @@
 
 import { describe, expect, it } from "vitest";
 import { applyHunks, enginePatchFiles, hunksExcerpt } from "./engine-patch";
-import { countEditLines, isFileCreated, turnFilesOfToolCall } from "./tool-files";
+import { countEditLines, isFileCreated } from "./tool-files";
+import { turnFilesOfToolCall } from "./turn-files";
 
 const update = "@@ -1,3 +1,4 @@\n use a;\n+use b;\n \n fn f() {}\n";
 const twoHunks = "@@ -1,2 +1,2 @@\n-x\n+X\n y\n@@ -10,1 +10,2 @@\n z\n+Z\n";
@@ -103,7 +104,7 @@ describe("applyHunks", () => {
 
 describe("a native edit as the turn's record keeps it", () => {
   const call = {
-    toolName: "Edit /r/a.rs (+1 more)",
+    tool_name: "Edit /r/a.rs (+1 more)",
     kind: "edit",
     arguments: { paths: ["/r/a.rs", "/r/new.rs"], patch: join(update, created) },
   };
@@ -117,11 +118,11 @@ describe("a native edit as the turn's record keeps it", () => {
   });
 
   it("counts every file on the call's own marker", () => {
-    expect(countEditLines(call.toolName, call.arguments, call.kind)).toEqual({
+    expect(countEditLines(call.tool_name, call.arguments, call.kind)).toEqual({
       added: 3,
       removed: 0,
     });
-    expect(isFileCreated(call.toolName, call.arguments, call.kind)).toBe(false);
+    expect(isFileCreated(call.tool_name, call.arguments, call.kind)).toBe(false);
   });
 });
 
@@ -170,7 +171,7 @@ describe("the edit's per-file `changes`", () => {
   });
 
   it("counts a deletion as removed lines, never as a created file", () => {
-    expect(turnFilesOfToolCall({ toolName: "Edit", kind: "edit", arguments: args })[1]).toEqual({
+    expect(turnFilesOfToolCall({ tool_name: "Edit", kind: "edit", arguments: args })[1]).toEqual({
       path: "/r/b.rs",
       kind: "edit",
       added: 0,
@@ -180,7 +181,7 @@ describe("the edit's per-file `changes`", () => {
   });
 
   it("lists a renamed file where it went, and says where it came from", () => {
-    expect(turnFilesOfToolCall({ toolName: "Edit", kind: "edit", arguments: args })[2]).toEqual({
+    expect(turnFilesOfToolCall({ tool_name: "Edit", kind: "edit", arguments: args })[2]).toEqual({
       path: "/r/z.rs",
       kind: "edit",
       added: 1,
@@ -273,7 +274,7 @@ describe("a rename with no diff in `changes`", () => {
     expect(enginePatchFiles(args)).toEqual([
       { path: "/r/c.rs", shape: "renamed", text: "", added: 0, removed: 0, movePath: "/r/z.rs" },
     ]);
-    expect(turnFilesOfToolCall({ toolName: "Edit", kind: "edit", arguments: args })).toEqual([
+    expect(turnFilesOfToolCall({ tool_name: "Edit", kind: "edit", arguments: args })).toEqual([
       {
         path: "/r/z.rs",
         kind: "edit",
