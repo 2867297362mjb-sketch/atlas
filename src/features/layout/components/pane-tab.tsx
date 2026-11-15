@@ -36,7 +36,7 @@ import { copyText } from "@/lib/clipboard";
 import { requestCloseTab } from "@/features/chat/lib/close-tab";
 import { AtlasIcon } from "@/components/brand-marks";
 import { FileIcon, type FallbackIcon } from "@/features/icon-theme/components/file-icon";
-import type { TabType } from "@/lib/constants";
+import type { TabType } from "@/lib/tab-registry";
 import { groupOf, useLayoutStore, type Tab } from "../stores/layout-store";
 import {
   ContextMenu,

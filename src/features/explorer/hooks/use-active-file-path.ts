@@ -1,8 +1,5 @@
 import { useLayoutStore } from "@/features/layout/stores/layout-store";
-
-import { isFileTab } from "../lib/file-tabs";
-
-/** Tab types whose `data.filePath` is a file the tree can point at. */
+import { fileTabPath } from "@/lib/tab-registry";
 
 /**
  * The file the reader is looking at: the active tab of the focused column, or
@@ -15,9 +12,7 @@ export function useActiveFilePath(): string | null {
   return useLayoutStore((s) => {
     const fileOf = (id: string | null | undefined) => {
       const tab = id ? s.tabs.find((t) => t.id === id) : undefined;
-      return tab && isFileTab(tab.type) && typeof tab.data.filePath === "string"
-        ? tab.data.filePath
-        : null;
+      return tab ? fileTabPath(tab) : null;
     };
     const groups = [s.focusedGroupId, ...s.groupOrder.filter((g) => g !== s.focusedGroupId)];
     for (const group of groups) {

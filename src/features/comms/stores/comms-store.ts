@@ -18,7 +18,7 @@ import { create } from "zustand";
 import { toast } from "sonner";
 import { createSelectors } from "@/lib/create-selectors";
 import { useLayoutStore } from "@/features/layout/stores/layout-store";
-import { ORG_SCOPED_TYPES } from "@/lib/constants";
+import { ORG_SCOPED_TYPES } from "@/lib/tab-registry";
 import { useSpacesStore } from "@/features/spaces/stores/spaces-store";
 import { comms, type CommsEnvelope, type ConnectionInfo } from "../lib/comms-api";
 import { CHAT_MESSAGE_ATTACHMENT_MAX, TYPING_EXPIRY_MS } from "../types";

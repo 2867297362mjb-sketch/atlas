@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import { AgentIcon } from "@/features/org-agent/lib/agent-icon";
 import { AtlasIcon } from "@/components/brand-marks";
-import type { TabType } from "@/lib/constants";
+import { LAUNCHER_ENTRIES, multiplicityOf, type LauncherType } from "@/lib/tab-registry";
 import { useLayoutStore } from "../stores/layout-store";
 import {
   currentRepoPath,
@@ -31,31 +31,45 @@ import {
  * Surfaces only (ADR-0024): Knowledge, Memory, Spaces and the other
  * destinations take the window, so they are not offered as a column's tab
  * (`tab-placement-contract.test.ts`). The rail and ⌘K reach them.
+ *
+ * A row is a tab type's `launcher` entry in the tab registry
+ * (`@/lib/tab-registry`); what opening one does is `openSurface`, below.
  */
 export interface Surface {
-  type: TabType;
+  type: LauncherType;
   label: string;
   icon: ElementType;
   key: string;
 }
 
-export const SURFACES: readonly Surface[] = [
-  { type: "chat", label: "Agent", icon: AtlasIcon, key: "A" },
-  { type: "terminal", label: "Terminal", icon: Terminal, key: "T" },
-  { type: "browser", label: "Browser", icon: Globe, key: "B" },
-  { type: "editor", label: "New file", icon: Code, key: "N" },
-  { type: "files", label: "Files", icon: FolderTree, key: "F" },
-  { type: "source-control", label: "Source control", icon: GitBranch, key: "G" },
-  { type: "pull-requests", label: "Pull requests", icon: GitPullRequest, key: "P" },
-  { type: "team-chat", label: "Team chat", icon: MessagesSquare, key: "C" },
-  { type: "agent-panel", label: "Ask Atlas", icon: AgentIcon, key: "O" },
-  { type: "log", label: "Log", icon: ScrollText, key: "L" },
-];
+/** Each row's icon: the one its tab shows (`tabIcons` in `pane-tab.tsx`).
+ *  Here and not in the registry, which holds no React. Keyed by the types
+ *  whose registry entry has a `launcher`, so offering a new one does not
+ *  compile until it has an icon. */
+const SURFACE_ICONS: Record<LauncherType, ElementType> = {
+  chat: AtlasIcon,
+  terminal: Terminal,
+  browser: Globe,
+  editor: Code,
+  files: FolderTree,
+  "source-control": GitBranch,
+  "pull-requests": GitPullRequest,
+  "team-chat": MessagesSquare,
+  "agent-panel": AgentIcon,
+  log: ScrollText,
+};
+
+/** The rows, from the tab registry: a type is offered when its entry has a
+ *  `launcher`, in that entry's `order`. */
+export const SURFACES: readonly Surface[] = LAUNCHER_ENTRIES.map(({ type, label, key }) => ({
+  type,
+  label,
+  icon: SURFACE_ICONS[type],
+  key,
+}));
 
 /** Open `surface` as a new tab in split column `groupId`. */
 export function openSurface(surface: Surface, groupId: string): void {
-  // Source control and team chat are one per window, Files one per project;
-  // `addTab` focuses the open one wherever it is.
   const { addTab } = useLayoutStore.getState().actions;
   const ts = Date.now();
   if (surface.type === "editor") {
@@ -82,13 +96,9 @@ export function openSurface(surface: Surface, groupId: string): void {
   }
   addTab(
     {
-      id:
-        surface.type === "source-control" ||
-        surface.type === "team-chat" ||
-        surface.type === "agent-panel" ||
-        surface.type === "files"
-          ? surface.type
-          : `${surface.type}-${ts}`,
+      // A type the window holds one of goes by its type: `addTab` focuses
+      // the open one wherever it is.
+      id: multiplicityOf(surface.type) === "one" ? surface.type : `${surface.type}-${ts}`,
       type: surface.type,
       title: surface.type === "chat" ? "Agents" : surface.label,
       closable: true,

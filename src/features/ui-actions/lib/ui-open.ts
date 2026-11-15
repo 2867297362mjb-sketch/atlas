@@ -5,7 +5,7 @@
  */
 
 import { useLayoutStore } from "@/features/layout/stores/layout-store";
-import type { TabType } from "@/lib/constants";
+import type { TabType } from "@/lib/tab-registry";
 import { openFile, type RevealTarget } from "@/lib/open-file";
 import { openGitDiff } from "@/features/git/lib/git-diff-api";
 import { openSettingsSection } from "@/features/settings/lib/open-settings";

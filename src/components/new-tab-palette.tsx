@@ -21,7 +21,7 @@ import type {
   CommandPaletteActionItem,
   CommandPaletteEntry,
 } from "@/features/command-palette/lib/command-palette-logic";
-import type { TabType } from "@/lib/constants";
+import type { TabType } from "@/lib/tab-registry";
 import { CommandDialog, CommandDialogPopup } from "@tryatlas/design";
 
 interface ModuleEntry {

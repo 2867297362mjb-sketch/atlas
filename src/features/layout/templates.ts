@@ -1,4 +1,4 @@
-import type { TabType } from "@/lib/constants";
+import type { TabType } from "@/lib/tab-registry";
 
 /** A predefined split/tab arrangement applied via the layout switcher (⌘⌥L) or
  *  Settings → Layouts. Applied to the ACTIVE project. */

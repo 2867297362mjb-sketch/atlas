@@ -8,7 +8,7 @@ import { comms } from "@/features/comms/lib/comms-api";
 import { markOrgReconciled } from "./org-reconciliation";
 import { useLayoutStore } from "@/features/layout/stores/layout-store";
 import { useSpacesStore } from "@/features/spaces/stores/spaces-store";
-import { ORG_SCOPED_TYPES } from "@/lib/constants";
+import { ORG_SCOPED_TYPES } from "@/lib/tab-registry";
 import {
   useAppStore,
   flushAppStateSave,

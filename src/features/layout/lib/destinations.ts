@@ -11,7 +11,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { AgentIcon } from "@/features/org-agent/lib/agent-icon";
-import type { DestinationType } from "@/lib/constants";
+import type { DestinationType } from "@/lib/tab-registry";
 import { useLayoutStore } from "../stores/layout-store";
 
 /**
