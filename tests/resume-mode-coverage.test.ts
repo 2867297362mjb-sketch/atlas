@@ -41,6 +41,11 @@ const read = (p: string) => readFileSync(path.join(REPO_ROOT, p), "utf8");
 /** Where `applyModeOnResume` is implemented — the one definition. */
 const RESUME_MODE = "src/features/chat/lib/resume-mode.ts";
 
+/** Where `settleMode` is implemented: validate the pick against what the
+ *  agent advertises, push it, and answer the agent's mode if it refuses. Both
+ *  `applyModeOnResume` and the `session/new` arm call it. */
+const CONFIGURATION = "src/features/chat/lib/session-configuration.ts";
+
 /**
  * Every binding site, and the call that carries the user's pick to the agent.
  *
@@ -53,12 +58,12 @@ const BIND_SITES = [
   {
     what: "session/new, at bind time",
     file: "src/features/chat/lib/session-bind.ts",
-    // The fresh-session arm inlines `resolveEffectiveMode` + `setMode` rather
-    // than calling `applyModeOnResume`: it has the `SessionInit` already and
-    // seeds Claude's own permission pill, which `applyModeOnResume` only
-    // touches on an un-honoured pick. What must be present is the validation
-    // and the push, in that order.
-    via: "resolveEffectiveMode",
+    // The fresh-session arm does not call `applyModeOnResume`: it has the
+    // `SessionInit` already and seeds Claude's own permission pill, which
+    // `applyModeOnResume` only touches on an un-honoured pick. It makes the
+    // call `applyModeOnResume` itself makes, `settleMode`, which is the
+    // validation and the push, in that order (checked below).
+    via: "settleMode",
   },
   {
     what: "sidebar resume (openThread)",
@@ -109,9 +114,19 @@ describe("resume-mode coverage", () => {
   it("pushes the mode to the agent rather than only seeding the picker", () => {
     // `applyModeOnResume`'s whole job is the `setMode` round-trip; a caller
     // that only wanted the pill seeded would use `setAcpModes` directly. If
-    // the push ever goes, this is what catches it.
-    const src = read(RESUME_MODE);
-    expect(src).toMatch(/await agents\.setMode\(/);
+    // the push ever goes, this is what catches it. The round-trip is
+    // `settleMode`'s: `applyModeOnResume` has to await it, and it has to
+    // validate before it pushes.
+    expect(read(RESUME_MODE)).toMatch(/await sessionConfiguration\.settleMode\(/);
+    const settle = bracketBody(read(CONFIGURATION), /\basync function settleMode\b/, {
+      lang: "ts",
+      where: CONFIGURATION,
+    });
+    const validate = settle.indexOf("resolveEffectiveMode(");
+    const push = settle.indexOf("await deps.agents.setMode(");
+    expect(validate, "settleMode never validates the pick").toBeGreaterThan(-1);
+    expect(push, "settleMode never pushes the mode").toBeGreaterThan(-1);
+    expect(validate, "the pick must be validated before it is pushed").toBeLessThan(push);
   });
 
   it("restores the mode BEFORE the tab is bound", () => {
