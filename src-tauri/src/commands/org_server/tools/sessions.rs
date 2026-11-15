@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use super::super::cloud::{BoardQuery, CloudError, PayloadRef, TimelineQuery};
 use super::super::OrgScope;
 use super::{checked_id, resolve_member, tool_error, tool_json, NamedSession, OrgTools};
-use crate::commands::memory_server::Grant;
+use crate::commands::tool_servers::Grant;
 /// How far back `org_sessions` looks when it is given neither `since` nor
 /// `until`: "what happened lately" without walking the whole board.
 pub(in crate::commands::org_server) const SESSIONS_DEFAULT_WINDOW_DAYS: i64 = 14;

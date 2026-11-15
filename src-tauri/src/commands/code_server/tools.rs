@@ -27,9 +27,9 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::{CodeToolsGate, CODE_PATH};
-use crate::commands::memory_server::{Grant, TOOLS_LIST_TTL_MS};
 use crate::commands::session_projects::ProjectAccessBroker;
 use crate::commands::session_pull_requests::{repository_of_url, PullRequestBroker};
+use crate::commands::tool_servers::{Grant, TOOLS_LIST_TTL_MS};
 use atlas_thread_metadata::ProjectAccess;
 
 /// What the server tells the agent about itself. The engine shows it as the

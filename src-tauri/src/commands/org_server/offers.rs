@@ -1,13 +1,13 @@
 //! Whether a session request is handed the organisation tool server, and in
 //! which organisation it will act.
 //!
-//! The memory tool server's offer ([`MemorySessionOffers`]) makes the
+//! The memory tool server's offer ([`SessionOffers`]) makes the
 //! decision for all three services, because all three ride one token (see the
 //! UI server's module doc); this is the organisation third of it. Unlike the
 //! other two it yields something besides yes or no: the [`OrgScope`] the
 //! Project is bound to, which the offer stamps on the session's grant.
 //!
-//! [`MemorySessionOffers`]: crate::commands::memory_server::MemorySessionOffers
+//! [`SessionOffers`]: crate::commands::tool_servers::SessionOffers
 
 use std::sync::Arc;
 

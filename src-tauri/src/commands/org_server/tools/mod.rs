@@ -57,7 +57,7 @@ use super::offers::SessionOrgs;
 use super::resolve::{self, OrgLink, Resolution};
 use super::{OrgAccessGate, OrgScope, ORG_PATH, ORG_SERVER_NAME};
 use crate::auth::Role;
-use crate::commands::memory_server::{Grant, TOOLS_LIST_TTL_MS};
+use crate::commands::tool_servers::{Grant, TOOLS_LIST_TTL_MS};
 use crate::commands::ui_server::UiBridge;
 use activity::ActivityArgs;
 #[cfg(test)]

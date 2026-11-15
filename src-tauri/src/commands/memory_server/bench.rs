@@ -17,8 +17,9 @@ use rmcp::RoleClient;
 use serde_json::{json, Value};
 
 use super::tests::{always_on, call, capture, connect, serve, temp_project, ticking_memory};
-use super::{MemoryServer, MemoryTokens, Sources};
+use super::Sources;
 use crate::commands::shared_memory::{store_for, EventKind, SharedMemoryStore};
+use crate::commands::tool_servers::{SessionTokens, ToolServer};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum Milestone {
@@ -73,7 +74,7 @@ pub(super) struct World {
     pub project: String,
     pub a: Client,
     pub b: Client,
-    _server: MemoryServer,
+    _server: ToolServer,
 }
 
 async fn world(label: &str) -> World {
@@ -82,7 +83,7 @@ async fn world(label: &str) -> World {
     store_for(&project)
         .expect("record opens")
         .set_embedder(Some(Arc::new(BagOfWords)));
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let server = serve(
         memory.clone(),
         tokens.clone(),

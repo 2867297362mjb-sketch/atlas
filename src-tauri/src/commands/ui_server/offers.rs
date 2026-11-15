@@ -1,10 +1,10 @@
 //! Whether a session request is handed the UI tool server.
 //!
-//! The memory tool server's offer ([`MemorySessionOffers`]) makes the
+//! The memory tool server's offer ([`SessionOffers`]) makes the
 //! decision for both services, because both ride one token (see the module
 //! doc); this is the UI half of it.
 //!
-//! [`MemorySessionOffers`]: crate::commands::memory_server::MemorySessionOffers
+//! [`SessionOffers`]: crate::commands::tool_servers::SessionOffers
 
 use super::NavigationGate;
 

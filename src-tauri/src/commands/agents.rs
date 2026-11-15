@@ -856,7 +856,7 @@ struct SharingGatedLifecycle {
     /// The memory tool server: its tokens are minted and revoked right here,
     /// in memory, so a session's token exists as soon as its start is
     /// reported; its per-session clock is dropped when the session ends.
-    server: Arc<super::memory_server::MemoryServerHost>,
+    server: Arc<super::tool_servers::ToolServerHost>,
     /// Released here rather than from deltas: a session can end without a
     /// terminal status (sign-out, killing an agent, quitting).
     keep_awake: Option<Arc<crate::keep_awake::KeepAwakeManager>>,
@@ -878,7 +878,7 @@ enum LifecycleWrite {
 impl SharingGatedLifecycle {
     fn new(
         app: AppHandle,
-        server: Arc<super::memory_server::MemoryServerHost>,
+        server: Arc<super::tool_servers::ToolServerHost>,
         token_files: Arc<super::memory_bridge::TokenFiles>,
     ) -> Self {
         let keep_awake = app
@@ -1066,7 +1066,7 @@ pub fn install_manager(app: &AppHandle) {
             memory.inner().clone(),
             Arc::new(super::memory_extract::AppExtractionModel::new(app.clone())),
         )));
-        let server = Arc::new(super::memory_server::MemoryServerHost::new());
+        let server = Arc::new(super::tool_servers::ToolServerHost::new());
         app.manage(server.clone());
         // An ACP agent's bridge reads its token from a private file here:
         // never from its entry, which may land on a command line (ADR-0020).
@@ -1184,7 +1184,7 @@ pub fn install_manager(app: &AppHandle) {
         // that carries organisation access the organisation tool server, all
         // on the same token.
         host.set_session_mcp(Arc::new(
-            super::memory_server::MemorySessionOffers::new(server.clone(), gate.clone())
+            super::tool_servers::SessionOffers::new(server.clone(), gate.clone())
                 .with_ui(super::ui_server::UiOffer::new(navigation))
                 // The same tools describe an outward call on the approval
                 // card — whom it reaches, and the full body — and keep the

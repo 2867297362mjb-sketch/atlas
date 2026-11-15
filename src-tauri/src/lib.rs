@@ -45,7 +45,7 @@ use tauri::Manager;
 pub fn run_bridge_if_asked() -> bool {
     let mut args = std::env::args_os().skip(1);
     if args.next().and_then(|a| a.into_string().ok()).as_deref()
-        != Some(commands::memory_server::BRIDGE_ARG)
+        != Some(commands::tool_servers::BRIDGE_ARG)
     {
         return false;
     }

@@ -40,11 +40,11 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::briefing::{self, Checked, SessionClocks, SessionReads};
-use super::host::{SharingGate, Sources};
-use super::tokens::Grant;
+use super::{SharingGate, Sources};
 use crate::commands::memory_capture::{self, CaptureReader};
 use crate::commands::memory_pack::{Handoff, PackEntry};
 use crate::commands::shared_memory::{self, EvidenceArg, SharedMemoryStore, Writer};
+use crate::commands::tool_servers::{Grant, TOOLS_LIST_TTL_MS};
 
 /// What the server tells every agent about itself: the protocol for a memory
 /// nothing pushes. Claude Code shows it as the server's instructions; the
@@ -110,9 +110,6 @@ const HANDOFF_MAX_BYTES: usize = 4096;
 
 /// `memory_list`'s largest result count.
 const LIST_MAX_LIMIT: usize = 200;
-/// How long a client may treat the tool list as fresh. The tools never change
-/// while the app runs.
-pub(crate) const TOOLS_LIST_TTL_MS: u64 = 60 * 60 * 1000;
 
 const OFF_NOTE: &str = "shared memory is switched off for this project";
 
@@ -741,7 +738,7 @@ fn switched_off(name: &str) -> CallToolResult {
 // ── The handler ──────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
-pub(super) struct MemoryTools {
+pub(crate) struct MemoryTools {
     memory: SharedMemoryStore,
     gate: SharingGate,
     clocks: Arc<SessionClocks>,
@@ -750,7 +747,7 @@ pub(super) struct MemoryTools {
 }
 
 impl MemoryTools {
-    pub(super) fn new(
+    pub(crate) fn new(
         memory: SharedMemoryStore,
         gate: SharingGate,
         clocks: Arc<SessionClocks>,

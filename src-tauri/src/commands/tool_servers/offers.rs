@@ -1,7 +1,7 @@
 //! Handing the server to sessions.
 //!
 //! Every agent that can take the server is handed it on each session request
-//! ([`MemorySessionOffers`]). An agent in another process — every ACP agent,
+//! ([`SessionOffers`]). An agent in another process — every ACP agent,
 //! whatever it advertised — gets it as a stdio server, the Atlas binary's own
 //! `mcp-bridge` forwarding to the loopback server (ADR-0019), with the token
 //! in a private file the entry names, never in the entry itself: an adapter
@@ -16,10 +16,10 @@ use std::sync::Arc;
 use agent_client_protocol::schema::v1 as acp;
 use atlas_agent_servers::{AskFirst, SessionMcpOffer, SessionMcpRequest, SessionMcpServers};
 
-use super::host::{MemoryServerHost, SharingGate};
-use super::MEMORY_SERVER_NAME;
+use super::host::ToolServerHost;
 use crate::commands::code_server::{CodeOffer, CodeOfferDecision, CODE_PATH, CODE_SERVER_NAME};
 use crate::commands::memory_bridge::TokenFiles;
+use crate::commands::memory_server::{SharingGate, MEMORY_SERVER_NAME};
 use crate::commands::org_server::{
     OrgOffer, OrgOfferDecision, EVERY_TIME_TOOLS, ORG_PATH, ORG_SERVER_NAME, OUTWARD_TOOLS,
 };
@@ -104,8 +104,8 @@ impl OfferDecision {
 /// (ADR-0015). One offer decides them all because they all ride one token:
 /// the token table holds one token per session, so two offers minting two
 /// tokens would revoke each other.
-pub struct MemorySessionOffers {
-    host: Arc<MemoryServerHost>,
+pub struct SessionOffers {
+    host: Arc<ToolServerHost>,
     gate: SharingGate,
     ui: Option<UiOffer>,
     org: Option<OrgOffer>,
@@ -113,10 +113,10 @@ pub struct MemorySessionOffers {
     token_files: Arc<TokenFiles>,
 }
 
-impl MemorySessionOffers {
+impl SessionOffers {
     /// Bridged sessions' token files go to a fresh temporary directory until
     /// [`with_token_files`](Self::with_token_files) names the app's own.
-    pub fn new(host: Arc<MemoryServerHost>, gate: SharingGate) -> Self {
+    pub fn new(host: Arc<ToolServerHost>, gate: SharingGate) -> Self {
         Self {
             host,
             gate,
@@ -156,7 +156,7 @@ impl MemorySessionOffers {
     }
 }
 
-impl SessionMcpServers for MemorySessionOffers {
+impl SessionMcpServers for SessionOffers {
     /// An outward call on the organisation server, described by the tools
     /// that will answer it, under the grant the session's token carries — so
     /// the card reads the same organisation and Workspace the call acts in.

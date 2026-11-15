@@ -4,7 +4,7 @@
 //!
 //! - **One server per app**, bound to `127.0.0.1` on a port the OS picks. The
 //!   app starts it at setup on the async runtime, so the main thread never
-//!   waits on it ([`MemoryServerHost::start`]).
+//!   waits on it ([`ToolServerHost::start`]).
 //! - **One bearer token per (session, scope)** ([`tokens`]): minted when a
 //!   session starts, revoked when it ends, checked on every request. The
 //!   token says who is calling and which scope's record to open.
@@ -29,26 +29,15 @@
 #[cfg(test)]
 mod bench;
 mod briefing;
-mod host;
-pub(crate) mod offers;
 #[cfg(test)]
 mod tests;
-mod tokens;
 mod tools;
 
-// The module's surface. The app wires `MemoryServerHost`, `MemorySessionOffers`
+// The module's surface. The app wires `ToolServerHost`, `SessionOffers`
 // and the source types; the rest is reached through the host or by the tests.
 #[allow(unused_imports)]
 pub use briefing::{SessionClocks, SessionReads};
-#[allow(unused_imports)]
-pub use host::{MemoryServer, MemoryServerHost, SharingGate, Sources};
-#[allow(unused_imports)]
-pub use offers::{MemorySessionOffers, OfferDecision, BRIDGE_ARG};
-#[allow(unused_imports)]
-pub use tokens::{Grant, MemoryTokens};
-/// How long an agent may cache a `tools/list` answer; the UI tool server
-/// answers under the same rule.
-pub(crate) use tools::TOOLS_LIST_TTL_MS;
+pub(crate) use tools::MemoryTools;
 #[allow(unused_imports)]
 pub use tools::{
     Bootstrap, BootstrapSource, CitationCheck, IndexDoc, IndexEvict, IndexSearch, INSTRUCTIONS,
@@ -59,3 +48,29 @@ pub const MCP_PATH: &str = "/mcp";
 
 /// The name the server goes by in every agent's MCP configuration.
 pub const MEMORY_SERVER_NAME: &str = "atlas_memory";
+
+/// Whether shared memory is switched on for a launch directory (the Memory
+/// panel's sharing toggle). Checked on every tool call, so flipping it off
+/// mid-session takes effect at once.
+pub type SharingGate = std::sync::Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
+/// What the tools answer from beyond the record: the project's indexed
+/// documents (`memory_search`) and the first-look extras (`memory_briefing`:
+/// the curated pack read from foreign stores, and the recent-session
+/// handoff). Both are seams into the app; a server without them answers from
+/// the record alone.
+#[derive(Clone, Default)]
+pub struct Sources {
+    pub index: Option<IndexSearch>,
+    pub bootstrap: Option<BootstrapSource>,
+    /// Drop one document from the index now (`memory_forget`). Without it a
+    /// forgotten entry's text stays retrievable until the next corpus pass.
+    pub evict: Option<IndexEvict>,
+    /// The session recorder, read-only: where a memory's writing session is
+    /// resolved to its title and commits. The default reads the launch
+    /// directory and the repository's worktrees.
+    pub capture: crate::commands::memory_capture::CaptureReader,
+    /// Checks a memory's code citations (M3). Without it the cited files are
+    /// read directly, with no symbol lookup for moved code.
+    pub check: Option<CitationCheck>,
+}

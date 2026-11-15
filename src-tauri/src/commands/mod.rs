@@ -104,6 +104,7 @@ pub mod terminal;
 pub mod theme_import;
 pub mod themes;
 pub mod tips;
+pub mod tool_servers;
 pub mod tool_stats;
 pub mod ui_server;
 pub mod updater;

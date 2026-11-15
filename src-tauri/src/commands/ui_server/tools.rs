@@ -24,8 +24,8 @@ use uuid::Uuid;
 
 use super::bridge::{UiBridge, UiRequest};
 use super::{NavigationGate, UI_PATH};
-use crate::commands::memory_server::{Grant, TOOLS_LIST_TTL_MS};
 use crate::commands::org_server::is_org_id;
+use crate::commands::tool_servers::{Grant, TOOLS_LIST_TTL_MS};
 
 /// What the server tells the agent about itself. The engine shows it as the
 /// description of the `atlas_ui` tool namespace.

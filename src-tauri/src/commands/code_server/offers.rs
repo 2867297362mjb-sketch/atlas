@@ -1,10 +1,10 @@
 //! Whether a session request is handed the code tool server.
 //!
-//! The memory tool server's offer ([`MemorySessionOffers`]) makes the
+//! The memory tool server's offer ([`SessionOffers`]) makes the
 //! decision for every Atlas service, because they all ride one token; this
 //! is the code half of it.
 //!
-//! [`MemorySessionOffers`]: crate::commands::memory_server::MemorySessionOffers
+//! [`SessionOffers`]: crate::commands::tool_servers::SessionOffers
 
 use super::CodeToolsGate;
 

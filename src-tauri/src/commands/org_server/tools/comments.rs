@@ -12,7 +12,7 @@ use super::{
     author_json, roster_name, string_in, strings_in, tool_error, tool_json, NamedSession, OrgTools,
     SessionTarget,
 };
-use crate::commands::memory_server::Grant;
+use crate::commands::tool_servers::Grant;
 
 /// One comment as the model reads it: who wrote it (a guest by the name on
 /// the comment, never as a member; a member by the roster), where it is

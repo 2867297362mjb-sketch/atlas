@@ -17,10 +17,9 @@ use serde_json::{json, Value};
 
 use super::tools::{run_bounded, tool_names};
 use super::*;
-use crate::commands::memory_server::{
-    MemoryServer, MemoryServerHost, MemorySessionOffers, SharingGate, Sources,
-};
+use crate::commands::memory_server::{SharingGate, Sources};
 use crate::commands::shared_memory::SharedMemoryStore;
+use crate::commands::tool_servers::{SessionOffers, ToolServer, ToolServerHost};
 
 fn memory() -> SharedMemoryStore {
     let t = Arc::new(AtomicI64::new(1_000));
@@ -47,14 +46,14 @@ fn project(files: &[(&str, &str)]) -> tempfile::TempDir {
 }
 
 /// A host serving the code tools beside the memory tools, as the app does.
-async fn running_host(gate: CodeToolsGate) -> Arc<MemoryServerHost> {
+async fn running_host(gate: CodeToolsGate) -> Arc<ToolServerHost> {
     running_host_with(CodeTools::new(gate)).await
 }
 
 /// [`running_host`] with the code tools built by the caller.
-async fn running_host_with(tools: CodeTools) -> Arc<MemoryServerHost> {
-    let host = Arc::new(MemoryServerHost::new());
-    let server = MemoryServer::start_with(
+async fn running_host_with(tools: CodeTools) -> Arc<ToolServerHost> {
+    let host = Arc::new(ToolServerHost::new());
+    let server = ToolServer::start_with(
         memory(),
         host.tokens().clone(),
         host.clocks().clone(),
@@ -70,10 +69,7 @@ async fn running_host_with(tools: CodeTools) -> Arc<MemoryServerHost> {
 }
 
 /// A client on `/code` for a session launched in `dir`.
-async fn client_in(
-    host: &MemoryServerHost,
-    dir: &std::path::Path,
-) -> RunningService<RoleClient, ()> {
+async fn client_in(host: &ToolServerHost, dir: &std::path::Path) -> RunningService<RoleClient, ()> {
     let token = host
         .tokens()
         .mint("s1", "claude-code", &dir.to_string_lossy());
@@ -560,7 +556,7 @@ fn session_request(http_mcp: bool) -> SessionMcpRequest {
 
 /// Every entry an offer carries, as `(name, url, bearer token)`.
 fn entries(offer: &SessionMcpOffer) -> Vec<(String, String, String)> {
-    crate::commands::memory_server::offers::offered_entries(offer)
+    crate::commands::tool_servers::offers::offered_entries(offer)
 }
 
 fn names(offer: &SessionMcpOffer) -> Vec<String> {
@@ -573,8 +569,8 @@ fn names(offer: &SessionMcpOffer) -> Vec<String> {
 #[tokio::test(flavor = "multi_thread")]
 async fn an_http_agent_is_offered_the_code_server_on_the_memory_token() {
     let host = running_host(enabled(true)).await;
-    let offers = MemorySessionOffers::new(host.clone(), sharing(true))
-        .with_code(CodeOffer::new(enabled(true)));
+    let offers =
+        SessionOffers::new(host.clone(), sharing(true)).with_code(CodeOffer::new(enabled(true)));
     let offer = offers.offer(&session_request(true));
     let got = entries(&offer);
     assert_eq!(names(&offer), ["atlas_memory", CODE_SERVER_NAME]);
@@ -593,8 +589,7 @@ async fn an_http_agent_is_offered_the_code_server_on_the_memory_token() {
 #[tokio::test(flavor = "multi_thread")]
 async fn with_shared_memory_off_the_code_server_is_still_offered() {
     let host = running_host(enabled(true)).await;
-    let offers =
-        MemorySessionOffers::new(host, sharing(false)).with_code(CodeOffer::new(enabled(true)));
+    let offers = SessionOffers::new(host, sharing(false)).with_code(CodeOffer::new(enabled(true)));
     assert_eq!(
         names(&offers.offer(&session_request(true))),
         [CODE_SERVER_NAME]
@@ -604,8 +599,7 @@ async fn with_shared_memory_off_the_code_server_is_still_offered() {
 #[tokio::test(flavor = "multi_thread")]
 async fn with_code_tools_off_the_code_server_is_not_offered() {
     let host = running_host(enabled(true)).await;
-    let offers =
-        MemorySessionOffers::new(host, sharing(true)).with_code(CodeOffer::new(enabled(false)));
+    let offers = SessionOffers::new(host, sharing(true)).with_code(CodeOffer::new(enabled(false)));
     assert_eq!(
         names(&offers.offer(&session_request(true))),
         ["atlas_memory"]
@@ -618,8 +612,7 @@ async fn with_code_tools_off_the_code_server_is_not_offered() {
 #[tokio::test(flavor = "multi_thread")]
 async fn an_acp_agent_gets_the_code_server_through_the_bridge() {
     let host = running_host(enabled(true)).await;
-    let offers =
-        MemorySessionOffers::new(host, sharing(true)).with_code(CodeOffer::new(enabled(true)));
+    let offers = SessionOffers::new(host, sharing(true)).with_code(CodeOffer::new(enabled(true)));
     for http_mcp in [true, false] {
         let offer = offers.offer(&session_request(http_mcp));
         assert!(

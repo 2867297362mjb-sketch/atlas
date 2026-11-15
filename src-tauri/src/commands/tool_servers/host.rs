@@ -8,52 +8,26 @@ use rmcp::transport::streamable_http_server::session::local::LocalSessionManager
 use rmcp::transport::{StreamableHttpServerConfig, StreamableHttpService};
 use tokio::sync::oneshot;
 
-use super::briefing::{SessionClocks, SessionReads};
-use super::tokens::{require_token, MemoryTokens};
-use super::tools::{BootstrapSource, CitationCheck, IndexEvict, IndexSearch, MemoryTools};
-use super::MCP_PATH;
+use super::tokens::{require_token, SessionTokens};
+use crate::commands::memory_server::{
+    MemoryTools, SessionClocks, SessionReads, SharingGate, Sources, MCP_PATH,
+};
 use crate::commands::shared_memory::SharedMemoryStore;
 
-/// Whether shared memory is switched on for a launch directory (the Memory
-/// panel's sharing toggle). Checked on every tool call, so flipping it off
-/// mid-session takes effect at once.
-pub type SharingGate = Arc<dyn Fn(&str) -> bool + Send + Sync>;
-
-/// What the tools answer from beyond the record: the project's indexed
-/// documents (`memory_search`) and the first-look extras (`memory_briefing`:
-/// the curated pack read from foreign stores, and the recent-session
-/// handoff). Both are seams into the app; a server without them answers from
-/// the record alone.
-#[derive(Clone, Default)]
-pub struct Sources {
-    pub index: Option<IndexSearch>,
-    pub bootstrap: Option<BootstrapSource>,
-    /// Drop one document from the index now (`memory_forget`). Without it a
-    /// forgotten entry's text stays retrievable until the next corpus pass.
-    pub evict: Option<IndexEvict>,
-    /// The session recorder, read-only: where a memory's writing session is
-    /// resolved to its title and commits. The default reads the launch
-    /// directory and the repository's worktrees.
-    pub capture: crate::commands::memory_capture::CaptureReader,
-    /// Checks a memory's code citations (M3). Without it the cited files are
-    /// read directly, with no symbol lookup for moved code.
-    pub check: Option<CitationCheck>,
-}
-
 /// The running server. Dropping it (or [`shutdown`](Self::shutdown)) stops it.
-pub struct MemoryServer {
+pub struct ToolServer {
     addr: SocketAddr,
     stop: Option<oneshot::Sender<()>>,
 }
 
-impl MemoryServer {
+impl ToolServer {
     /// Bind `127.0.0.1:0` and serve the memory tools over `memory`, admitting
     /// only requests bearing a live token from `tokens`. Returns once bound;
     /// serving continues on the runtime.
     #[cfg(test)]
     pub async fn start(
         memory: SharedMemoryStore,
-        tokens: Arc<MemoryTokens>,
+        tokens: Arc<SessionTokens>,
         clocks: Arc<SessionClocks>,
         reads: Arc<SessionReads>,
         gate: SharingGate,
@@ -69,7 +43,7 @@ impl MemoryServer {
     /// table holds one token per session, so a second would revoke the first.
     pub async fn start_with(
         memory: SharedMemoryStore,
-        tokens: Arc<MemoryTokens>,
+        tokens: Arc<SessionTokens>,
         clocks: Arc<SessionClocks>,
         reads: Arc<SessionReads>,
         gate: SharingGate,
@@ -132,7 +106,7 @@ impl MemoryServer {
     }
 }
 
-impl Drop for MemoryServer {
+impl Drop for ToolServer {
     fn drop(&mut self) {
         self.shutdown();
     }
@@ -142,20 +116,20 @@ impl Drop for MemoryServer {
 /// as managed state. Tokens and clocks exist from the start; the server's
 /// URL once it has bound.
 #[derive(Default)]
-pub struct MemoryServerHost {
-    tokens: Arc<MemoryTokens>,
+pub struct ToolServerHost {
+    tokens: Arc<SessionTokens>,
     clocks: Arc<SessionClocks>,
     reads: Arc<SessionReads>,
-    server: std::sync::OnceLock<MemoryServer>,
+    server: std::sync::OnceLock<ToolServer>,
 }
 
-impl MemoryServerHost {
+impl ToolServerHost {
     pub fn new() -> Self {
         Self::default()
     }
 
     /// The live session tokens (minted and revoked by the session lifecycle).
-    pub fn tokens(&self) -> &Arc<MemoryTokens> {
+    pub fn tokens(&self) -> &Arc<SessionTokens> {
         &self.tokens
     }
 
@@ -175,7 +149,7 @@ impl MemoryServerHost {
     /// The MCP endpoint, once the server has bound; `None` before that or if
     /// binding failed (sessions then run without memory tools).
     pub fn url(&self) -> Option<String> {
-        self.server.get().map(MemoryServer::url)
+        self.server.get().map(ToolServer::url)
     }
 
     /// The endpoint of a service mounted at `path`, once the server has bound.
@@ -195,7 +169,7 @@ impl MemoryServerHost {
     ) {
         let host = self.clone();
         tauri::async_runtime::spawn(async move {
-            let started = MemoryServer::start_with(
+            let started = ToolServer::start_with(
                 memory,
                 host.tokens.clone(),
                 host.clocks.clone(),
@@ -218,7 +192,7 @@ impl MemoryServerHost {
 
     /// A server that is already running, for tests.
     #[cfg(test)]
-    pub(crate) fn adopt(&self, server: MemoryServer) {
+    pub(crate) fn adopt(&self, server: ToolServer) {
         let _ = self.server.set(server);
     }
 }

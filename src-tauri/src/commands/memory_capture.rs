@@ -978,7 +978,7 @@ mod tests {
             atlas_checkpoint::bind(&store, &id, Path::new(&p), ProjectMode::Local).unwrap();
         }
         let capture = crate::commands::capture::CaptureState::new();
-        let tokens = crate::commands::memory_server::MemoryTokens::default();
+        let tokens = crate::commands::tool_servers::SessionTokens::default();
         for (id, agent) in [
             ("acp-7f3e", "claude-code"),
             ("native-91aa", atlas_native_agent::ATLAS_AGENT_ID),

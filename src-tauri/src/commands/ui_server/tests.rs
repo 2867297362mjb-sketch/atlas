@@ -17,11 +17,11 @@ use serde_json::{json, Value};
 
 use super::tools::{tool_names, tools_list, INSTRUCTIONS};
 use super::*;
-use crate::commands::memory_server::{
-    MemoryServer, MemoryServerHost, MemorySessionOffers, MemoryTokens, SessionClocks, SessionReads,
-    SharingGate, Sources, TOOLS_LIST_TTL_MS,
-};
+use crate::commands::memory_server::{SessionClocks, SessionReads, SharingGate, Sources};
 use crate::commands::shared_memory::SharedMemoryStore;
+use crate::commands::tool_servers::{
+    SessionOffers, SessionTokens, ToolServer, ToolServerHost, TOOLS_LIST_TTL_MS,
+};
 
 fn memory() -> SharedMemoryStore {
     let t = Arc::new(AtomicI64::new(1_000));
@@ -60,11 +60,11 @@ fn answering_bridge(
 }
 
 async fn serve(
-    tokens: Arc<MemoryTokens>,
+    tokens: Arc<SessionTokens>,
     bridge: Arc<UiBridge>,
     nav: NavigationGate,
-) -> MemoryServer {
-    MemoryServer::start_with(
+) -> ToolServer {
+    ToolServer::start_with(
         memory(),
         tokens,
         Arc::new(SessionClocks::default()),
@@ -109,7 +109,7 @@ async fn call(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_call_crosses_to_the_window_and_its_result_reaches_the_model_verbatim() {
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let (bridge, asked) = answering_bridge(|_| UiReply {
         ok: true,
         result: Some(json!({ "activeTabId": "editor:/p/a.ts", "tabs": [] })),
@@ -156,7 +156,7 @@ async fn a_call_crosses_to_the_window_and_its_result_reaches_the_model_verbatim(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_refusal_from_the_window_is_a_tool_error_the_model_can_read() {
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let (bridge, _) = answering_bridge(|_| UiReply {
         ok: false,
         result: None,
@@ -179,7 +179,7 @@ async fn a_refusal_from_the_window_is_a_tool_error_the_model_can_read() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_space_page_opens_by_its_conversation_and_page_ids_and_a_malformed_id_never_reaches_the_window(
 ) {
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let (bridge, asked) = answering_bridge(|_| UiReply {
         ok: true,
         result: Some(json!({ "tabId": "spaces-c-1" })),
@@ -229,7 +229,7 @@ async fn a_space_page_opens_by_its_conversation_and_page_ids_and_a_malformed_id_
 
 #[tokio::test(flavor = "multi_thread")]
 async fn with_navigation_off_nothing_crosses_to_the_window() {
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let (bridge, asked) = answering_bridge(|_| UiReply {
         ok: true,
         result: None,
@@ -251,7 +251,7 @@ async fn with_navigation_off_nothing_crosses_to_the_window() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn an_unknown_or_revoked_token_is_refused_on_the_ui_path() {
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let (bridge, _) = answering_bridge(|_| UiReply {
         ok: true,
         result: None,
@@ -270,7 +270,7 @@ async fn an_unknown_or_revoked_token_is_refused_on_the_ui_path() {
 /// service mounted beside them.
 #[tokio::test(flavor = "multi_thread")]
 async fn one_session_token_opens_both_services() {
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let (bridge, _) = answering_bridge(|_| UiReply {
         ok: true,
         result: Some(json!({})),
@@ -383,14 +383,14 @@ fn a_reply_reads_the_shape_the_window_sends() {
 
 // ── Handing the server to sessions ───────────────────────────────────────────
 
-async fn running_host() -> Arc<MemoryServerHost> {
-    let host = Arc::new(MemoryServerHost::new());
+async fn running_host() -> Arc<ToolServerHost> {
+    let host = Arc::new(ToolServerHost::new());
     let (bridge, _) = answering_bridge(|_| UiReply {
         ok: true,
         result: None,
         error: None,
     });
-    let server = MemoryServer::start_with(
+    let server = ToolServer::start_with(
         memory(),
         host.tokens().clone(),
         host.clocks().clone(),
@@ -421,7 +421,7 @@ fn session_request(ui_control: bool) -> SessionMcpRequest {
 
 /// Every entry an offer carries, as `(name, url, bearer token)`.
 fn entries(offer: &SessionMcpOffer) -> Vec<(String, String, String)> {
-    crate::commands::memory_server::offers::offered_entries(offer)
+    crate::commands::tool_servers::offers::offered_entries(offer)
 }
 
 fn names(offer: &SessionMcpOffer) -> Vec<String> {
@@ -434,8 +434,8 @@ fn names(offer: &SessionMcpOffer) -> Vec<String> {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_connection_with_ui_control_is_offered_both_servers_on_one_token() {
     let host = running_host().await;
-    let offers = MemorySessionOffers::new(host.clone(), sharing(true))
-        .with_ui(UiOffer::new(navigation(true)));
+    let offers =
+        SessionOffers::new(host.clone(), sharing(true)).with_ui(UiOffer::new(navigation(true)));
     let offer = offers.offer(&session_request(true));
     let got = entries(&offer);
     assert_eq!(names(&offer), ["atlas_memory", UI_SERVER_NAME]);
@@ -454,8 +454,7 @@ async fn a_connection_with_ui_control_is_offered_both_servers_on_one_token() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_connection_without_ui_control_is_offered_memory_only() {
     let host = running_host().await;
-    let offers =
-        MemorySessionOffers::new(host, sharing(true)).with_ui(UiOffer::new(navigation(true)));
+    let offers = SessionOffers::new(host, sharing(true)).with_ui(UiOffer::new(navigation(true)));
     assert_eq!(
         names(&offers.offer(&session_request(false))),
         ["atlas_memory"]
@@ -465,8 +464,7 @@ async fn a_connection_without_ui_control_is_offered_memory_only() {
 #[tokio::test(flavor = "multi_thread")]
 async fn with_navigation_off_only_memory_is_offered() {
     let host = running_host().await;
-    let offers =
-        MemorySessionOffers::new(host, sharing(true)).with_ui(UiOffer::new(navigation(false)));
+    let offers = SessionOffers::new(host, sharing(true)).with_ui(UiOffer::new(navigation(false)));
     assert_eq!(
         names(&offers.offer(&session_request(true))),
         ["atlas_memory"]
@@ -476,8 +474,7 @@ async fn with_navigation_off_only_memory_is_offered() {
 #[tokio::test(flavor = "multi_thread")]
 async fn with_sharing_off_and_navigation_on_only_ui_is_offered() {
     let host = running_host().await;
-    let offers =
-        MemorySessionOffers::new(host, sharing(false)).with_ui(UiOffer::new(navigation(true)));
+    let offers = SessionOffers::new(host, sharing(false)).with_ui(UiOffer::new(navigation(true)));
     assert_eq!(
         names(&offers.offer(&session_request(true))),
         [UI_SERVER_NAME]
@@ -487,7 +484,7 @@ async fn with_sharing_off_and_navigation_on_only_ui_is_offered() {
 #[tokio::test(flavor = "multi_thread")]
 async fn without_the_ui_half_the_offer_is_memory_only_as_before() {
     let host = running_host().await;
-    let offers = MemorySessionOffers::new(host, sharing(true));
+    let offers = SessionOffers::new(host, sharing(true));
     assert_eq!(
         names(&offers.offer(&session_request(true))),
         ["atlas_memory"]
@@ -548,17 +545,17 @@ fn the_setting_is_not_read_for_a_connection_that_cannot_use_the_server() {
 async fn recording_host(
     nav: NavigationGate,
 ) -> (
-    Arc<MemoryServerHost>,
-    MemorySessionOffers,
+    Arc<ToolServerHost>,
+    SessionOffers,
     Arc<Mutex<Vec<UiRequest>>>,
 ) {
-    let host = Arc::new(MemoryServerHost::new());
+    let host = Arc::new(ToolServerHost::new());
     let (bridge, asked) = answering_bridge(|_| UiReply {
         ok: true,
         result: Some(json!({})),
         error: None,
     });
-    let server = MemoryServer::start_with(
+    let server = ToolServer::start_with(
         memory(),
         host.tokens().clone(),
         host.clocks().clone(),
@@ -570,7 +567,7 @@ async fn recording_host(
     .await
     .unwrap();
     host.adopt(server);
-    let offers = MemorySessionOffers::new(host.clone(), sharing(true)).with_ui(UiOffer::new(nav));
+    let offers = SessionOffers::new(host.clone(), sharing(true)).with_ui(UiOffer::new(nav));
     (host, offers, asked)
 }
 
@@ -627,7 +624,7 @@ async fn switching_navigation_off_refuses_the_next_call_of_a_connected_client() 
     let flag = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let read = flag.clone();
     let nav: NavigationGate = Arc::new(move |_: &str| read.load(Ordering::SeqCst));
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let (bridge, asked) = answering_bridge(|_| UiReply {
         ok: true,
         result: Some(json!({})),
@@ -657,7 +654,7 @@ async fn switching_navigation_off_refuses_the_next_call_of_a_connected_client() 
 /// any MCP handling.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_missing_or_non_bearer_authorization_is_refused_on_the_ui_path() {
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let (bridge, _) = answering_bridge(|_| UiReply {
         ok: true,
         result: None,
@@ -690,7 +687,7 @@ async fn a_missing_or_non_bearer_authorization_is_refused_on_the_ui_path() {
 /// replies by request id, not by order.
 #[tokio::test(flavor = "multi_thread")]
 async fn concurrent_calls_each_get_their_own_answer() {
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     // The window echoes the path it was asked to open, the first one slowly,
     // so the replies arrive in the reverse order of the requests.
     let slot: Arc<std::sync::OnceLock<Arc<UiBridge>>> = Arc::new(std::sync::OnceLock::new());

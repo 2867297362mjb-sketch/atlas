@@ -57,11 +57,11 @@ struct TokenTable {
 /// The live bearer tokens: one per session, minted at session start and
 /// revoked at session end. Cheap to share (`Arc`).
 #[derive(Default)]
-pub struct MemoryTokens {
+pub struct SessionTokens {
     table: Mutex<TokenTable>,
 }
 
-impl MemoryTokens {
+impl SessionTokens {
     /// Mint `session_id`'s token, revoking any earlier one it had (a session
     /// rebound in another directory gets a token for that scope).
     // Outside tests only the lifecycle mints (through `mint_locked`).
@@ -198,7 +198,7 @@ impl MemoryTokens {
 }
 
 /// A session gets its token when it starts and loses it when it ends.
-impl SessionLifecycle for MemoryTokens {
+impl SessionLifecycle for SessionTokens {
     fn session_started(&self, session_id: &str, agent: &str, cwd: &str) {
         if cwd.is_empty() {
             return;
@@ -228,7 +228,7 @@ impl SessionLifecycle for MemoryTokens {
 /// Admit a request only with `Authorization: Bearer <live token>`; hand the
 /// token's [`Grant`] to the tool handler through the request extensions.
 pub(super) async fn require_token(
-    State(tokens): State<Arc<MemoryTokens>>,
+    State(tokens): State<Arc<SessionTokens>>,
     mut request: Request<Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
