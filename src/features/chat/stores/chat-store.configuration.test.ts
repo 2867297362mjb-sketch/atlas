@@ -7,8 +7,9 @@
 // One table, a row per knob, because the sequence is the same for each: show
 // the pick, push it to the agent, take it back if the agent says no, remember
 // it for the next session. Where the knobs differ, the row says how
-// (`refusal`, `unbound`, `unoffered`), so a difference is a stated fact here
-// rather than something that happens to be true of one action.
+// (`optimistic`, `hasPreference`, `unbound`, `unoffered`), so a difference is
+// a stated fact here rather than something that happens to be true of one
+// action.
 //
 // The module's own suite (`../lib/session-configuration.test.ts`) covers the
 // same sequence against in-memory fakes; this one is the wiring.
