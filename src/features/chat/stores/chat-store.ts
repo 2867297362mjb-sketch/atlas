@@ -47,7 +47,7 @@ import { loadCachedAcpModels, saveCachedAcpModels } from "../lib/acp-models-cach
 import { resolveModelLabel } from "../lib/model-label";
 import { agentForNewSession } from "../lib/default-agent";
 import { loadCachedContextUsage, saveCachedContextUsage } from "../lib/context-usage-cache";
-import { saveNativeModelPref, saveNativeEffort } from "../lib/native-model-pref";
+import { saveNativeEffort } from "../lib/native-model-pref";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { extractPlanMarkdown, type PlanRecord } from "../lib/plans";
@@ -151,25 +151,6 @@ function applyPersistedModePref(sess: ChatSession, agentType: AgentType): void {
       cached.availableModes.some((m) => m.id === pref));
   sess.acpModeExplicit = valid;
   if (valid && pref) sess.acpCurrentMode = pref;
-}
-
-/** Push the native agent's `provider/model` selection to its bound agent via
- *  `agents_set_model`. The id is forwarded verbatim: `AgentHost::set_model`
- *  (`src-tauri/src/commands/agent_host.rs`) hands it to the connection's model
- *  selector, and the native agent validates it against its catalogue
- *  (`crates/atlas-native-agent/src/engine/connection.rs`, `select_model`).
- *  No-op until the session is bound and both provider + model are chosen. */
-function pushNativeModelToAgent(state: ChatState, sessionId: string): void {
-  const session = state.sessions[sessionId];
-  if (!session?.acpAgentId || !session.acpSessionId) return;
-  if (session.agentType !== "atlas-agent") return;
-  const provider = session.nativeProvider;
-  const model = session.acpCurrentModel;
-  if (!provider || !model) return;
-  void invoke("agents_set_model", {
-    key: { agent_id: session.acpAgentId, session_id: session.acpSessionId },
-    modelId: `${provider}/${model}`,
-  }).catch((err) => console.warn("agents_set_model failed:", err));
 }
 
 // `pushNativeCompressToAgent` stood here, pushing the RTK compression toggle
@@ -402,12 +383,6 @@ interface ChatActions {
      *  knobs reach the frontend, since `session/new`'s advertisement lives in
      *  the backend cell and a follow-up notification is optional (#32). */
     setAcpConfigOptions: (tabId: string, options: unknown[], sourceAgentType?: string) => void;
-    /** Native agent: pick the BYOK provider. Clears the model so the
-     *  composer re-selects a default for the new provider before pushing. */
-    setNativeProvider: (sessionId: string, provider: string) => void;
-    /** Native agent: pick the model and push `provider/model` to the
-     *  bound agent via `agents_set_model`. No-op until the session is bound. */
-    setNativeModel: (sessionId: string, model: string) => void;
     /** Native agent: set the reasoning-effort level and push it. */
     setNativeEffort: (sessionId: string, effort: string) => void;
     /** Native agent: toggle RTK tool-output compression and push it. */
@@ -1446,27 +1421,6 @@ export const useChatStore = createSelectors(
         },
         setAcpModel: (sessionId, modelId) =>
           void sessionConfiguration.pick(sessionId, KNOBS.model, modelId),
-        setNativeProvider: (sessionId, provider) =>
-          set((s) => {
-            const session = s.sessions[sessionId];
-            if (!session || session.nativeProvider === provider) return;
-            session.nativeProvider = provider;
-            // New provider → the prior model id is meaningless; let the composer
-            // pick this provider's default before anything is pushed.
-            session.acpCurrentModel = undefined;
-          }),
-        setNativeModel: (sessionId, model) => {
-          set((s) => {
-            const session = s.sessions[sessionId];
-            if (session) session.acpCurrentModel = model;
-          });
-          // Remember the full selection so the next new chat seeds from it.
-          const sess = get().sessions[sessionId];
-          if (sess?.nativeProvider && model) {
-            saveNativeModelPref({ provider: sess.nativeProvider, model });
-          }
-          pushNativeModelToAgent(get(), sessionId);
-        },
         setNativeEffort: (sessionId, effort) =>
           void sessionConfiguration.pick(sessionId, KNOBS.effort, effort),
         replaceMessages: (sessionId, messages) =>
