@@ -951,6 +951,298 @@ async fn a_relabelled_catalogue_swaps_in_place_but_a_changed_one_does_not() {
     );
 }
 
+// ── The picker's Refresh, through the seam's capability (ADR-0007 §5) ───────
+//
+// The policy is `AgentModelCatalogue::refresh`, and these drive it the way
+// the host does: off the connection when an engine is running, off the
+// launcher when none is. Nothing here names the type behind the trait.
+
+/// A gateway catalogue of entitled rows on the fixture's context window —
+/// the window is part of what the engine loaded, so keeping it is what makes
+/// a row "the same row" — and optionally with display names.
+fn catalogue_of(ids: &[&str], named: bool) -> Value {
+    let data: Vec<Value> = ids
+        .iter()
+        .enumerate()
+        .map(|(index, id)| {
+            serde_json::json!({
+                "id": id, "object": "model", "created": 1786320000,
+                "owned_by": "google-vertex-ai", "publisher": "test", "entitled": true,
+                "display_name": named.then(|| format!("Name of {id}")),
+                "description": null, "context_window": 200000,
+                "sort_order": index + 1, "default": index == 0,
+                "input_modalities": ["text", "image"],
+            })
+        })
+        .collect();
+    serde_json::json!({ "object": "list", "data": data, "hasGrant": true })
+}
+
+/// Replace what the mock gateway answers `GET /v1/catalogue` with.
+async fn serve_catalogue(server: &MockServer, template: ResponseTemplate) {
+    server.reset().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/catalogue"))
+        .respond_with(template)
+        .mount(server)
+        .await;
+}
+
+async fn cached(home: &std::path::Path) -> atlas_native_agent::engine::CatalogueCache {
+    use atlas_native_agent::engine::catalog_cache::load_cache;
+    let Some(cache) = load_cache(&home.join("engine")).await else {
+        panic!("a catalogue cache must be on disk");
+    };
+    cache
+}
+
+fn ids_of(models: &[atlas_acp_thread::AgentModelInfo]) -> Vec<&str> {
+    models.iter().map(|model| model.id.as_str()).collect()
+}
+
+fn live_catalogue(h: &Harness) -> Arc<dyn atlas_acp_thread::AgentModelCatalogue> {
+    let Some(catalogue) = h.connection.model_catalogue() else {
+        panic!("a gateway connection must offer its catalogue for refresh");
+    };
+    catalogue
+}
+
+#[tokio::test]
+async fn a_refresh_with_no_engine_running_stores_the_list_for_the_next_connect() {
+    // Outcome one. The launcher is the only thing there is to ask, and the
+    // whole job is the cache: the next connect reads it without a request.
+    use atlas_acp_thread::ModelCatalogueOutcome;
+    use atlas_agent_servers::AgentServer;
+    use atlas_native_agent::engine::EngineAgentServer;
+
+    let server = MockServer::start().await;
+    catalogue_mock().mount(&server).await;
+    let Ok(home) = tempfile::tempdir() else {
+        panic!("tempdir");
+    };
+    let launcher = EngineAgentServer::new(gateway_settings(home.path(), &server))
+        .with_catalogue(fetcher(&server, Arc::new(StaticToken)));
+    let Some(catalogue) = launcher.model_catalogue() else {
+        panic!("the gateway launcher must offer its catalogue for refresh");
+    };
+
+    let refreshed = match catalogue.refresh().await {
+        Ok(refreshed) => refreshed,
+        Err(err) => panic!("the gateway answered: {err:#}"),
+    };
+
+    assert_eq!(refreshed.outcome, ModelCatalogueOutcome::Stored);
+    assert_eq!(
+        ids_of(&refreshed.models),
+        FIXTURE_MODELS,
+        "entitled rows, in the gateway's order, and never the locked one",
+    );
+    assert_eq!(refreshed.default_model.as_str(), FIXTURE_DEFAULT);
+    let cache = cached(home.path()).await;
+    assert_eq!(
+        cache.rows.len(),
+        FIXTURE_MODELS.len() + 1,
+        "the gateway's rows verbatim, locked one included",
+    );
+    assert!(
+        cache.rows.iter().any(|row| row.id == FIXTURE_LOCKED),
+        "what is cached is what the gateway said, not what the picker shows",
+    );
+}
+
+#[tokio::test]
+async fn a_relabelled_list_swaps_into_the_running_connection() {
+    // Outcome two. Same slugs and windows, new names: the engine already
+    // knows every row, so the labels change under the live connection.
+    use atlas_acp_thread::ModelCatalogueOutcome;
+
+    let h = harness(vec![(None, sse_ok(answer("ok")))]).await;
+    let before = h.connection.catalogue_snapshot();
+    serve_catalogue(
+        &h.server,
+        ResponseTemplate::new(200).set_body_json(catalogue_of(&FIXTURE_MODELS, true)),
+    )
+    .await;
+
+    let refreshed = match live_catalogue(&h).refresh().await {
+        Ok(refreshed) => refreshed,
+        Err(err) => panic!("the gateway answered: {err:#}"),
+    };
+
+    assert_eq!(
+        refreshed.outcome,
+        ModelCatalogueOutcome::Applied { changed: true },
+        "the names differ, and the user can see that",
+    );
+    let after = h.connection.catalogue_snapshot();
+    assert_eq!(after.fingerprint, before.fingerprint);
+    assert_eq!(
+        &*after.picker[0].name,
+        format!("Name of {FIXTURE_DEFAULT}").as_str(),
+        "the running connection lists the new label",
+    );
+    assert!(!after.stale, "the list is as fresh as the gateway's answer");
+
+    // Asked again with nothing new, it applies again and says nothing moved.
+    let again = match live_catalogue(&h).refresh().await {
+        Ok(again) => again,
+        Err(err) => panic!("the gateway answered: {err:#}"),
+    };
+    assert_eq!(
+        again.outcome,
+        ModelCatalogueOutcome::Applied { changed: false }
+    );
+}
+
+#[tokio::test]
+async fn a_changed_list_asks_for_a_reconnect_and_leaves_the_running_one_alone() {
+    // Outcome three. A slug the engine never loaded gets invented metadata
+    // the gateway 400s, so the live list must not offer it. The refresh says
+    // a reconnect is needed, and the cache is already what that reconnect
+    // will read.
+    use atlas_acp_thread::ModelCatalogueOutcome;
+
+    let h = harness(vec![(None, sse_ok(answer("ok")))]).await;
+    let before = h.connection.catalogue_snapshot();
+    let mut grown: Vec<&str> = FIXTURE_MODELS.to_vec();
+    grown.push("brand-new-model");
+    serve_catalogue(
+        &h.server,
+        ResponseTemplate::new(200).set_body_json(catalogue_of(&grown, false)),
+    )
+    .await;
+
+    let refreshed = match live_catalogue(&h).refresh().await {
+        Ok(refreshed) => refreshed,
+        Err(err) => panic!("the gateway answered: {err:#}"),
+    };
+
+    assert_eq!(refreshed.outcome, ModelCatalogueOutcome::ReconnectRequired);
+    assert_eq!(
+        ids_of(&refreshed.models),
+        grown,
+        "the caller is handed the list the reconnect will run on",
+    );
+    assert_eq!(
+        h.connection.catalogue_snapshot(),
+        before,
+        "nothing live moved: the engine cannot run what it did not load",
+    );
+    assert!(
+        cached(h._home.path())
+            .await
+            .rows
+            .iter()
+            .any(|row| row.id == "brand-new-model"),
+        "and the cache is already rewritten, so a postponed reconnect loses nothing",
+    );
+}
+
+#[tokio::test]
+async fn a_gateway_that_does_not_answer_fails_the_refresh_within_its_bound() {
+    // ADR-0008: the hop is bounded. A refresh does not fall back the way a
+    // connect does — the caller asked whether the gateway answered — so the
+    // timeout is an error, and the cache and the live list stay as they were.
+    use atlas_native_agent::engine::catalog_cache::FETCH_TIMEOUT;
+
+    let h = harness(vec![(None, sse_ok(answer("ok")))]).await;
+    let live_before = h.connection.catalogue_snapshot();
+    let cache_before = cached(h._home.path()).await;
+    serve_catalogue(
+        &h.server,
+        ResponseTemplate::new(200)
+            .set_body_json(catalogue_of(&["never-arrives"], false))
+            .set_delay(FETCH_TIMEOUT + std::time::Duration::from_secs(30)),
+    )
+    .await;
+
+    let started = std::time::Instant::now();
+    let Err(err) = live_catalogue(&h).refresh().await else {
+        panic!("a gateway that never answers is not a refresh");
+    };
+    let waited = started.elapsed();
+
+    assert!(
+        waited >= FETCH_TIMEOUT && waited < FETCH_TIMEOUT + std::time::Duration::from_secs(10),
+        "bounded by the fetch timeout, not by the gateway: waited {waited:?}",
+    );
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("could not refresh models"),
+        "the user reads what failed: {message}",
+    );
+    assert!(
+        message.contains("could not reach the gateway"),
+        "and why: {message}",
+    );
+    assert_eq!(h.connection.catalogue_snapshot(), live_before);
+    assert_eq!(
+        cached(h._home.path()).await.fetched_at,
+        cache_before.fetched_at,
+        "a failed refresh must not take the list away",
+    );
+}
+
+#[tokio::test]
+async fn a_list_with_nothing_entitled_is_an_empty_catalogue_not_a_list() {
+    // The gateway answered, and nothing in the answer may be run. That is
+    // its own error — the host words it as a setup problem — and the cache is
+    // written anyway, so the next connect refuses on the same grounds rather
+    // than running on the previous list.
+    use atlas_acp_thread::ModelCatalogueEmpty;
+
+    let h = harness(vec![(None, sse_ok(answer("ok")))]).await;
+    let live_before = h.connection.catalogue_snapshot();
+    serve_catalogue(
+        &h.server,
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "object": "list", "hasGrant": false,
+            "data": [{ "id": FIXTURE_LOCKED, "entitled": false }],
+        })),
+    )
+    .await;
+
+    let Err(err) = live_catalogue(&h).refresh().await else {
+        panic!("nothing entitled is no list");
+    };
+
+    assert!(
+        err.is::<ModelCatalogueEmpty>(),
+        "typed, so the host can tell it from an unreachable gateway: {err:#}",
+    );
+    assert_eq!(h.connection.catalogue_snapshot(), live_before);
+    let cache = cached(h._home.path()).await;
+    assert_eq!(cache.rows.len(), 1);
+    assert_eq!(cache.rows[0].id, FIXTURE_LOCKED);
+}
+
+#[tokio::test]
+async fn a_forked_session_is_a_new_thread_the_engine_knows() {
+    // Fork crosses the seam as a capability: the connection says it can, and
+    // the branch comes back as a session id of its own.
+    let h = harness(vec![(None, sse_ok(answer("ok")))]).await;
+    assert!(h.connection.supports_fork());
+    let session_id = h.open_thread().await;
+    if let Err(err) = h
+        .connection
+        .prompt(acp::PromptRequest::new(session_id.clone(), text("hello")))
+        .await
+    {
+        panic!("the turn should complete: {err:#}");
+    }
+
+    let Some(fork) = h.connection.fork(&session_id) else {
+        panic!("a connection that supports fork must offer it");
+    };
+    let forked = match fork.run().await {
+        Ok(forked) => forked,
+        Err(err) => panic!("the engine should branch the thread: {err:#}"),
+    };
+
+    assert_ne!(forked, session_id, "a branch is a session of its own");
+    assert!(!forked.to_string().is_empty());
+}
+
 #[tokio::test]
 async fn a_new_session_advertises_its_commands_and_no_login() {
     // The native agent published nothing, so its slash picker was empty while
