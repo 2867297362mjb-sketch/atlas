@@ -7,9 +7,9 @@
 // nothing for a session with none.
 //
 // The badge: one pull request reads as its state and number, and a click
-// opens it; several read as "+N" (or, all in one chain derived from base
+// opens it; several read as "+N" (or, all in one stack derived from base
 // branches, as a stack of N), and a click opens the session's pull request
-// panel. Hovering it lists them all, chains indented under their base.
+// panel. Hovering it lists them all, stacks indented under their base.
 // ⌘-click (Ctrl elsewhere) opens the pull request on GitHub instead.
 
 import { useState, type ComponentProps, type MouseEvent, type ReactNode } from "react";
@@ -19,7 +19,7 @@ import type { AttachedProject, PullRequestLink } from "@/features/chat/lib/histo
 import { STATE_PRESENTATION } from "@/features/pull-requests/components/pull-request-presentation";
 import { openSessionPullRequestsTab } from "@/features/pull-requests/lib/open-session-pull-requests-tab";
 import { sessionCheckouts } from "@/features/pull-requests/lib/session-checkouts";
-import { sessionPullRequestRows } from "@/features/pull-requests/lib/session-pull-request-chains";
+import { sessionPullRequestRows } from "@/features/pull-requests/lib/session-pull-request-stacks";
 import {
   openSessionLink,
   wantsHost,
@@ -154,8 +154,8 @@ export function SessionPullRequestBadge({
   );
 }
 
-/** The linked pull requests as compact lines, chains indented under their
- *  base, the base marked "chain · N". */
+/** The linked pull requests as compact lines, stacks indented under their
+ *  base, the base marked "stack · N". */
 function PullRequestMiniList({
   pullRequests,
   onOpen,
@@ -168,7 +168,7 @@ function PullRequestMiniList({
   const lines = sessionPullRequestRows(pullRequests);
   return (
     <ul className="flex flex-col">
-      {lines.map(({ link, depth, chain }) => {
+      {lines.map(({ link, depth, stack }) => {
         const state = STATE_PRESENTATION[linkState(link)];
         return (
           <li key={linkKey(link)} style={{ paddingLeft: `${Math.min(depth, 3) * 0.75}rem` }}>
@@ -186,8 +186,8 @@ function PullRequestMiniList({
               <span className="min-w-0 flex-1 truncate text-secondary-foreground">
                 {link.snapshot?.title ?? link.repository}
               </span>
-              {chain ? (
-                <span className="shrink-0 text-2xs text-foreground">chain · {chain.size}</span>
+              {stack ? (
+                <span className="shrink-0 text-2xs text-foreground">stack · {stack.size}</span>
               ) : null}
               {trailing?.(link)}
             </button>
