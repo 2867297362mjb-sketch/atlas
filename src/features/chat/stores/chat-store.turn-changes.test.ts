@@ -166,8 +166,8 @@ describe("what each view says a turn changed", () => {
           ],
           "tree": "+1 −0",
           "viewer": [
-            "added src/other.ts +1 −0",
             "added src/known.ts +1 −0",
+            "added src/other.ts +1 −0",
           ],
         },
         "a failed edit": {
@@ -192,7 +192,7 @@ describe("what each view says a turn changed", () => {
           ],
           "tree": "+2 −1",
           "viewer": [
-            "added src/d.rs (was src/c.rs) +1 −0",
+            "added src/d.rs +1 −0",
           ],
         },
         "a file edited, then renamed": {
