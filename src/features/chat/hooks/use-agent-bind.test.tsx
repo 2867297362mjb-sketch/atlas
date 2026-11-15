@@ -1,8 +1,9 @@
 // @vitest-environment happy-dom
 //
 // Binding a new session to an agent, through the hook a chat panel mounts:
-// `useAgentBind` over the real chat store and the shared Tauri fake, which
-// stands where Rust does (`agents_spawn`, `agents_new_session`, …).
+// `useAgentBind` over the app's own `sessionBind`, the real chat store and the
+// shared Tauri fake, which stands where Rust does (`agents_spawn`,
+// `agents_new_session`, …).
 //
 // What is pinned is the start path's contract (ADR-0008): one `session/new`
 // per session however often the panel mounts, a failure that is reported once
@@ -29,6 +30,7 @@ import { useLogStore } from "@/features/log/stores/log-store";
 import type { AgentCatalogEntry } from "@/types/agent-catalog";
 import { useChatStore } from "../stores/chat-store";
 import { resetAgent } from "../lib/agents-api";
+import { sessionBind } from "../lib/session-bind";
 import { takeSignInCallback } from "../lib/agent-signin";
 import { useAgentBind, type BindControl } from "./use-agent-bind";
 
@@ -41,10 +43,7 @@ const DEADLINE_MS = 3 * 60_000;
 const PLUGIN = "codex";
 const AGENT = { agent_id: "agent-codex", spec_id: PLUGIN, display_name: "Codex" };
 
-// The bind's attempt state is module-level and has no reset, so every test
-// binds a tab of its own.
-let tabSeq = 0;
-let TAB = "";
+const TAB = "tab-1";
 
 const store = () => useChatStore.getState();
 const session = () => store().sessions[TAB]!;
@@ -127,7 +126,7 @@ beforeEach(() => {
   tauri.reset();
   healthyBackend();
   localStorage.clear();
-  TAB = `tab-${++tabSeq}`;
+  sessionBind.reset();
   for (const plugin of [PLUGIN, "opencode"]) resetAgent(plugin);
   useChatStore.setState({
     sessions: {},
