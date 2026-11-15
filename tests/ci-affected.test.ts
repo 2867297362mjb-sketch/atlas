@@ -185,10 +185,12 @@ describe("the CI plan", () => {
 
   it("leaves the engine out of a change to a crate the engine does not depend on", () => {
     const p = run(["crates/atlas-redact/src/lib.rs"]);
-    // Its dependents, plus atlas-process alone: the spawn audit reads every
-    // crate, but only atlas-process's own tests do, so its dependents stay out.
+    // Its dependents, plus atlas-process and atlas-git alone: each has a
+    // spawn audit that reads every crate, but only their own tests do, so
+    // their dependents stay out.
     expect(p.crates.map((c) => c.crate).sort()).toEqual([
       "atlas-checkpoint",
+      "atlas-git",
       "atlas-memory",
       "atlas-process",
       "atlas-redact",
