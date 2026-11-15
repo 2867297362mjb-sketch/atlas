@@ -48,6 +48,7 @@ import {
 import { OrgAgentInput, type OrgAgentInputHandle } from "./org-agent-input";
 import { Notice, PendingTurn, TurnView } from "./org-agent-turn";
 import { Button, HintGroup, HintItem, Hint } from "@tryatlas/design";
+import { onWindowEvent } from "@/lib/window-events";
 
 /** The starters: the web's three, and the one a team lead asks first. */
 const STARTERS: { text: string; Icon: LucideIcon }[] = [
@@ -610,8 +611,7 @@ function useAppearance(): "dark" | "light" {
   useEffect(() => {
     const update = () =>
       setAppearance(document.documentElement.classList.contains("dark") ? "dark" : "light");
-    window.addEventListener("atlas:theme-applied", update);
-    return () => window.removeEventListener("atlas:theme-applied", update);
+    return onWindowEvent("atlas:theme-applied", update);
   }, []);
   return appearance;
 }

@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { emitWindowEvent } from "@/lib/window-events";
 
 /** Each `render` call takes the next queued SVG; a test decides when it lands. */
 const queue: Array<{ promise: Promise<{ svg: string }>; resolve: (svg: string) => void }> = [];
@@ -28,7 +29,7 @@ afterEach(() => {
   queue.length = 0;
 });
 
-const themeApplied = () => window.dispatchEvent(new CustomEvent("atlas:theme-applied"));
+const themeApplied = () => emitWindowEvent("atlas:theme-applied");
 
 describe("MermaidBlock across a theme switch", () => {
   /**

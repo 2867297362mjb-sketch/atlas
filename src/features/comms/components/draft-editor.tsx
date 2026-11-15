@@ -15,6 +15,7 @@ import { remoteCaretField, setRemoteCarets } from "../lib/cm-remote-carets";
 import { useCommsStore } from "../stores/comms-store";
 import type { ChatConversation, PromptDraft } from "../types";
 import { DraftEditorView } from "./views/draft-editor-view";
+import { onWindowEvent } from "@/lib/window-events";
 
 /**
  * The realtime Prompt Draft editor: one shared Y.Doc, everyone types at
@@ -79,8 +80,7 @@ export function DraftEditor({ conv, draft }: { conv: ChatConversation; draft: Pr
         effects: themeCompartment.reconfigure(editorThemeExtensions()),
       });
     };
-    window.addEventListener("atlas:theme-applied", onTheme);
-    return () => window.removeEventListener("atlas:theme-applied", onTheme);
+    return onWindowEvent("atlas:theme-applied", onTheme);
   }, [themeCompartment]);
 
   // Push peer carets into the editor as decorations whenever they move.

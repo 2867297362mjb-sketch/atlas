@@ -13,11 +13,9 @@ import { isSendHeldElsewhere } from "@/features/chat/stores/live-elsewhere-store
 import { readArgs, refuse } from "./args";
 import { tabInScope } from "./scope";
 import type { UiActionRequest } from "./types";
+import { emitWindowEvent } from "@/lib/window-events";
 
 const OPS = ["focus", "prefill", "insert", "send", "jump", "switch_agent"] as const;
-
-const emit = (name: string, detail: unknown) =>
-  window.dispatchEvent(new CustomEvent(name, { detail }));
 
 export function performChat(request: UiActionRequest): unknown {
   const a = readArgs("ui_chat", request.args);
@@ -67,22 +65,22 @@ export function performChat(request: UiActionRequest): unknown {
   useChatStore.getState().actions.setActiveSession(tabId);
   switch (op) {
     case "focus":
-      emit("atlas:chat-focus", { tabId });
+      emitWindowEvent("atlas:chat-focus", { tabId });
       break;
     case "prefill":
       // Replaces the draft; the composer offers Undo.
-      emit("atlas:chat-prefill", { tabId, text });
+      emitWindowEvent("atlas:chat-prefill", { tabId, text: text as string });
       break;
     case "insert":
       // Untargeted insert appends to the active composer (a targeted one
       // replaces), so the tab is made active first.
-      emit("atlas:chat-insert", { text });
+      emitWindowEvent("atlas:chat-insert", { text: text as string });
       break;
     case "send":
-      emit("atlas:chat-send", { tabId, text });
+      emitWindowEvent("atlas:chat-send", { tabId, text });
       break;
     case "jump":
-      emit("atlas:chat-jump", { index });
+      emitWindowEvent("atlas:chat-jump", { index: index as number });
       break;
     case "switch_agent":
       switchAgentForTab(tabId, agent as string);

@@ -3,6 +3,7 @@ import { logEvent } from "@/features/log/lib/log";
 import { KnowledgeTree, type KnowledgeTreeHandle } from "./knowledge-tree";
 import { KnowledgeSidebarView } from "./views/knowledge-sidebar-view";
 import { deleteClonedRepo, listClonedRepos, type KnowledgeClonedRepo } from "../lib/knowledge-api";
+import { onWindowEvent } from "@/lib/window-events";
 
 interface KnowledgeSidebarProps {
   projectPath: string;
@@ -78,10 +79,10 @@ export function KnowledgeSidebar({
   useEffect(() => {
     const handler = () => loadRepos();
     window.addEventListener("focus", handler);
-    window.addEventListener("atlas:repo-cloned", handler);
+    const offRepoCloned = onWindowEvent("atlas:repo-cloned", handler);
     return () => {
       window.removeEventListener("focus", handler);
-      window.removeEventListener("atlas:repo-cloned", handler);
+      offRepoCloned();
     };
   }, [loadRepos]);
 

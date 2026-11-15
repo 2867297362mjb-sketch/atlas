@@ -4,6 +4,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom/vitest";
 import type { ClonedRepo, GithubRepo } from "@/features/github/types";
+import { onWindowEvent } from "@/lib/window-events";
 
 /**
  * Flow-level reference test: drives the panel the way a person does — type,
@@ -281,7 +282,7 @@ describe("cloning", () => {
     mocks.currentProject = { path: "/Users/dev/myproject" };
     answer({ search_github: [repo()], list_cloned_repos: [] });
     const clonedEvent = vi.fn();
-    window.addEventListener("atlas:repo-cloned", clonedEvent);
+    const off = onWindowEvent("atlas:repo-cloned", clonedEvent);
     try {
       render(<GithubPanel />);
       const user = await search("atlas");
@@ -291,7 +292,7 @@ describe("cloning", () => {
         expect.objectContaining({ source: "github", kind: "clone" }),
       );
     } finally {
-      window.removeEventListener("atlas:repo-cloned", clonedEvent);
+      off();
     }
   });
 

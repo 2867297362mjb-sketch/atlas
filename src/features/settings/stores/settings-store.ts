@@ -11,7 +11,6 @@ import {
   getActiveTheme,
   setInterfaceContrast,
 } from "@/features/theme/apply-theme";
-import { THEME_APPLIED_EVENT } from "@/features/theme/theme-values";
 import { applyConfiguredIconTheme } from "@/features/icon-theme/stores/icon-theme-store";
 import {
   updateSettings as updateAtlasConfig,
@@ -23,6 +22,7 @@ import {
 } from "@/features/settings/lib/atlas-config-api";
 import { DEFAULT_SETTINGS, type AppSettings } from "@/features/settings/lib/app-settings";
 import { useModelPricingStore } from "./model-pricing-store";
+import { onWindowEvent } from "@/lib/window-events";
 
 // Re-exported because most of the app reaches for `AppSettings` through the
 // store it reads settings from; the definition itself lives one directory over
@@ -305,7 +305,7 @@ if (typeof window !== "undefined") {
 // `system`, a hot-reloaded theme file — can change the appearance the icons
 // should follow. See `applyIcons`.
 if (typeof window !== "undefined") {
-  window.addEventListener(THEME_APPLIED_EVENT, () => {
+  onWindowEvent("atlas:theme-applied", () => {
     const { settings } = useSettingsStore.getState();
     applyIcons(settings.iconTheme, settings.themeMode);
   });

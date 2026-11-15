@@ -2,6 +2,7 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { classifyFile, type FileKind } from "@/lib/file-types";
 import { MediaViewerView } from "./views/media-viewer-view";
+import { onWindowEvent } from "@/lib/window-events";
 
 interface MediaViewerProps {
   filePath: string;
@@ -33,8 +34,7 @@ export function MediaViewer({ filePath }: MediaViewerProps) {
 
   useEffect(() => {
     refreshMtime();
-    window.addEventListener("atlas:window-active", refreshMtime);
-    return () => window.removeEventListener("atlas:window-active", refreshMtime);
+    return onWindowEvent("atlas:window-active", refreshMtime);
   }, [refreshMtime]);
 
   const src = useMemo(() => {

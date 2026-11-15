@@ -16,6 +16,7 @@ import { useLiveEmbed } from "../lib/use-live-embed";
 import { BrowserAddressBar, BrowserFindBar } from "./views/browser-toolbar";
 import { BrowserLiveSurface } from "./views/browser-live-surface";
 import { BrowserReaderSurface } from "./views/browser-reader-surface";
+import { onWindowEvent } from "@/lib/window-events";
 
 interface BrowserPanelProps {
   tabId?: string;
@@ -95,15 +96,12 @@ export function BrowserPanel({ tabId, initialUrl, groupId }: BrowserPanelProps) 
   // `initialUrl` is only read on mount.
   useEffect(() => {
     if (!tabId) return;
-    const onNavigate = (e: Event) => {
-      const detail = (e as CustomEvent<{ tabId?: string; url?: string }>).detail;
+    return onWindowEvent("atlas:browser-navigate", (detail) => {
       if (detail?.tabId === tabId && detail.url) {
         setInputUrl(detail.url);
         navigate(detail.url);
       }
-    };
-    window.addEventListener("atlas:browser-navigate", onNavigate);
-    return () => window.removeEventListener("atlas:browser-navigate", onNavigate);
+    });
   }, [tabId, navigate]);
 
   const goBack = () => {

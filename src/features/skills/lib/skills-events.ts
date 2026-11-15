@@ -3,11 +3,11 @@
 // for this and refetches so freshly installed skills/components appear without
 // a remount. Mirrors the knowledge mention self-heal approach.
 
-export const SKILLS_CHANGED_EVENT = "atlas:skills-changed";
+import { emitWindowEvent } from "@/lib/window-events";
 
 function emitSkillsChanged(): void {
   if (typeof window !== "undefined") {
-    window.dispatchEvent(new Event(SKILLS_CHANGED_EVENT));
+    emitWindowEvent("atlas:skills-changed");
   }
 }
 

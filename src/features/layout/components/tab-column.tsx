@@ -9,7 +9,7 @@ import { SessionHeaderSlot } from "@/features/chat/components/session-header-slo
 import { Plus, Maximize2, Minimize2 } from "lucide-react";
 import { columnChrome } from "../lib/shell-edges";
 import { PaneTopInsetContext } from "../lib/pane-top-inset";
-import { OPEN_SURFACE_MENU_EVENT, SURFACES, openSurface, surfaceForKey } from "../lib/surfaces";
+import { SURFACES, openSurface, surfaceForKey } from "../lib/surfaces";
 import { useLayoutStore, type Tab, type ProjectView } from "../stores/layout-store";
 import { PaneTabStrip } from "./pane-tab-strip";
 import { GROUP_OF } from "./tab-panels";
@@ -24,6 +24,7 @@ import {
   DropdownMenuTrigger,
   IconButton,
 } from "@tryatlas/design";
+import { useWindowEvent } from "@/lib/window-events";
 
 /**
  * One split column. The two roles are deliberately unalike, so it reads at a
@@ -238,13 +239,9 @@ function SurfaceAdd({ groupId }: { groupId: string }) {
   const label = hint ? `Open a surface (${hint})` : "Open a surface";
   const [open, setOpen] = useState(false);
 
-  useEffect(() => {
-    const onOpen = (e: Event) => {
-      if ((e as CustomEvent<{ groupId?: string }>).detail?.groupId === groupId) setOpen(true);
-    };
-    window.addEventListener(OPEN_SURFACE_MENU_EVENT, onOpen);
-    return () => window.removeEventListener(OPEN_SURFACE_MENU_EVENT, onOpen);
-  }, [groupId]);
+  useWindowEvent("atlas:open-surface-menu", (detail) => {
+    if (detail?.groupId === groupId) setOpen(true);
+  });
 
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>

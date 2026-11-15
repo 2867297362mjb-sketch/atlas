@@ -124,7 +124,3 @@ export function surfaceForKey(e: {
   const key = e.key.toLowerCase();
   return SURFACES.find((s) => s.key.toLowerCase() === key) ?? null;
 }
-
-/** Event that opens split column `groupId`'s `+` menu — what `⌘T` sends once
- *  the window is already split. */
-export const OPEN_SURFACE_MENU_EVENT = "atlas:open-surface-menu";

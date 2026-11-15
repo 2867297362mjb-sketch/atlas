@@ -33,6 +33,7 @@ import {
   type GraphLayout,
   type ProjectGraph,
 } from "./knowledge-graph-model";
+import { onWindowEvent } from "@/lib/window-events";
 
 export interface KnowledgeSceneState {
   selectedId: string | null;
@@ -404,7 +405,7 @@ export function buildKnowledgeScene(app: Application, opts: KnowledgeSceneOption
   // Cold-wake warm-up: after a long idle WebKit throttles the main thread, so
   // the first interaction with a slept graph eats the catch-up. Wake on the
   // window-active rising edge so it repaints fresh before the user touches it.
-  window.addEventListener("atlas:window-active", wake);
+  const offWindowActive = onWindowEvent("atlas:window-active", wake);
 
   // ── Per-tick draw ────────────────────────────────────────────
   // When the physics is asleep AND nothing that affects the drawing changed
@@ -565,7 +566,7 @@ export function buildKnowledgeScene(app: Application, opts: KnowledgeSceneOption
     window.removeEventListener("pointerdown", wake);
     window.removeEventListener("pointermove", wake);
     window.removeEventListener("wheel", wake);
-    window.removeEventListener("atlas:window-active", wake);
+    offWindowActive();
     exitPanMode();
     Matter.Composite.clear(engine.world, false, true);
     Matter.Engine.clear(engine);

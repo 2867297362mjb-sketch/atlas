@@ -12,6 +12,7 @@
 
 import { setTimeFormat } from "@/lib/format-time";
 import type { AppSettings } from "./app-settings";
+import { emitWindowEvent } from "@/lib/window-events";
 
 export type DisplaySettings = Pick<
   AppSettings,
@@ -51,11 +52,9 @@ export function applyDisplaySettings(settings: DisplaySettings, root = document.
   root.dataset.wordWrap = settings.wordWrap ? "on" : "off";
   root.dataset.diffPalette = settings.diffPalette;
   setTimeFormat(settings.timeFormat);
-  window.dispatchEvent(new CustomEvent(DISPLAY_SETTINGS_APPLIED));
+  // After every apply, for what can't read CSS (xterm).
+  emitWindowEvent("atlas:display-settings-applied");
 }
-
-/** Fired on `window` after every apply, for what can't read CSS (xterm). */
-export const DISPLAY_SETTINGS_APPLIED = "atlas:display-settings-applied";
 
 /** The applied terminal font size, in pixels, read back off `<html>`. */
 export function appliedTerminalFontSize(root = document.documentElement): number {

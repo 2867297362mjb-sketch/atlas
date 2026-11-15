@@ -44,9 +44,9 @@ import { resolveTerminalFont } from "../utils/resolve-font";
 import {
   appliedTerminalFont,
   appliedTerminalFontSize,
-  DISPLAY_SETTINGS_APPLIED,
 } from "@/features/settings/lib/display-settings";
 import { collectPanes, useTerminalStore } from "../stores/terminal-store";
+import { onWindowEvent } from "@/lib/window-events";
 
 // ── Public shapes ──────────────────────────────────────────────────────────
 
@@ -143,7 +143,7 @@ function startGlobalListeners(): void {
   });
   // The same for `terminalFontSize` and the terminal font.
   let applied = `${fontSize()}|${appliedTerminalFont()}`;
-  window.addEventListener(DISPLAY_SETTINGS_APPLIED, () => {
+  onWindowEvent("atlas:display-settings-applied", () => {
     const next = `${fontSize()}|${appliedTerminalFont()}`;
     if (next === applied) return;
     applied = next;
