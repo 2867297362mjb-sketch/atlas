@@ -151,6 +151,12 @@ checks its fields. Check `event-contract.test.ts` before inventing a channel nam
 The window events that share the `atlas:` prefix are a separate, typed namespace:
 `window-event-contract.test.ts` keeps every one of them in the map in
 `src/lib/window-events.ts` and behind its helpers, and off the channel names.
+`ipc-contract` reads every `invoke("name")` literal under `src/`, test files included,
+so a test that invents a command name fails `bun run test`. `lint-suppression-ratchet`
+caps the number of `oxlint-disable` comments per rule under `src/` (test files are
+exempt), so a new suppression fails it too, until it is fixed or the baseline is
+raised in the same diff. `invoke-from-lib-contract.test.ts` keeps `invoke`, `listen`,
+`emit` and `Channel` inside `lib/` and `stores/`: a component that imports one fails.
 
 **Three cargo-workspace rules, each failing quietly** (`cargo-workspace.test.ts`):
 `[patch]` tables are honored only in the manifest cargo was invoked on — always the
@@ -206,7 +212,8 @@ Each of these is a multi-file edit where missing one compiles fine.
 
 - **An IPC command** — the fn in `src-tauri/src/commands/<domain>.rs`, `pub mod` in
   `commands/mod.rs`, an entry in `generate_handler![]` in `lib.rs`, and a wrapper in
-  `src/features/<feature>/lib/<domain>-api.ts`. Never `invoke` from a component.
+  `src/features/<feature>/lib/<domain>-api.ts`. Never `invoke` from a component
+  (`invoke-from-lib-contract.test.ts`).
 - **A crate** — the `members` list in the root `Cargo.toml`, its own
   `[profile.dev.package.<name>]` stanza, and an entry in `.github/ci-crates.json`.
   If it reads a file outside its own directory, that file also goes in
