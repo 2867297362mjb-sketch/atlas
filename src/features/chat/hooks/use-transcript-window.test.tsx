@@ -536,6 +536,35 @@ describe("switching sessions", () => {
   });
 });
 
+describe("closing a transcript and coming back", () => {
+  // Closing the project (or the tab) unmounts the transcript; the same tab on
+  // the same session mounts it again.
+  it("returns a reader who had scrolled up to where they were", async () => {
+    const rows = thread(300);
+    const cacheKey = freshKey();
+    const first = await mount({ rows, cacheKey });
+    await idleSlice();
+    expect(win.safeStart).toBe(100);
+    await first.scrollTo(9_000);
+    first.unmount();
+
+    const again = await mount({ rows, cacheKey });
+    expect(win.safeStart).toBe(100);
+    expect(again.scroller.scrollTop).toBe(9_000);
+  });
+
+  it("lands a reader who left at the live edge on the last user turn again", async () => {
+    const rows = [...thread(60, "q"), ...longAnswer(60)];
+    const cacheKey = freshKey();
+    const first = await mount({ rows, cacheKey });
+    await first.scrollTo(first.maxScroll());
+    first.unmount();
+
+    const again = await mount({ rows, cacheKey });
+    expect(again.offsetOf("a0")).toBe(ANCHOR_GAP);
+  });
+});
+
 describe("holding the landed row while the content settles", () => {
   const rows = [...thread(60, "q"), ...longAnswer(60)];
   const drift = (el: HTMLElement, by: number) => scrollTops.set(el, el.scrollTop + by);
