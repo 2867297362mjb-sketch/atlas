@@ -248,10 +248,6 @@ impl AgentConnection for FakeConnection {
     }
 
     fn cancel(&self, _session_id: &acp::SessionId) {}
-
-    fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
-        self
-    }
 }
 
 // ------------------------------------------------------------------- harness

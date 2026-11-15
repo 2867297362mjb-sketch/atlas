@@ -394,10 +394,6 @@ mod tests {
             fn cancel(&self, _session_id: &acp::SessionId) {
                 self.gate.open.notify_one();
             }
-
-            fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
-                self
-            }
         }
 
         impl AgentServer for GatedNative {

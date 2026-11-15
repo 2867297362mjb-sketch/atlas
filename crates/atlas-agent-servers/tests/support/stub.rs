@@ -1,7 +1,6 @@
 //! A no-op `AgentConnection` for tests that need a thread but never talk to an
 //! agent.
 
-use std::any::Any;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -52,8 +51,4 @@ impl AgentConnection for StubConnection {
     }
 
     fn cancel(&self, _session_id: &acp::SessionId) {}
-
-    fn into_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
-        self
-    }
 }

@@ -47,10 +47,6 @@ impl AgentConnection for NullConnection {
     }
 
     fn cancel(&self, _session_id: &acp::SessionId) {}
-
-    fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
-        self
-    }
 }
 
 /// A thread with a discarded event stream.
