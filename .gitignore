@@ -107,3 +107,6 @@ __pycache__/
 
 # Built by scripts/linux/build-bwrap.sh for the AppImage; never committed.
 src-tauri/binaries/
+
+# `bun run test:coverage` report
+/coverage/
