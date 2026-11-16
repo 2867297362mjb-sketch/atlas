@@ -14,24 +14,27 @@
 //!
 //! - **Rate limits.** [`is_rate_limited`] reads a refusal the way GitHub
 //!   documents it (a 429, an exhausted quota, a secondary-limit 403, or a
-//!   GraphQL `RATE_LIMITED` with HTTP 200). A refusal pauses the API
-//!   (`atlas_gh`'s one pause, which every `gh` caller in Atlas honours) until
-//!   the time GitHub named, or a doubling cool-down when it named none, and a
-//!   background read stops while less than a tenth of a quota is left so that
-//!   what the user does next still has room.
+//!   GraphQL `RATE_LIMITED` with HTTP 200). A quota that ran out pauses the
+//!   API it belongs to, REST or GraphQL, since GitHub counts them apart; a
+//!   secondary limit pauses both ([`pause_scope`]). The pauses are
+//!   `atlas_gh`'s, which every `gh` caller in Atlas honours, and last until
+//!   the time GitHub named, or a doubling cool-down when it named none. A
+//!   background read stops while less than a tenth of a quota is left so
+//!   that what the user does next still has room.
 //! - **Conditional reads.** A REST read can revalidate its last answer with
 //!   `If-None-Match`; GitHub answers an unchanged resource with a 304, which
 //!   costs no quota, and the cached body is reused.
-//! - **Concurrency.** `atlas_gh`'s permit pool bounds how many `gh` run at
-//!   once for the API; images have their own [`IMAGE_PERMITS`], so a page of
-//!   avatars never queues ahead of the reads the user is waiting on.
+//! - **Concurrency.** `atlas_gh`'s permit pools bound how many `gh` run at
+//!   once for the API, background reads apart from what the user is waiting
+//!   on; images have their own [`IMAGE_PERMITS`], so a page of avatars never
+//!   queues ahead of the reads the user is waiting on.
 
 use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
 use std::sync::LazyLock;
 use std::time::Duration;
 
-use atlas_gh::{GhCommand, GhOutput, Intent};
+use atlas_gh::{Api, GhCommand, GhOutput, Intent};
 use parking_lot::Mutex;
 use serde_json::Value;
 use tokio::sync::Semaphore;
@@ -74,6 +77,15 @@ impl Resource {
             Resource::Core => "core",
             Resource::Graphql => "graphql",
             Resource::Unmetered => "",
+        }
+    }
+
+    /// The API whose pause holds this quota's requests back.
+    fn api(self) -> Option<Api> {
+        match self {
+            Resource::Core => Some(Api::Rest),
+            Resource::Graphql => Some(Api::Graphql),
+            Resource::Unmetered => None,
         }
     }
 }
@@ -176,13 +188,13 @@ static LIMITS: LazyLock<Mutex<Limits>> = LazyLock::new(|| Mutex::new(Limits::def
 
 pub(crate) use atlas_gh::now_ms;
 
-/// Refuse up front while the API is paused, or (for a background read)
-/// while the quota is down to its reserve.
+/// Refuse up front while the request's API is paused, or (for a background
+/// read) while the quota is down to its reserve.
 fn admit(resource: Resource, allow_reserve: bool, now: i64) -> Result<(), PrError> {
-    if resource == Resource::Unmetered {
+    let Some(api) = resource.api() else {
         return Ok(());
-    }
-    if let Some(until) = atlas_gh::paused_until(now) {
+    };
+    if let Some(until) = atlas_gh::paused_until(api, now) {
         return Err(PrError::RateLimited {
             retry_at: Some(until),
         });
@@ -245,10 +257,44 @@ fn observe(headers: &HashMap<String, String>) {
     );
 }
 
-/// Pause the API for a refusal: until the time GitHub named, else a
-/// cool-down that doubles with each refusal in a row of this quota. A pause
-/// already in force for longer stands.
-fn record_rate_limit(resource: Resource, retry_at: Option<i64>, now: i64) -> i64 {
+/// Which APIs a refusal pauses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PauseScope {
+    /// A quota ran out: only the API it belongs to.
+    OwnApi,
+    /// GitHub asked this user to slow down (a secondary limit): everything.
+    BothApis,
+}
+
+/// What a rate-limit refusal pauses. It is one quota running out only when
+/// GitHub says so, with `x-ratelimit-remaining: 0`, and says nothing of a
+/// secondary limit (a `retry-after`, or the words). Anything less certain
+/// pauses both APIs, as every refusal once did.
+pub(crate) fn pause_scope(response: &HttpResponse) -> PauseScope {
+    let exhausted = response.header("x-ratelimit-remaining") == Some("0");
+    let secondary = response.headers.contains_key("retry-after")
+        || response
+            .body_text()
+            .to_ascii_lowercase()
+            .contains("secondary");
+    if exhausted && !secondary {
+        PauseScope::OwnApi
+    } else {
+        PauseScope::BothApis
+    }
+}
+
+/// Pause for a refusal: until the time GitHub named, else a cool-down that
+/// doubles with each refusal in a row of this quota. A pause already in
+/// force for longer stands. Answers until when the request's own API is
+/// paused.
+fn record_rate_limit(
+    resource: Resource,
+    scope: PauseScope,
+    retry_at: Option<i64>,
+    now: i64,
+) -> i64 {
+    let own = resource.api().unwrap_or(Api::Rest);
     let key = match resource {
         Resource::Unmetered => "core",
         other => other.key(),
@@ -263,19 +309,33 @@ fn record_rate_limit(resource: Resource, retry_at: Option<i64>, now: i64) -> i64
         now + (FALLBACK_COOLDOWN_MS * 2_i64.pow(attempt.saturating_sub(1).min(10)))
             .min(MAX_FALLBACK_COOLDOWN_MS)
     });
-    let until = atlas_gh::paused_until(now).map_or(until, |held| held.max(until));
-    atlas_gh::pause_until(until);
-    until
+    let pause = |api: Api| {
+        let until = atlas_gh::paused_until(api, now).map_or(until, |held| held.max(until));
+        atlas_gh::pause_until(api, until);
+        until
+    };
+    if scope == PauseScope::BothApis {
+        for api in Api::ALL {
+            if api != own {
+                pause(api);
+            }
+        }
+    }
+    pause(own)
 }
 
-/// Until when GitHub itself paused the API (epoch ms), if it has: a refusal
-/// it sent, as opposed to a read held back at the reserve.
+/// Until when GitHub itself paused either API (epoch ms), if it has: a
+/// refusal it sent, as opposed to a read held back at the reserve. The later
+/// of the two pauses, for the sweeps that read from both APIs in one pass.
 pub(crate) fn quota_paused_until(now: i64) -> Option<i64> {
-    atlas_gh::paused_until(now)
+    Api::ALL
+        .into_iter()
+        .filter_map(|api| atlas_gh::paused_until(api, now))
+        .max()
 }
 
 /// An answered request ends its quota's run of refusals. The pause is left
-/// to run out: another quota's refusal may be what set it.
+/// to run out: a secondary limit met by the other API may be what set it.
 fn record_success(resource: Resource) {
     if resource == Resource::Unmetered {
         return;
@@ -287,7 +347,9 @@ fn record_success(resource: Resource) {
 #[cfg(test)]
 pub(crate) fn reset_limits_for_tests() {
     *LIMITS.lock() = Limits::default();
-    atlas_gh::pause_until(0);
+    for api in Api::ALL {
+        atlas_gh::pause_until(api, 0);
+    }
 }
 
 /// Test seam: the quota state is process-wide, so the tests that set it run
@@ -596,11 +658,21 @@ impl Gh {
         }
     }
 
-    /// One `gh api -i` invocation in this checkout.
-    fn command(&self, args: Vec<String>, intent: Intent, timeout: Duration) -> GhCommand {
-        GhCommand::new(&self.cwd, args, intent)
+    /// One `gh api -i` invocation in this checkout, spending `resource`.
+    fn command(
+        &self,
+        args: Vec<String>,
+        intent: Intent,
+        resource: Resource,
+        timeout: Duration,
+    ) -> GhCommand {
+        let command = GhCommand::new(&self.cwd, args, intent)
             .program(&self.program)
-            .timeout(timeout)
+            .timeout(timeout);
+        match resource.api() {
+            Some(api) => command.api(api),
+            None => command,
+        }
     }
 
     /// Run `command` and read what it printed as an HTTP answer, or the
@@ -612,16 +684,36 @@ impl Gh {
         answer(command.output().await?)
     }
 
-    fn settle<T>(&self, resource: Resource, result: Result<T, PrError>) -> Result<T, PrError> {
-        match &result {
-            Ok(_) => record_success(resource),
-            Err(PrError::RateLimited { retry_at }) => {
-                let until = record_rate_limit(resource, *retry_at, now_ms());
+    /// Read `answered` with `read` and keep the books on its quota: a
+    /// request that was answered ends the quota's run of refusals, and a
+    /// refusal pauses what [`pause_scope`] says it does.
+    fn settle<T>(
+        &self,
+        resource: Resource,
+        answered: Result<HttpResponse, PrError>,
+        read: impl FnOnce(HttpResponse) -> Result<T, PrError>,
+    ) -> Result<T, PrError> {
+        let scope = answered.as_ref().ok().map(pause_scope);
+        let result = answered.and_then(read);
+        match (&result, scope) {
+            (Ok(_), _) => record_success(resource),
+            (Err(PrError::RateLimited { retry_at }), Some(scope)) => {
+                let until = record_rate_limit(resource, scope, *retry_at, now_ms());
                 return Err(PrError::RateLimited {
                     retry_at: Some(until),
                 });
             }
-            Err(_) => {}
+            // No answer to read: `atlas_gh` refused the run for a pause, or
+            // read the refusal from `gh`'s own words and paused for it.
+            (Err(PrError::RateLimited { retry_at }), None) => {
+                let paused = resource
+                    .api()
+                    .and_then(|api| atlas_gh::paused_until(api, now_ms()));
+                return Err(PrError::RateLimited {
+                    retry_at: paused.or(*retry_at),
+                });
+            }
+            (Err(_), _) => {}
         }
         result
     }
@@ -674,13 +766,12 @@ impl Gh {
             "-".into(),
         ];
         let command = self
-            .command(args, read_intent(allow_reserve), timeout)
+            .command(args, read_intent(allow_reserve), Resource::Graphql, timeout)
             .stdin(body);
-        let result = self
-            .send(command)
-            .await
-            .and_then(|r| classify_graphql_with(&r, now_ms(), keep_partial));
-        self.settle(Resource::Graphql, result)
+        let answered = self.send(command).await;
+        self.settle(Resource::Graphql, answered, |r| {
+            classify_graphql_with(&r, now_ms(), keep_partial)
+        })
     }
 
     /// The one request that asks `gh` to fill in `{owner}` and `{repo}` from
@@ -704,12 +795,16 @@ impl Gh {
             "-f".into(),
             format!("query={query}"),
         ];
-        let command = self.command(args, read_intent(allow_reserve), READ_TIMEOUT);
-        let result = self
-            .send(command)
-            .await
-            .and_then(|r| classify_graphql(&r, now_ms()));
-        self.settle(Resource::Graphql, result)
+        let command = self.command(
+            args,
+            read_intent(allow_reserve),
+            Resource::Graphql,
+            READ_TIMEOUT,
+        );
+        let answered = self.send(command).await;
+        self.settle(Resource::Graphql, answered, |r| {
+            classify_graphql(&r, now_ms())
+        })
     }
 
     /// A REST GET. With `revalidate`, the last answer's ETag goes along and a
@@ -739,31 +834,28 @@ impl Gh {
             args.push(format!("If-None-Match: {etag}"));
         }
         args.push(path.to_string());
-        let command = self.command(args, read_intent(allow_reserve), timeout);
-        let result = match self.send(command).await {
-            Ok(response) => {
-                let now = now_ms();
-                classify_rest(&response, previous.is_some(), now).map(|()| {
-                    if response.status == 304 {
-                        if let (Some(k), Some((_, body))) = (&key, &previous) {
-                            etag_touch(k, now);
-                            return body.clone();
-                        }
+        let command = self.command(args, read_intent(allow_reserve), Resource::Core, timeout);
+        let answered = self.send(command).await;
+        self.settle(Resource::Core, answered, |response| {
+            let now = now_ms();
+            classify_rest(&response, previous.is_some(), now).map(|()| {
+                if response.status == 304 {
+                    if let (Some(k), Some((_, body))) = (&key, &previous) {
+                        etag_touch(k, now);
+                        return body.clone();
                     }
-                    if let Some(k) = &key {
-                        match response.header("etag") {
-                            Some(etag) => {
-                                etag_put(k.clone(), etag.to_string(), response.body.clone(), now)
-                            }
-                            None => etag_forget(k),
+                }
+                if let Some(k) = &key {
+                    match response.header("etag") {
+                        Some(etag) => {
+                            etag_put(k.clone(), etag.to_string(), response.body.clone(), now)
                         }
+                        None => etag_forget(k),
                     }
-                    response.body
-                })
-            }
-            Err(e) => Err(e),
-        };
-        self.settle(Resource::Core, result)
+                }
+                response.body
+            })
+        })
     }
 
     /// A REST GET of plain text that may carry terminal escape codes (a
@@ -773,7 +865,7 @@ impl Gh {
     /// request.
     pub async fn rest_get_text(&self, path: &str, timeout: Duration) -> Result<Vec<u8>, PrError> {
         admit(Resource::Core, true, now_ms())?;
-        let mut result = Err(PrError::NotInstalled);
+        let mut answered = Err(PrError::NotInstalled);
         for allow_escapes in [true, false] {
             let mut args: Vec<String> =
                 vec!["api".into(), "-i".into(), "--method".into(), "GET".into()];
@@ -782,13 +874,13 @@ impl Gh {
             }
             args.push(path.to_string());
             let output = match self
-                .command(args, Intent::InteractiveRead, timeout)
+                .command(args, Intent::InteractiveRead, Resource::Core, timeout)
                 .output()
                 .await
             {
                 Ok(output) => output,
                 Err(e) => {
-                    result = Err(e.into());
+                    answered = Err(e.into());
                     break;
                 }
             };
@@ -798,12 +890,12 @@ impl Gh {
             {
                 continue;
             }
-            result = answer(output).and_then(|response| {
-                classify_rest(&response, false, now_ms()).map(|()| response.body)
-            });
+            answered = answer(output);
             break;
         }
-        self.settle(Resource::Core, result)
+        self.settle(Resource::Core, answered, |response| {
+            classify_rest(&response, false, now_ms()).map(|()| response.body)
+        })
     }
 
     /// A REST write. `body` is sent as JSON on stdin.
@@ -827,15 +919,14 @@ impl Gh {
             None => None,
         };
         args.push(path.to_string());
-        let mut command = self.command(args, Intent::Write, WRITE_TIMEOUT);
+        let mut command = self.command(args, Intent::Write, Resource::Core, WRITE_TIMEOUT);
         if let Some(bytes) = stdin {
             command = command.stdin(bytes);
         }
-        let result = self
-            .send(command)
-            .await
-            .and_then(|r| classify_rest(&r, false, now_ms()).map(|()| r.body));
-        self.settle(Resource::Core, result)
+        let answered = self.send(command).await;
+        self.settle(Resource::Core, answered, |r| {
+            classify_rest(&r, false, now_ms()).map(|()| r.body)
+        })
     }
 
     /// A GET of an absolute URL, with no API quota behind it (the image
@@ -853,7 +944,7 @@ impl Gh {
             .await
             .map_err(|_| PrError::failed("Atlas is shutting down."))?;
         let response = self
-            .send(self.command(args, Intent::Unmetered, timeout))
+            .send(self.command(args, Intent::Unmetered, Resource::Unmetered, timeout))
             .await?;
         classify_rest(&response, false, now_ms())?;
         Ok(response)
@@ -1143,29 +1234,32 @@ mod tests {
     #[test]
     fn a_pause_refuses_until_its_time_and_the_reserve_holds_background_reads() {
         let _serial = LIMITS_SERIAL.lock();
-        reset_limits_for_tests();
-        let until = record_rate_limit(Resource::Graphql, Some(50_000), 1_000);
-        assert_eq!(until, 50_000);
-        assert_eq!(
-            admit(Resource::Graphql, true, 2_000),
-            Err(PrError::RateLimited {
-                retry_at: Some(50_000)
-            })
-        );
-        // The pause is the whole API's, images aside, and lifts at its time.
-        assert_eq!(
-            admit(Resource::Core, true, 2_000),
-            Err(PrError::RateLimited {
-                retry_at: Some(50_000)
-            })
-        );
-        assert_eq!(admit(Resource::Unmetered, false, 2_000), Ok(()));
-        assert_eq!(admit(Resource::Graphql, true, 50_001), Ok(()));
-        // A shorter refusal never cuts a pause short.
-        assert_eq!(
-            record_rate_limit(Resource::Core, Some(40_000), 1_000),
-            50_000
-        );
+        for (refused, other) in [
+            (Resource::Graphql, Resource::Core),
+            (Resource::Core, Resource::Graphql),
+        ] {
+            reset_limits_for_tests();
+            let until = record_rate_limit(refused, PauseScope::OwnApi, Some(50_000), 1_000);
+            assert_eq!(until, 50_000);
+            assert_eq!(
+                admit(refused, true, 2_000),
+                Err(PrError::RateLimited {
+                    retry_at: Some(50_000)
+                }),
+                "{refused:?}"
+            );
+            // A quota that ran out is that API's alone: the other API's
+            // requests, and images, go on. It lifts at its time.
+            assert_eq!(admit(other, true, 2_000), Ok(()), "{refused:?} ran out");
+            assert_eq!(admit(Resource::Unmetered, false, 2_000), Ok(()));
+            assert_eq!(admit(refused, true, 50_001), Ok(()));
+            assert_eq!(quota_paused_until(2_000), Some(50_000));
+            // A shorter refusal never cuts a pause short.
+            assert_eq!(
+                record_rate_limit(refused, PauseScope::OwnApi, Some(40_000), 1_000),
+                50_000
+            );
+        }
 
         reset_limits_for_tests();
         let reset = (now_ms() / 1000 + 3600).to_string();
@@ -1184,11 +1278,143 @@ mod tests {
     }
 
     #[test]
+    fn a_secondary_limit_pauses_both_apis() {
+        let _serial = LIMITS_SERIAL.lock();
+        for (refused, other) in [
+            (Resource::Graphql, Resource::Core),
+            (Resource::Core, Resource::Graphql),
+        ] {
+            reset_limits_for_tests();
+            // The other API is already paused for longer: that stands.
+            let longer = if refused == Resource::Core { 70_000 } else { 0 };
+            if longer > 0 {
+                record_rate_limit(other, PauseScope::OwnApi, Some(longer), 1_000);
+            }
+            let until = record_rate_limit(refused, PauseScope::BothApis, Some(50_000), 1_000);
+            assert_eq!(until, 50_000, "{refused:?}");
+            for resource in [refused, other] {
+                let held = if resource == other {
+                    longer.max(50_000)
+                } else {
+                    50_000
+                };
+                assert_eq!(
+                    admit(resource, true, 2_000),
+                    Err(PrError::RateLimited {
+                        retry_at: Some(held)
+                    }),
+                    "{resource:?} after {refused:?} met a secondary limit"
+                );
+            }
+            assert_eq!(admit(Resource::Unmetered, false, 2_000), Ok(()));
+        }
+        reset_limits_for_tests();
+    }
+
+    #[test]
+    fn only_a_quota_github_says_ran_out_pauses_one_api() {
+        let own = |status, hs: &[(&str, &str)], body: &str| pause_scope(&http(status, hs, body));
+        let spent = ("x-ratelimit-remaining", "0");
+        // A quota that ran out, the ways GitHub says it.
+        assert_eq!(own(403, &[spent], ""), PauseScope::OwnApi);
+        assert_eq!(own(429, &[spent], ""), PauseScope::OwnApi);
+        assert_eq!(
+            own(
+                200,
+                &[spent],
+                r#"{"errors":[{"type":"RATE_LIMITED","message":"API rate limit exceeded"}]}"#
+            ),
+            PauseScope::OwnApi
+        );
+        // A secondary limit, or a refusal that does not say which it is.
+        assert_eq!(own(403, &[("retry-after", "60")], ""), PauseScope::BothApis);
+        assert_eq!(
+            own(403, &[spent, ("retry-after", "60")], ""),
+            PauseScope::BothApis
+        );
+        assert_eq!(
+            own(
+                403,
+                &[("x-ratelimit-remaining", "4000")],
+                r#"{"message":"You have exceeded a secondary rate limit"}"#
+            ),
+            PauseScope::BothApis
+        );
+        assert_eq!(own(429, &[], ""), PauseScope::BothApis);
+        assert_eq!(
+            own(
+                200,
+                &[],
+                r#"{"errors":[{"type":"RATE_LIMITED","message":"slow down"}]}"#
+            ),
+            PauseScope::BothApis
+        );
+    }
+
+    /// The whole path a refused request takes: read as a rate limit, scoped,
+    /// and paused, so the next request of each API is admitted or not.
+    #[test]
+    fn a_refused_request_pauses_what_its_answer_says() {
+        let _serial = LIMITS_SERIAL.lock();
+        let gh = Gh::new("/");
+        let reset = (now_ms() / 1000 + 3600).to_string();
+        let ran_out = [
+            ("x-ratelimit-remaining", "0"),
+            ("x-ratelimit-reset", reset.as_str()),
+        ];
+        let rest = |r: HttpResponse| classify_rest(&r, false, now_ms());
+        let graphql = |r: HttpResponse| classify_graphql(&r, now_ms()).map(|_| ());
+        let refused = |result: Result<(), PrError>| {
+            assert!(
+                matches!(result, Err(PrError::RateLimited { retry_at: Some(_) })),
+                "{result:?}"
+            );
+        };
+
+        // REST's quota ran out: GraphQL goes on.
+        reset_limits_for_tests();
+        refused(gh.settle(Resource::Core, Ok(http(403, &ran_out, "")), rest));
+        refused(admit(Resource::Core, true, now_ms()));
+        assert_eq!(admit(Resource::Graphql, true, now_ms()), Ok(()));
+
+        // GraphQL's quota ran out: REST goes on.
+        reset_limits_for_tests();
+        let body = r#"{"errors":[{"type":"RATE_LIMITED","message":"API rate limit exceeded"}]}"#;
+        refused(gh.settle(Resource::Graphql, Ok(http(200, &ran_out, body)), graphql));
+        refused(admit(Resource::Graphql, true, now_ms()));
+        assert_eq!(admit(Resource::Core, true, now_ms()), Ok(()));
+
+        // A secondary limit, met by either: both stop.
+        let secondary = http(
+            403,
+            &[("retry-after", "60")],
+            r#"{"message":"You have exceeded a secondary rate limit"}"#,
+        );
+        reset_limits_for_tests();
+        refused(gh.settle(Resource::Core, Ok(secondary.clone()), rest));
+        refused(admit(Resource::Core, true, now_ms()));
+        refused(admit(Resource::Graphql, true, now_ms()));
+        reset_limits_for_tests();
+        refused(gh.settle(Resource::Graphql, Ok(secondary), graphql));
+        refused(admit(Resource::Core, true, now_ms()));
+        refused(admit(Resource::Graphql, true, now_ms()));
+
+        // An answered request pauses nothing.
+        reset_limits_for_tests();
+        assert_eq!(
+            gh.settle(Resource::Core, Ok(http(200, &[], "{}")), rest),
+            Ok(())
+        );
+        assert_eq!(quota_paused_until(now_ms()), None);
+        reset_limits_for_tests();
+    }
+
+    #[test]
     fn a_refusal_with_no_reset_cools_down_longer_each_time() {
         let _serial = LIMITS_SERIAL.lock();
         reset_limits_for_tests();
-        let first = record_rate_limit(Resource::Core, None, 0);
-        let second = record_rate_limit(Resource::Core, None, 0);
+        let first = record_rate_limit(Resource::Core, PauseScope::OwnApi, None, 0);
+        let second = record_rate_limit(Resource::Core, PauseScope::OwnApi, None, 0);
         assert_eq!(first, 30_000);
         assert_eq!(second, 60_000);
         reset_limits_for_tests();

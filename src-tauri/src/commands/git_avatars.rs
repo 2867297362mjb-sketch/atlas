@@ -18,7 +18,7 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use atlas_gh::{GhCommand, GhError, Intent};
+use atlas_gh::{Api, GhCommand, GhError, Intent};
 use serde::{Deserialize, Serialize};
 
 /// How long one `gh` read gets. Nobody is waiting on an avatar, and a
@@ -63,10 +63,11 @@ pub async fn git_repo_avatars(path: String) -> Result<RepoAvatars, String> {
     if path.trim().is_empty() {
         return Ok(RepoAvatars::Failed);
     }
-    // A background read: refused, not queued, while GitHub has the API
-    // paused.
+    // A background read of the REST API: refused, not queued, while GitHub
+    // has that API paused, and its own refusal pauses no GraphQL read.
     let read = |on_branch: bool| {
         GhCommand::new(&path, gh_api_args(on_branch), Intent::BackgroundRead)
+            .api(Api::Rest)
             .timeout(TIMEOUT)
             .run()
     };

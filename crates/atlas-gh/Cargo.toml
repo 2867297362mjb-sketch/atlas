@@ -2,7 +2,7 @@
 name = "atlas-gh"
 version = "0.1.0"
 edition = "2021"
-description = "Running the user's GitHub CLI for Atlas: one spawn chokepoint for `gh` with a fixed environment, a timeout that kills, a shared permit budget, a rate-limit pause, and a typed taxonomy for a run that produced no answer."
+description = "Running the user's GitHub CLI for Atlas: one spawn chokepoint for `gh` with a fixed environment, a timeout that kills, two permit pools (interactive and background), a rate-limit pause per API, and a typed taxonomy for a run that produced no answer."
 
 [lib]
 name = "atlas_gh"
