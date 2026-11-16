@@ -39,6 +39,23 @@ export default defineConfig({
       },
     },
     include: ["tests/**/*.test.ts", "src/**/*.test.{ts,tsx}"],
+    // `bun run test:coverage` only; no threshold, on purpose. A number to
+    // hit rewards tests that execute lines without checking behaviour. The
+    // report is for finding code no test reaches at all. `include` makes
+    // files no test imports count as 0% instead of going missing.
+    coverage: {
+      provider: "v8",
+      reporter: ["text-summary", "json-summary", "html"],
+      reportsDirectory: "coverage",
+      include: ["src/**/*.{ts,tsx}"],
+      exclude: [
+        "src/**/*.test.{ts,tsx}",
+        "src/bindings/**",
+        "src/dev/**",
+        "src/**/*.gen.ts",
+        "src/**/*.d.ts",
+      ],
+    },
     server: {
       deps: {
         // The package's TimelineCalendar, run through Vite rather than loaded
