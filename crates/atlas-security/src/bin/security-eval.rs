@@ -651,7 +651,7 @@ fn speed(args: &[String]) -> Result<(), String> {
         .lines()
         .map(str::to_string)
         .collect();
-    let git = GitCli { root: root.clone() };
+    let git = GitCli { root };
 
     let clef_env = if with_clef {
         let account = std::env::var("CLOUDFLARE_ACCOUNT_ID")

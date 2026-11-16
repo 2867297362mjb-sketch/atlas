@@ -550,8 +550,8 @@ mod tests {
     use std::sync::Mutex;
 
     use atlas_checkpoint::model::ProjectMode;
-    use atlas_process::NoWindow;
     use atlas_checkpoint::{CheckpointInput, Source, Store};
+    use atlas_process::NoWindow;
     use atlas_security::finding::Level;
 
     use super::*;

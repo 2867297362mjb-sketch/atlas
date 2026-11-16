@@ -134,7 +134,8 @@ fn the_scanner_sees_a_spawn_and_ignores_tests_and_comments() {
     ] {
         assert!(sites_in(not_a_spawn).is_empty(), "{not_a_spawn}");
     }
-    let with_tests = "fn real() {}\n#[cfg(test)]\nmod tests {\n    fn g() { Command::new(\"git\"); }\n}\n";
+    let with_tests =
+        "fn real() {}\n#[cfg(test)]\nmod tests {\n    fn g() { Command::new(\"git\"); }\n}\n";
     assert!(sites_in(with_tests).is_empty());
 }
 

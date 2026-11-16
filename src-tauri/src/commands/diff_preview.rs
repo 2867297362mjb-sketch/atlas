@@ -389,7 +389,8 @@ fn default_base(cwd: &Path) -> Option<String> {
         "refs/heads/main",
         "refs/heads/master",
     ];
-    let cmd = git(cwd).args(&["for-each-ref", "--format=%(refname)"])
+    let cmd = git(cwd)
+        .args(&["for-each-ref", "--format=%(refname)"])
         .args(&CANDIDATES);
     let found = stdout_line(cmd)?;
     let found: Vec<&str> = found.lines().collect();
@@ -424,13 +425,18 @@ fn diff_against(cwd: &Path, rev: &str, ignore_ws: bool) -> Result<Tracked, Strin
     // for the other.
     std::thread::scope(|s| {
         let stat = s.spawn(|| {
-            let cmd = git(cwd).args(DIFF_ARGS)
-                .args(ws)
-                .args(&["--raw", "--numstat", "-z", rev, "--"]);
+            let cmd =
+                git(cwd)
+                    .args(DIFF_ARGS)
+                    .args(ws)
+                    .args(&["--raw", "--numstat", "-z", rev, "--"]);
             run(cmd)
         });
         let patch = s.spawn(|| {
-            let cmd = git(cwd).args(DIFF_ARGS).args(ws).args(&["--patch", rev, "--"]);
+            let cmd = git(cwd)
+                .args(DIFF_ARGS)
+                .args(ws)
+                .args(&["--patch", rev, "--"]);
             run_capped(cmd, PATCH_CAP)
         });
         let stat = stat

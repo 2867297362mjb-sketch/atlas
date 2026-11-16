@@ -158,10 +158,7 @@ fn a_non_zero_exit_is_classified_from_what_git_wrote() {
     ];
     for (stderr, code) in cases {
         let (_dir, script) = fake_git(r#"echo "$STDERR" >&2; exit 128"#);
-        let err = git(&script, &[])
-            .env("STDERR", stderr)
-            .run()
-            .unwrap_err();
+        let err = git(&script, &[]).env("STDERR", stderr).run().unwrap_err();
         assert_eq!(err.code, *code, "{stderr}");
         assert_eq!(err.exit_code, Some(128));
         assert_eq!(err.raw_stderr.trim(), *stderr);
@@ -201,7 +198,10 @@ fn a_capped_read_stops_at_the_cap_and_kills_the_child() {
     // Under the cap: everything, and git's own verdict.
     let (_dir, script) = fake_git("printf abc; exit 1");
     let out = git(&script, &[]).stdout_capped(100).unwrap();
-    assert_eq!((out.bytes.as_slice(), out.truncated, out.success), (&b"abc"[..], false, false));
+    assert_eq!(
+        (out.bytes.as_slice(), out.truncated, out.success),
+        (&b"abc"[..], false, false)
+    );
     // Exactly the cap is not truncated.
     let out = git(&script, &[]).stdout_capped(3).unwrap();
     assert!(!out.truncated);

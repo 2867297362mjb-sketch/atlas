@@ -224,7 +224,9 @@ async fn run_program(
         Ok(Ok(out)) => out,
         Ok(Err(GitRunError::NotInstalled)) => return Err(RunError::NotInstalled),
         Ok(Err(GitRunError::TimedOut { .. })) => return Err(RunError::TimedOut),
-        Ok(Err(GitRunError::Failed(stderr))) => return Err(RunError::Failed { exit: None, stderr }),
+        Ok(Err(GitRunError::Failed(stderr))) => {
+            return Err(RunError::Failed { exit: None, stderr })
+        }
         Err(e) => {
             return Err(RunError::Failed {
                 exit: None,
