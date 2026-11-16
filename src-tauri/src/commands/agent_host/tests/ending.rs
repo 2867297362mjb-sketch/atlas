@@ -103,12 +103,15 @@ struct Residue {
 
 fn residue(host: &AgentHost, session_id: &str) -> Residue {
     let acp_id = acp::SessionId::new(session_id);
-    let (record, holds) = lock(&host.sessions)
-        .get(session_id)
-        .map_or((false, 0), |record| (true, record.holds.len()));
-    // Each guard is dropped before the next thing is asked.
-    let turn_control = lock(&host.turns).contains_key(session_id);
-    let seat = lock(&host.seats).contains_key(session_id);
+    let registry = host.sessions.residue(session_id);
+    // The turn controller and the seat are one value in the registry now:
+    // a controller is there when the value is and holds more than a seat.
+    let (turn_control, seat) = host.sessions.extra_mut(session_id, |steering| {
+        steering.map_or((false, false), |s| {
+            (s.has_control() || !s.has_seat(), s.has_seat())
+        })
+    });
+    let (record, holds) = (registry.bound, registry.holds.len());
     Residue {
         record,
         holds,
@@ -271,7 +274,11 @@ async fn closing_a_session_ends_it_whole_and_once() {
 
     assert_eq!(s.residue(), Residue::default());
     assert_eq!(s.ended(), [SESSION]);
-    assert_eq!(s.closes(), [SESSION], "the agent is asked to close its side");
+    assert_eq!(
+        s.closes(),
+        [SESSION],
+        "the agent is asked to close its side"
+    );
     assert!(s.deltas.disconnects().is_empty());
     assert!(
         s.host.manager().connected(&Agent::Native).is_some(),
@@ -318,7 +325,10 @@ async fn a_held_session_outlives_its_tab_until_the_last_hold_goes() {
         "the last release is announced before the session goes"
     );
 
-    s.host.release_session(SESSION, "rc:b").await.expect("again");
+    s.host
+        .release_session(SESSION, "rc:b")
+        .await
+        .expect("again");
     assert_eq!(s.ended(), [SESSION]);
     s.done();
 }
@@ -336,7 +346,10 @@ async fn a_held_session_the_window_took_back_survives_the_release() {
         .await
         .expect("rebind");
     assert_eq!(key, s.key);
-    s.host.release_session(SESSION, "rc:a").await.expect("release");
+    s.host
+        .release_session(SESSION, "rc:a")
+        .await
+        .expect("release");
 
     assert!(s.residue().record, "the window has it again");
     assert_eq!(s.residue().holds, 0);
@@ -441,10 +454,7 @@ async fn turning_an_agent_off_tells_the_chats_and_releases_the_process() {
     assert!(!s.connection_pinned());
     assert_eq!(s.ended(), [SESSION]);
     assert!(s.closes().is_empty());
-    assert_eq!(
-        s.deltas.disconnects(),
-        ["turned off in Settings → Agents"]
-    );
+    assert_eq!(s.deltas.disconnects(), ["turned off in Settings → Agents"]);
     s.done();
 }
 
@@ -557,7 +567,12 @@ async fn a_parked_queue_outlives_the_agents_process_and_the_rebind_picks_it_up()
     );
 
     // The tab's next send respawns the agent and reloads the session.
-    let agent_id = s.host.spawn(ATLAS_AGENT_ID).await.expect("respawn").agent_id;
+    let agent_id = s
+        .host
+        .spawn(ATLAS_AGENT_ID)
+        .await
+        .expect("respawn")
+        .agent_id;
     s.host
         .load_session(agent_id, SESSION.into(), s.dir.clone())
         .await

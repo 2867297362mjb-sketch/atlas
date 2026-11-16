@@ -220,9 +220,7 @@ impl AgentHost {
             let Some(wake) = PendingWake::merged(held) else {
                 return;
             };
-            let bound = lock(&this.sessions)
-                .get(&session_id)
-                .map(|record| record.agent.clone());
+            let bound = this.sessions.info(&session_id).map(|info| info.agent);
             let result = match bound {
                 Some(agent) => {
                     let key = SessionKey {
@@ -516,7 +514,7 @@ mod tests {
                 vec![("s-closed".to_string(), "new comments".to_string())]
             );
             assert!(
-                lock(&host.sessions).contains_key("s-closed"),
+                host.sessions.contains("s-closed"),
                 "the session is open now"
             );
             let _ = std::fs::remove_dir_all(&dir);

@@ -26,7 +26,7 @@
 //! in-process; every other agent exists only because the installed map says so.
 //! [`AgentHost::agent_for`] is the whole of that policy, and it is four lines.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -38,7 +38,10 @@ use atlas_acp_thread::{
     ElicitationEntryId, ElicitationStoreEvent, SelectedPermissionOutcome, TerminalAuthCommand,
 };
 use atlas_agent_delta::{project, DeltaProjector, DeltaSink, ThreadObserver};
-use atlas_agent_manager::{Agent, AgentConnectionEntry, AgentManager, ResumeMode};
+use atlas_agent_manager::{
+    Agent, AgentConnectionEntry, AgentEnd, AgentManager, BindTicket, Closed, Ended, FollowUp,
+    ResumeMode, SessionMeta, SessionRegistry,
+};
 use atlas_agent_servers::{
     AcpConnectionDefaults, AgentServer, ConnectOptions, SessionMcpOffer, SessionMcpRequest,
     SessionMcpServers,
@@ -282,24 +285,6 @@ struct AgentRecord {
     plugin_id: String,
 }
 
-struct SessionRecord {
-    agent: Agent,
-    plugin_id: String,
-    cwd: String,
-    current_model: Option<String>,
-    /// Stamped at send time; the deltas of a turn carry it so the frontend can
-    /// drop a terminal that belongs to a superseded turn (touchpoint #6).
-    turn_seq: u64,
-    created_at: DateTime<Utc>,
-    /// Who is keeping this session open without its tab (Universal RC, or the
-    /// dev toggle). While any is, the window's drop only marks
-    /// `released_by_window`; see [`AgentHost::hold_session`].
-    holds: BTreeSet<String>,
-    /// The window let this session go while it was held. The last hold's
-    /// release finishes the drop.
-    released_by_window: bool,
-}
-
 /// Build an elicitation response, or `None` for the answers that cancel.
 ///
 /// Shared by both elicitation paths — a session's dialog and a connection's
@@ -447,7 +432,13 @@ pub struct AgentHost {
     /// connection per agent, so minting a fresh uuid per spawn would hand out
     /// several names for one thing.
     by_plugin: Mutex<HashMap<String, AgentId>>,
-    sessions: Mutex<HashMap<String, SessionRecord>>,
+    /// Every open session: its record, its holds, its turn controller and
+    /// its remote-control seat, bound and ended in one place
+    /// (`atlas_agent_manager::sessions`, which also states the one lock they
+    /// share). Nothing else in the host is keyed by a live session and
+    /// cleared when it ends; what is keyed by session id and deliberately
+    /// outlives it says so at its own field (`activity`, `wakes`).
+    sessions: SessionRegistry<steering::Steering>,
     /// Registry agents found on the user's `PATH`, from the last probe.
     ///
     /// Cached because the catalog is a sync, instant read and a probe walks
@@ -463,7 +454,7 @@ pub struct AgentHost {
     history: Option<ThreadRecorder>,
     /// What Atlas itself has been doing in each session, by session id: turns
     /// in flight and when the last one ended. This, not membership of
-    /// [`AgentHost::sessions`], is what "Atlas is hosting it" means for the
+    /// the session registry, is what "Atlas is hosting it" means for the
     /// live-elsewhere rule (Rule 7). A session is bound the moment a sidebar
     /// row is opened, while a terminal may well still be writing it; only
     /// Atlas's own turns explain Atlas's own writes. Entries outlive the
@@ -522,20 +513,9 @@ pub struct AgentHost {
     /// Turns running now, on disk, so a launch after a quit or crash knows
     /// which to continue ([`AgentHost::take_left_open_turns`]).
     open_turns: open_turns::OpenTurns,
-    /// Each session's turn controller: its prompt queue and whether a turn
-    /// this host dispatched is in flight (`steering.rs`). Outlives the session
-    /// record across an agent exit, so a queue survives the rebind; goes with
-    /// the session's drop.
-    turns: Mutex<HashMap<String, steering::TurnControl>>,
     /// The send-path side effects (capture, transcript, shared memory),
     /// installed at startup.
     prompt_hooks: Mutex<Option<Arc<dyn PromptHooks>>>,
-    /// Each session's remote-control seat (`steering.rs`, "the seat"): the
-    /// room's account and, while someone other than this desktop's account
-    /// drives, who. While a driver is recorded the window's own steering is
-    /// refused and only the driver's parked prompts drain; the room's host
-    /// task maintains it from the roster.
-    seats: Mutex<HashMap<String, steering::Seat>>,
     /// Told the id of every session that ended, however it ended — the tab's
     /// drop, the agent's process going away, a kill. What a room hosting the
     /// session uses to end itself (`commands::rc`): the record and its holds
@@ -683,6 +663,7 @@ impl AgentHost {
         };
         let manager = AgentManager::new(store.clone(), native, options);
         let open_turns = open_turns::OpenTurns::load(config_dir.join("open-turns.json"));
+        let sessions = SessionRegistry::new(manager.clone());
         let host = Arc::new(Self {
             manager,
             projector,
@@ -691,7 +672,7 @@ impl AgentHost {
             config_dir,
             agents: Mutex::new(HashMap::new()),
             by_plugin: Mutex::new(HashMap::new()),
-            sessions: Mutex::new(HashMap::new()),
+            sessions,
             detected: Mutex::new(Vec::new()),
             history,
             activity: Mutex::new(HashMap::new()),
@@ -709,9 +690,7 @@ impl AgentHost {
             access_requests: Mutex::new(HashMap::new()),
             wakes: wake::Wakes::default(),
             open_turns,
-            turns: Mutex::new(HashMap::new()),
             prompt_hooks: Mutex::new(None),
-            seats: Mutex::new(HashMap::new()),
             session_end_observers: Mutex::new(Vec::new()),
         });
         // Weak, and installed after the host exists: the observer needs the
@@ -761,23 +740,68 @@ impl AgentHost {
         }
     }
 
-    /// Remove every session `agent` owns from the session table, recording
-    /// each one's end: the agent's process is going away with them.
-    fn forget_sessions_of(&self, agent: &Agent) {
-        let mut ended = Vec::new();
-        lock(&self.sessions).retain(|session_id, session| {
-            let keep = &session.agent != agent;
-            if !keep {
-                ended.push(session_id.clone());
+    /// Do what the registry left for the host when a session ended, in the
+    /// order it was handed over (`atlas_agent_manager::sessions` states the
+    /// order and why). Every way a session ends comes through here; nothing
+    /// else closes a projection, forgets a history binding or announces an
+    /// end for a session that was bound.
+    ///
+    /// Answers the connection to send `session/close` on, when the end calls
+    /// for one: the only step that waits, so it is the caller's to await.
+    fn finish_end(&self, ended: &Ended) -> Option<Arc<dyn AgentConnection>> {
+        self.follow_up(&ended.session_id, &ended.follow_ups, true)
+    }
+
+    fn follow_up(
+        &self,
+        session_id: &str,
+        follow_ups: &[FollowUp],
+        close_projections: bool,
+    ) -> Option<Arc<dyn AgentConnection>> {
+        let acp_id = acp::SessionId::new(session_id);
+        let mut close_on = None;
+        for step in follow_ups {
+            match step {
+                FollowUp::NoticeDisconnected { reason } => {
+                    self.projector
+                        .note_agent_disconnected(&acp_id, reason.as_str());
+                }
+                FollowUp::AnnounceEnded => self.end_sessions([session_id.to_owned()]),
+                // Only the live binding goes. The history row is the record
+                // of the conversation and outlives the tab that showed it.
+                FollowUp::ForgetHistoryBinding => {
+                    if let Some(history) = self.history() {
+                        history.forget(&acp_id);
+                    }
+                }
+                // The projector holds the session's only strong thread
+                // handle, so nothing else can release it — and its
+                // permission and elicitation routes are keyed by wire
+                // request id with no other removal path (ATL-225). The
+                // thread holds the connection: left in place, the agent's
+                // process outlives whatever ended the session.
+                FollowUp::CloseProjection => {
+                    if close_projections {
+                        self.projector.close_session(&acp_id);
+                    }
+                }
+                FollowUp::CloseOnAgent { connection } => close_on = Some(connection.clone()),
             }
-            keep
-        });
-        // A turn controller with prompts still parked survives the process: the
-        // tab's rebind (same session id) picks the queue up again. An empty one
-        // has nothing to carry over.
-        lock(&self.turns)
-            .retain(|session_id, control| !ended.contains(session_id) || control.has_queue());
-        self.end_sessions(ended);
+        }
+        close_on
+    }
+
+    /// End every session on `agent`: its process is going, or gone.
+    ///
+    /// `close_projections` is `false` for the three callers that have never
+    /// released their sessions' projections (a kill, a sign-out, a model-list
+    /// reconnect).
+    fn end_agent(&self, plugin_id: &str, agent: &Agent, how: AgentEnd, close_projections: bool) {
+        // A dialog whose agent has died can no longer be answered.
+        self.forget_request_elicitations(&ThreadAgentId::new(plugin_id));
+        for ended in self.sessions.end_agent(agent, how) {
+            self.follow_up(&ended.session_id, &ended.follow_ups, close_projections);
+        }
     }
 
     /// Atlas's session history, or `None` when the store could not be opened.
@@ -846,15 +870,15 @@ impl AgentHost {
         // First: the sweep below fails every running turn's send, and those
         // turns must stay recorded as cut short, not ended.
         self.open_turns.freeze();
-        // The manager sweeps its own maps rather than being driven through
-        // `connections()`, which yields only entries that reached `Connected`.
-        // An agent still connecting is invisible to that list and is exactly
-        // the one that spawns a child moments after the app decided to leave
-        // (ATL-227, ATL-228).
-        self.manager.shutdown();
-        // Quitting ends every agent process, and with it every session.
-        let ended: Vec<String> = lock(&self.sessions).drain().map(|(id, _)| id).collect();
-        self.end_sessions(ended);
+        // Quitting ends every agent process, and with it every session. The
+        // registry shuts the manager down as part of that, which sweeps its
+        // own maps rather than being driven through `connections()`: that
+        // yields only entries that reached `Connected`, and an agent still
+        // connecting is exactly the one that spawns a child moments after
+        // the app decided to leave (ATL-227, ATL-228).
+        for ended in self.sessions.end_all() {
+            self.finish_end(&ended);
+        }
         // The projector holds each session's only strong thread handle, and
         // the thread holds the connection `Arc`. Left in place it pinned every
         // connection past both sweeps above, so no `Drop` ran and no child was
@@ -1095,9 +1119,7 @@ impl AgentHost {
     }
 
     fn kill_agent(&self, plugin_id: &str, agent: &Agent) {
-        self.forget_request_elicitations(&ThreadAgentId::new(plugin_id));
-        self.manager.drop_connection(agent);
-        self.forget_sessions_of(agent);
+        self.end_agent(plugin_id, agent, AgentEnd::stopping(), false);
     }
 
     /// Whether any open session on `plugin_id` has a turn running. `false` for
@@ -1106,12 +1128,7 @@ impl AgentHost {
         let Ok(agent) = self.installed_agent(plugin_id) else {
             return false;
         };
-        let sessions: Vec<String> = lock(&self.sessions)
-            .iter()
-            .filter(|(_, record)| record.agent == agent)
-            .map(|(id, _)| id.clone())
-            .collect();
-        sessions.iter().any(|id| {
+        self.sessions.sessions_of(&agent).iter().any(|id| {
             self.thread(id)
                 .is_ok_and(|handle| lock_thread(&handle).is_generating())
         })
@@ -1129,11 +1146,14 @@ impl AgentHost {
     /// session id".
     pub fn restart_for_update(&self, plugin_id: &str, version: &str) -> Result<()> {
         let agent = self.installed_agent(plugin_id)?;
-        self.disconnect_chats(
+        self.end_agent(
+            plugin_id,
             &agent,
-            &format!("updated to v{version}; the next message reconnects"),
+            AgentEnd::stopping().with_notice(format!(
+                "updated to v{version}; the next message reconnects"
+            )),
+            true,
         );
-        self.kill_agent(plugin_id, &agent);
         Ok(())
     }
 
@@ -1142,8 +1162,12 @@ impl AgentHost {
     /// next message reconnect.
     pub fn turn_off(&self, plugin_id: &str) -> Result<()> {
         let agent = self.installed_agent(plugin_id)?;
-        self.disconnect_chats(&agent, "turned off in Settings → Agents");
-        self.kill_agent(plugin_id, &agent);
+        self.end_agent(
+            plugin_id,
+            &agent,
+            AgentEnd::stopping().with_notice("turned off in Settings → Agents"),
+            true,
+        );
         Ok(())
     }
 
@@ -1155,31 +1179,14 @@ impl AgentHost {
     /// had never heard of and failed with "unknown session id". The same
     /// notice as an update restart lets each tab rebind instead.
     pub fn agent_exited(&self, agent: &Agent) {
-        let plugin_id = Self::plugin_id_of(agent);
-        self.disconnect_chats(agent, "the agent stopped; the next message reconnects");
-        self.forget_request_elicitations(&ThreadAgentId::new(plugin_id.as_str()));
-        self.forget_sessions_of(agent);
-    }
-
-    /// Tell every open chat on `agent` it is disconnected, then close its
-    /// projection: the tab rebinds (respawn + `session/load`) on its next send
-    /// with its transcript intact.
-    fn disconnect_chats(&self, agent: &Agent, reason: &str) {
-        let sessions: Vec<String> = lock(&self.sessions)
-            .iter()
-            .filter(|(_, record)| &record.agent == agent)
-            .map(|(id, _)| id.clone())
-            .collect();
-        for id in &sessions {
-            let session_id = acp::SessionId::new(id.as_str());
-            self.projector.note_agent_disconnected(&session_id, reason);
-            // The projection holds the session's only strong thread handle,
-            // and through it the connection: left in place, the old process
-            // outlives the restart until the tab closes — while the update
-            // rewrites the `node_modules` it loads from. Closing it is what
-            // lets the process go now. After the notice, which needs it.
-            self.projector.close_session(&session_id);
-        }
+        // The connection is already gone, and is not dropped again: by now
+        // "the agent's connection" could only be a newer one.
+        self.end_agent(
+            &Self::plugin_id_of(agent),
+            agent,
+            AgentEnd::exited().with_notice("the agent stopped; the next message reconnects"),
+            true,
+        );
     }
 
     /// Drop the native agent's connection, if one is open.
@@ -1194,9 +1201,7 @@ impl AgentHost {
     /// next spawn reconnects and mints fresh — or fails, honestly, now that
     /// there is nothing to mint with.
     pub fn drop_native_connection(&self) {
-        self.forget_request_elicitations(&ThreadAgentId::new(ATLAS_AGENT_ID));
-        self.manager.drop_connection(&Agent::Native);
-        self.forget_sessions_of(&Agent::Native);
+        self.kill_agent(ATLAS_AGENT_ID, &Agent::Native);
     }
 
     /// Re-fetch an agent's model catalogue (ADR-0007): the picker's Refresh.
@@ -1253,28 +1258,18 @@ impl AgentHost {
             ModelCatalogueOutcome::Stored => true,
             ModelCatalogueOutcome::Applied { changed } => changed,
             ModelCatalogueOutcome::ReconnectRequired => {
-                let sessions: Vec<String> = lock(&self.sessions)
-                    .iter()
-                    .filter(|(_, record)| record.agent == agent)
-                    .map(|(id, _)| id.clone())
-                    .collect();
-                let running = sessions.iter().any(|id| {
-                    self.thread(id)
-                        .is_ok_and(|handle| lock_thread(&handle).is_generating())
-                });
-                if running {
+                if self.agent_turn_running(plugin_id) {
                     return Err(HostError::new(
                         "A turn is running. Stop it, then refresh models again — the new list applies at the next restart.",
                         ErrorClass::Fatal,
                     ));
                 }
-                for id in &sessions {
-                    self.projector.note_agent_disconnected(
-                        &acp::SessionId::new(id.as_str()),
-                        "the model list changed; restart to continue",
-                    );
-                }
-                self.kill_agent(plugin_id, &agent);
+                self.end_agent(
+                    plugin_id,
+                    &agent,
+                    AgentEnd::stopping().with_notice("the model list changed; restart to continue"),
+                    false,
+                );
                 return Ok(NativeModelsRefresh {
                     models,
                     default_model,
@@ -1319,7 +1314,7 @@ impl AgentHost {
             elapsed_ms = started.elapsed().as_millis() as u64,
             "session/new opened"
         );
-        Ok(self.bind(agent_id, &record, cwd, thread))
+        self.bind(agent_id, &record, cwd, thread).await
     }
 
     /// Reopen a stored session, letting the agent replay it.
@@ -1363,27 +1358,32 @@ impl AgentHost {
             .await
             .map_err(HostError::from)?;
         lock_thread(&thread).set_attached_roots(session_roots(&attached));
-        self.bind(agent_id, &record, cwd, thread);
+        self.bind(agent_id, &record, cwd, thread).await?;
         if !attached.is_empty() {
             self.apply_session_roots(&session_id, &attached).await;
         }
         Ok(key)
     }
 
-    /// Register a thread with the projector and the session table.
+    /// Register a thread with the projector and the session registry.
     ///
     /// Order matters: the projector is attached before anything else can touch
     /// the thread, because it drains the events buffered while `session/new`
     /// was still in flight — the replay that `session/load` produces lands
     /// there, and dropping it is the replay-loss bug this fixes.
-    fn bind(
+    ///
+    /// The registry comes last, and may refuse: the session was ended while
+    /// it was opening. What was set up for it above is then undone, by the
+    /// same follow-ups an end hands over.
+    async fn bind(
         &self,
         agent_id: AgentId,
         record: &AgentRecord,
         cwd: PathBuf,
         thread: AcpThreadHandle,
-    ) -> SessionInit {
+    ) -> Result<SessionInit> {
         let session_id = lock_thread(&thread).session_id().clone();
+        let ticket: BindTicket = self.sessions.begin_bind(&record.agent, None);
 
         // History first, then the projector. The conversation exists, so
         // history knows about it before anything has been typed into it —
@@ -1404,19 +1404,25 @@ impl AgentHost {
         self.projector.attach(agent_id, thread.clone());
 
         let (current_mode, available_modes) = self.modes_of(&thread, &session_id);
-        lock(&self.sessions).insert(
-            session_id.to_string(),
-            SessionRecord {
+        let bound = self.sessions.bind(
+            ticket,
+            &thread,
+            SessionMeta {
                 agent: record.agent.clone(),
                 plugin_id: record.plugin_id.clone(),
                 cwd: cwd.to_string_lossy().into_owned(),
-                current_model: None,
-                turn_seq: 0,
-                created_at: Utc::now(),
-                holds: BTreeSet::new(),
-                released_by_window: false,
             },
         );
+        if let Err(refused) = bound {
+            tracing::info!(session = %session_id, "{refused}; the session it opened is discarded");
+            let close_on = self.follow_up(session_id.0.as_ref(), &refused.follow_ups, true);
+            if let Some(connection) = close_on {
+                if let Err(e) = connection.close_session(session_id.clone()).await {
+                    tracing::debug!(session = %session_id, "closing a discarded session: {e:#}");
+                }
+            }
+            return Err(HostError::new(refused.to_string(), ErrorClass::ProcessDead));
+        }
         if let Some(lifecycle) = self.lifecycle() {
             lifecycle.session_started(
                 session_id.0.as_ref(),
@@ -1424,14 +1430,14 @@ impl AgentHost {
                 &cwd.to_string_lossy(),
             );
         }
-        SessionInit {
+        Ok(SessionInit {
             key: SessionKey {
                 agent_id,
                 session_id: session_id.to_string(),
             },
             current_mode,
             available_modes,
-        }
+        })
     }
 
     fn modes_of(
@@ -1468,25 +1474,17 @@ impl AgentHost {
     /// path that lets a session go ends here, so the hold is honoured by all
     /// of them without the window having to know.
     pub async fn drop_session(self: &Arc<Self>, session_id: &str) -> Result<()> {
-        let held = {
-            let mut sessions = lock(&self.sessions);
-            let Some(record) = sessions.get_mut(session_id) else {
-                return Ok(());
-            };
-            let held = !record.holds.is_empty();
-            if held {
-                record.released_by_window = true;
+        match self.sessions.close(session_id) {
+            Closed::Unknown => Ok(()),
+            Closed::Ended(ended) => self.finish_close(ended).await,
+            Closed::Held => {
+                tracing::info!(session = session_id, "held session outlives its tab");
+                // The window's send gate went with the tab: a queue it had
+                // paused would otherwise never drain for the holder.
+                self.unpause_queue(session_id);
+                Ok(())
             }
-            held
-        };
-        if !held {
-            return self.teardown_session(session_id).await;
         }
-        tracing::info!(session = session_id, "held session outlives its tab");
-        // The window's send gate went with the tab: a queue it had paused
-        // would otherwise never drain for the holder.
-        self.unpause_queue(session_id);
-        Ok(())
     }
 
     /// The window is showing a live session again (a history row reopened, a
@@ -1494,38 +1492,19 @@ impl AgentHost {
     /// held, it is the window's again, so a later release does not tear it
     /// down under the tab.
     fn reclaim_for_window(&self, session_id: &str) -> bool {
-        match lock(&self.sessions).get_mut(session_id) {
-            Some(record) => {
-                record.released_by_window = false;
-                true
-            }
-            None => false,
-        }
+        self.sessions.reclaim_for_window(session_id)
     }
 
-    /// End a session for real: the record, its queue, its history binding, its
-    /// projection and the agent's side.
-    async fn teardown_session(&self, session_id: &str) -> Result<()> {
-        let removed = lock(&self.sessions).remove(session_id).is_some();
-        if !removed {
+    /// Finish a close the registry made: the host's follow-ups, then the
+    /// agent's own `session/close` when it advertised one. Last, so the
+    /// thread and its terminals are dropped whether or not that RPC
+    /// succeeds.
+    async fn finish_close(&self, ended: Ended) -> Result<()> {
+        let Some(connection) = self.finish_end(&ended) else {
             return Ok(());
-        }
-        lock(&self.turns).remove(session_id);
-        self.end_sessions([session_id.to_string()]);
-        // Only the live binding goes. The history row is the record of the
-        // conversation and outlives the tab that showed it.
-        if let Some(history) = self.history() {
-            history.forget(&acp::SessionId::new(session_id));
-        }
-        // The projector holds the session's only strong thread handle, so
-        // nothing else can release it — and its permission and elicitation
-        // routes are keyed by wire request id with no other removal path
-        // (ATL-225). Before `close_session` so the thread and its terminals are
-        // dropped whether or not the agent's own close RPC succeeds.
-        self.projector
-            .close_session(&acp::SessionId::new(session_id));
-        self.manager
-            .close_session(&acp::SessionId::new(session_id))
+        };
+        connection
+            .close_session(acp::SessionId::new(ended.session_id.as_str()))
             .await
             .map_err(HostError::from)
     }
@@ -1565,7 +1544,7 @@ impl AgentHost {
     /// caller holding only the session id (Universal RC's `rc_start`) needs
     /// to reach the steering entry. `None` when the session is not open.
     pub fn session_key(&self, session_id: &str) -> Option<SessionKey> {
-        let agent = lock(&self.sessions).get(session_id)?.agent.clone();
+        let agent = self.sessions.info(session_id)?.agent;
         Some(SessionKey {
             agent_id: self.handle_for(&agent),
             session_id: session_id.to_owned(),
@@ -1573,18 +1552,12 @@ impl AgentHost {
     }
 
     fn build_snapshot(&self, key: &SessionKey, with_messages: bool) -> Result<SessionSnapshot> {
-        let (plugin_id, cwd, current_model, created_at) = {
-            let sessions = lock(&self.sessions);
-            let record = sessions
-                .get(&key.session_id)
-                .ok_or_else(HostError::unknown_session)?;
-            (
-                record.plugin_id.clone(),
-                record.cwd.clone(),
-                record.current_model.clone(),
-                record.created_at,
-            )
-        };
+        let info = self
+            .sessions
+            .info(&key.session_id)
+            .ok_or_else(HostError::unknown_session)?;
+        let (plugin_id, cwd, current_model) = (info.plugin_id, info.cwd, info.current_model);
+        let created_at = DateTime::<Utc>::from(info.created_at);
         let handle = self.thread(&key.session_id)?;
         let session_id = acp::SessionId::new(key.session_id.as_str());
         let connection = lock_thread(&handle).connection().clone();
@@ -1972,9 +1945,9 @@ impl AgentHost {
     /// A session that has since been dropped counts as not current: there is
     /// nothing left to announce a failure on.
     fn is_current_turn(&self, session_id: &str, turn_seq: u64) -> bool {
-        lock(&self.sessions)
-            .get(session_id)
-            .is_some_and(|record| record.turn_seq == turn_seq)
+        self.sessions
+            .info(session_id)
+            .is_some_and(|info| info.turn_seq == turn_seq)
     }
 
     // ---- per-session settings -------------------------------------------
@@ -2257,7 +2230,7 @@ impl AgentHost {
         // Before `bind`, whose history write reads the thread's own folders:
         // the attached projects must already be known as attached.
         lock_thread(&opened).set_attached_roots(session_roots(&thread.attached_projects));
-        let init = self.bind(agent.agent_id, &record, cwd, opened);
+        let init = self.bind(agent.agent_id, &record, cwd, opened).await?;
         if !thread.attached_projects.is_empty() {
             self.apply_session_roots(&init.key.session_id, &thread.attached_projects)
                 .await;
@@ -4842,7 +4815,7 @@ mod tests {
         // (as the lifecycle does); a room is ended once whichever came first.
         host.agent_exited(&Agent::Native);
         assert!(
-            !lock(&host.sessions).contains_key("s-exit-held"),
+            !host.sessions.contains("s-exit-held"),
             "the record, and its hold, went with the process"
         );
         assert!(!host.is_held("s-exit-held"));
@@ -4924,7 +4897,7 @@ mod tests {
             .await
             .expect("a session opens");
         assert!(
-            lock(&host.sessions).contains_key("s-evict"),
+            host.sessions.contains("s-evict"),
             "precondition: the host holds the session"
         );
 
@@ -4933,7 +4906,7 @@ mod tests {
         host.agent_exited(&Agent::Native);
 
         assert!(
-            !lock(&host.sessions).contains_key("s-evict"),
+            !host.sessions.contains("s-evict"),
             "the host must not keep a session the dead process owned"
         );
         assert_eq!(record.sessions().unwrap()[0].ended_at, Some(200));
@@ -5517,7 +5490,7 @@ mod tests {
         assert!(!refreshed.reconnected);
         assert_eq!(live.asked(), 1, "the running connection is the one asked");
         assert!(host.manager().connected(&Agent::Native).is_some());
-        assert!(lock(&host.sessions).contains_key("s-applied"));
+        assert!(host.sessions.contains("s-applied"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -5591,7 +5564,7 @@ mod tests {
             "the connection went, so the next spawn loads the new list",
         );
         assert!(
-            !lock(&host.sessions).contains_key("s-reconnect"),
+            !host.sessions.contains("s-reconnect"),
             "and its sessions with it, so each tab rebinds",
         );
         assert_eq!(live.asked(), 2);
