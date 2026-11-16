@@ -194,7 +194,10 @@ export class TerminalSession {
   private opened = false;
   private linksRegistered = false;
 
+  /** The size the surface last measured. */
   private lastSize: { cols: number; rows: number } | null = null;
+  /** The size the PTY was last told: what it was created at, then each resize. */
+  private ptySize: { cols: number; rows: number } | null = null;
   private resizeTimer = 0;
   private fitPending = false;
   private findIdx = -1;
@@ -268,13 +271,12 @@ export class TerminalSession {
       return;
     }
     this.ptyId = id;
+    this.ptySize = size;
     reg.byPty.set(id, this);
     this.publish({ ptyId: id });
     this.registerLinks();
     // A size measured while the PTY was being created.
-    if (this.lastSize && (this.lastSize.cols !== size.cols || this.lastSize.rows !== size.rows)) {
-      void invoke("terminal_resize", { id, ...this.lastSize }).catch(() => {});
-    }
+    this.pushSize();
 
     // A command the opener queued for this terminal — an agent's login, today.
     // Written into the shell rather than exec'd, so it runs with a real tty and
@@ -628,13 +630,25 @@ export class TerminalSession {
     // First call fires now; the rest of a drag coalesces onto a trailing timer.
     const send = () => {
       this.resizeTimer = 0;
-      const id = this.ptyId;
-      const size = this.lastSize;
-      if (!id || !size) return;
-      void invoke("terminal_resize", { id, cols: size.cols, rows: size.rows }).catch(() => {});
+      this.pushSize();
     };
     if (!this.resizeTimer) send();
     this.resizeTimer = window.setTimeout(send, RESIZE_COALESCE_MS);
+  }
+
+  /**
+   * Tell the PTY the measured size, unless that is the size it already has.
+   * Every path that resizes ends here, so two of them reaching the same size
+   * is one `terminal_resize`: the trailing timer after a lone change, and the
+   * end of a create that a measurement overtook, used to send it a second time.
+   */
+  private pushSize(): void {
+    const id = this.ptyId;
+    const size = this.lastSize;
+    if (!id || !size) return;
+    if (this.ptySize && this.ptySize.cols === size.cols && this.ptySize.rows === size.rows) return;
+    this.ptySize = size;
+    void invoke("terminal_resize", { id, cols: size.cols, rows: size.rows }).catch(() => {});
   }
 
   // ── Input ────────────────────────────────────────────────────────────────

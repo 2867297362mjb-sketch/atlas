@@ -149,6 +149,10 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
 const settle = async () => {
   for (let i = 0; i < 5; i++) await tick();
 };
+// The session's trailing coalesce for `terminal_resize`, restated.
+const RESIZE_COALESCE_MS = 40;
+/** Long enough for a trailing resize to have fired, however busy the machine. */
+const pastResizeWindow = () => new Promise((r) => setTimeout(r, RESIZE_COALESCE_MS * 2));
 
 let ptyCounter = 0;
 beforeEach(() => {
@@ -256,9 +260,38 @@ describe("terminalSessions", () => {
     await settle();
     expect(calls("terminal_resize")).toHaveLength(1);
     expect(calls("terminal_resize")[0][1]).toMatchObject({ cols: 100, rows: 30 });
+    // The coalesce window closes with nothing new to say: still one.
+    await pastResizeWindow();
+    expect(calls("terminal_resize")).toHaveLength(1);
     s.requestFit();
     await settle();
+    await pastResizeWindow();
     expect(calls("terminal_resize")).toHaveLength(1);
+    await s.close();
+    host.remove();
+  });
+
+  it("tells a PTY that was still being created its measured size once", async () => {
+    let created!: (id: string) => void;
+    invoke.mockImplementation((cmd) =>
+      cmd === "terminal_create"
+        ? new Promise<string>((resolve) => (created = resolve))
+        : Promise.resolve(undefined),
+    );
+    const s = terminalSessions.acquire(`k-${Math.random()}`, { tabId: "t", cwd: "/tmp" });
+    const host = document.createElement("div");
+    Object.defineProperty(host, "clientWidth", { value: 800, configurable: true });
+    Object.defineProperty(host, "clientHeight", { value: 600, configurable: true });
+    document.body.appendChild(host);
+    s.attach(host);
+    // Measured at 100×30 while the PTY (asked for at 80×24) has no id yet.
+    await settle();
+    expect(calls("terminal_resize")).toHaveLength(0);
+    created("pty-late");
+    await settle();
+    await pastResizeWindow();
+    expect(calls("terminal_resize")).toHaveLength(1);
+    expect(calls("terminal_resize")[0][1]).toMatchObject({ id: "pty-late", cols: 100, rows: 30 });
     await s.close();
     host.remove();
   });
