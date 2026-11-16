@@ -13,6 +13,7 @@ use notify_debouncer_full::new_debouncer;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use crate::settings_effects::{self, Effect, When};
 use crate::state::{
     AppSettings, AtlasConfigHandle, ConfigError, ConfigSnapshot, ConfigStatus, SettingsPatch,
     UpdateOutcome,
@@ -135,49 +136,49 @@ pub fn notify_settings_changed(app: &AppHandle, settings: &AppSettings, generati
         "atlas:config-changed",
         serde_json::json!({ "settings": settings, "generation": generation }),
     );
-    if let Some(client) = app.try_state::<Arc<TelemetryClient>>() {
-        client.set_enabled(settings.share_telemetry);
-    }
-    // 3. re-apply `linkTelemetryToAccount`. It is read by
-    //    `commands::auth::sync_identity`, which otherwise only runs on an auth
-    //    *transition* — so without this, turning account linkage off while
-    //    signed in left PostHog attributing events to the account until the
-    //    next sign-out, which is the opposite of what the toggle says.
-    crate::commands::auth::resync_telemetry_identity(app, settings.link_telemetry_to_account);
-    // 4. re-apply the Atlas Agent's plugin-catalogue sync gate. The engine
-    //    reads it when the sync would start (its first connect), so it has
-    //    to be current before that — this covers every commit path, and
-    //    `lib.rs` applies it once at boot.
-    apply_curated_plugin_sync_gate(settings.curated_plugin_sync);
-    // 5. re-apply the app icon, so an external edit of `appIcon` takes
-    //    effect live like the Settings picker does. A no-op unless it changed.
-    crate::app_icon::apply(app, &settings.app_icon);
-    // 6. follow `instructionSync`: switched on, sync and watch each window's
-    //    active project; switched off, stop watching and take the mirrored
-    //    block back out. A no-op unless it changed.
-    if let Some(state) = app.try_state::<crate::commands::instruction_sync::InstructionSyncState>()
-    {
-        state.apply_setting(app, settings.instruction_sync);
-    }
-    // 7. re-sync the keep-awake manager with the live setting.
-    // The next agent session launches with its own memory on or off.
-    atlas_agent_servers::set_atlas_only_memory(settings.atlas_only_memory);
-    if let Some(keep_awake) = app.try_state::<Arc<crate::keep_awake::KeepAwakeManager>>() {
-        keep_awake.set_enabled(settings.keep_awake_while_running);
-    }
-}
-
-/// The gate for the engine's curated-plugin sync
-/// (`atlas-engine-core-plugins`, `start_curated_repo_sync`): a `git fetch` of
-/// github.com/openai/plugins at every launch, opt-in from Atlas via
-/// `curatedPluginSync`. The engine runs in this process and reads the
-/// variable itself, so the setting is carried as process environment rather
-/// than threaded through the engine's config.
-pub fn apply_curated_plugin_sync_gate(enabled: bool) {
-    if enabled {
-        std::env::set_var("ATLAS_CURATED_PLUGIN_SYNC", "1");
-    } else {
-        std::env::remove_var("ATLAS_CURATED_PLUGIN_SYNC");
+    for effect in settings_effects::effects(settings, When::Changed { generation }) {
+        if effect.apply_process_wide() {
+            continue;
+        }
+        match effect {
+            Effect::TelemetryGate(on) => {
+                if let Some(client) = app.try_state::<Arc<TelemetryClient>>() {
+                    client.set_enabled(on);
+                }
+            }
+            // `linkTelemetryToAccount` is read by `commands::auth::sync_identity`,
+            // which otherwise only runs on an auth *transition* — so without
+            // this, turning account linkage off while signed in left PostHog
+            // attributing events to the account until the next sign-out, which
+            // is the opposite of what the toggle says.
+            Effect::TelemetryIdentity { link_to_account } => {
+                crate::commands::auth::resync_telemetry_identity(app, link_to_account);
+            }
+            // So an external edit of `appIcon` takes effect live like the
+            // Settings picker does. A no-op unless it changed.
+            Effect::AppIcon(id) => crate::app_icon::apply(app, &id),
+            // Switched on, sync and watch each window's active project;
+            // switched off, stop watching and take the mirrored block back
+            // out. A no-op unless it changed.
+            Effect::InstructionSync(on) => {
+                if let Some(state) =
+                    app.try_state::<crate::commands::instruction_sync::InstructionSyncState>()
+                {
+                    state.apply_setting(app, on);
+                }
+            }
+            Effect::KeepAwake(on) => {
+                if let Some(keep_awake) =
+                    app.try_state::<Arc<crate::keep_awake::KeepAwakeManager>>()
+                {
+                    keep_awake.set_enabled(on);
+                }
+            }
+            // Applied at boot only, as found.
+            Effect::WindowBackground { .. } => {}
+            // Process-wide: applied above.
+            Effect::CuratedPluginSync(_) | Effect::AtlasOnlyMemory(_) => {}
+        }
     }
 }
 

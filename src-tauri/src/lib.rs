@@ -11,6 +11,7 @@ mod menu;
 mod nav_guard;
 mod notifier;
 mod open_vsx;
+mod settings_effects;
 mod sleep_watch;
 mod state;
 mod telemetry;
@@ -27,6 +28,7 @@ use commands::mention_search::MentionCacheState;
 use commands::recent_files::RecentFilesState;
 use commands::terminal::TerminalState;
 use parking_lot::Mutex;
+use settings_effects::{Effect, When};
 use state::{AppState, AppStateHandle};
 use tauri::Manager;
 
@@ -226,12 +228,38 @@ pub fn run() {
             // User preferences live in their own validated, human-editable
             // `config.toml`; a first run writes the documented defaults.
             let config = state::atlas_config::bootstrap();
-            let telemetry_enabled = config.effective().share_telemetry;
-            // The engine reads this gate on its first connect, which happens
-            // after setup — so it must be in the environment before then.
-            commands::atlas_config::apply_curated_plugin_sync_gate(
-                config.effective().curated_plugin_sync,
-            );
+            // What the settings ask for as Atlas starts. Applied below, each
+            // where its target is ready.
+            let mut telemetry_enabled = false;
+            let mut keep_awake_enabled = false;
+            let mut window_theme = None;
+            for effect in settings_effects::effects(config.effective(), When::Boot) {
+                // The engine reads the plugin sync gate on its first connect,
+                // which happens after setup — so it must be in the environment
+                // before then.
+                if effect.apply_process_wide() {
+                    continue;
+                }
+                match effect {
+                    Effect::TelemetryGate(on) => telemetry_enabled = on,
+                    Effect::KeepAwake(on) => keep_awake_enabled = on,
+                    Effect::WindowBackground { light, dark, mode } => {
+                        window_theme = Some((light, dark, mode));
+                    }
+                    // The app icon, before the window shows.
+                    Effect::AppIcon(id) => app_icon::apply(app.handle(), &id),
+                    // Whether `instructionSync` is on as Atlas starts, so
+                    // switching it off before any project opens still takes
+                    // the mirrored blocks out.
+                    Effect::InstructionSync(on) => app
+                        .state::<commands::instruction_sync::InstructionSyncState>()
+                        .init(on),
+                    // Not asked for at boot.
+                    Effect::TelemetryIdentity { .. } => {}
+                    // Process-wide: applied above.
+                    Effect::CuratedPluginSync(_) | Effect::AtlasOnlyMemory(_) => {}
+                }
+            }
             // Opaque window background, in the theme the user actually chose.
             // Fills the brief gap between window-shown and first React paint
             // with the theme's own background instead of the WebKit default
@@ -252,15 +280,12 @@ pub fn run() {
             // Atlas was the focused window. An opaque window can be snapshotted
             // as a flat texture, so the OS animation stays smooth.
             if let Some(window) = app.get_webview_window("main") {
-                let settings = config.effective();
-                let system_is_light = matches!(window.theme(), Ok(tauri::Theme::Light));
-                let color = window_background::window_background(
-                    &settings.theme_light,
-                    &settings.theme_dark,
-                    settings.theme_mode,
-                    system_is_light,
-                );
-                let _ = window.set_background_color(Some(color));
+                if let Some((light, dark, mode)) = window_theme {
+                    let system_is_light = matches!(window.theme(), Ok(tauri::Theme::Light));
+                    let color =
+                        window_background::window_background(&light, &dark, mode, system_is_light);
+                    let _ = window.set_background_color(Some(color));
+                }
                 // tao leaves `trafficLightPosition` unapplied until the first
                 // resize; see the function.
                 commands::window::apply_traffic_light_inset(&window);
@@ -269,21 +294,10 @@ pub fn run() {
             // focused field; see the module.
             #[cfg(target_os = "macos")]
             arrow_keys::install();
-            // The app icon, before the window shows. Later changes arrive
-            // through `notify_settings_changed`.
-            app_icon::apply(app.handle(), &config.effective().app_icon);
-            // Whether `instructionSync` is on as Atlas starts, so switching it
-            // off before any project opens still takes the mirrored blocks out.
-            app.state::<commands::instruction_sync::InstructionSyncState>()
-                .init(config.effective().instruction_sync);
-            // Whether agents start with their own memory off (M4).
-            atlas_agent_servers::set_atlas_only_memory(config.effective().atlas_only_memory);
             let atlas_config: state::AtlasConfigHandle = Arc::new(Mutex::new(config));
             app.manage(atlas_config.clone());
             app.manage(state::project_config::ProjectConfigs::default());
-            let keep_awake = Arc::new(keep_awake::KeepAwakeManager::new(
-                atlas_config.lock().effective().keep_awake_while_running,
-            ));
+            let keep_awake = Arc::new(keep_awake::KeepAwakeManager::new(keep_awake_enabled));
             app.manage(keep_awake);
             commands::atlas_config::start_watcher(app.handle(), atlas_config);
             commands::themes::start_watcher(app.handle());
