@@ -601,7 +601,7 @@ async fn an_empty_turn_controller_goes_with_the_agents_process() {
 }
 
 #[tokio::test]
-async fn a_closed_session_and_its_remote_control_seat() {
+async fn a_closed_session_gives_up_its_remote_control_seat() {
     let s = open().await;
     s.host.set_remote_driver(
         SESSION,
@@ -616,11 +616,36 @@ async fn a_closed_session_and_its_remote_control_seat() {
 
     assert_eq!(
         s.residue(),
+        Residue::default(),
+        "the seat was a seat in a session that is over"
+    );
+    assert_eq!(s.host.remote_driver(SESSION), None);
+    s.done();
+}
+
+#[tokio::test]
+async fn a_remote_control_seat_outlives_the_agents_process() {
+    let s = open().await;
+    let ada = RemoteDriver {
+        id: "ada".into(),
+        name: Some("Ada".into()),
+    };
+    s.host
+        .set_remote_driver(SESSION, "owner", Some(ada.clone()));
+    s.host.manager().drop_connection(&Agent::Native);
+
+    s.host.agent_exited(&Agent::Native);
+
+    // The room is still open and the tab rebinds under the same id: the
+    // driver is still the driver.
+    assert_eq!(
+        s.residue(),
         Residue {
             seat: true,
-            ..Residue::default()
+            ..KEPT_FOR_THE_REBIND
         }
     );
+    assert_eq!(s.host.remote_driver(SESSION), Some(ada));
     s.done();
 }
 

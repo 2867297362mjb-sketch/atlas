@@ -238,19 +238,21 @@ pub(in crate::commands::agent_host) struct Steering {
 impl SessionExtra for Steering {
     fn survives(&mut self, end: EndKind) -> bool {
         match end {
-            // The queue was typed for the session that closed.
-            EndKind::Closed => self.control = TurnControl::default(),
-            // A turn controller with prompts still parked survives the
-            // process: the tab's rebind (same session id) picks the queue up
-            // again. An empty one has nothing to carry over.
+            // The session is over: the queue was typed for it and the seat
+            // was a seat in it. Nothing is left to steer.
+            EndKind::Closed | EndKind::Quit => false,
+            // The process went, the session did not: the tab's rebind brings
+            // it back under the same id. A queue with prompts still parked
+            // waits for that, and so does the seat, because the room that
+            // set it is still open and names its driver only on a change. An
+            // empty controller has nothing to carry over.
             EndKind::AgentGone => {
                 if !self.control.has_queue() {
                     self.control = TurnControl::default();
                 }
+                self.control.has_queue() || self.seat.is_some()
             }
-            EndKind::Quit => return false,
         }
-        self.control.has_queue() || self.seat.is_some()
     }
 }
 
