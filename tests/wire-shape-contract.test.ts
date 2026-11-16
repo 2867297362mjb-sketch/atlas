@@ -84,11 +84,16 @@ import { bracketBody } from "./support/source";
  * still handles a kind, and that a mapper still copies an optional field
  * across.
  *
- * Unlike `tests/state-payload-contract.test.ts` (which is specifically the
- * `save_app_state` / `bootstrap_app_state` payload and generalises over many
- * struct pairs), these four are one-off, unrelated commands — plain regression
- * pins on source text rather than a shared parsing framework, so each failure
- * message names the exact bug instead of a generic set difference.
+ * The same goes for the app-state payloads (`bootstrap_app_state` /
+ * `save_app_state`): generated into `src/bindings/app-state/` and held to the
+ * JSON Rust writes by `fixtures.ts` there, which is why the suite that used to
+ * compare their keys by text is gone.
+ *
+ * Everything still pinned here is hand-written on both sides, in crates and
+ * command modules that derive no TypeScript. Each block is a plain regression
+ * pin on source text rather than a shared parsing framework, so each failure
+ * message names the exact bug instead of a generic set difference. A surface
+ * that moves to generated types takes its block out of this file.
  */
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");

@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { ConfigStatus } from "@/bindings/app-state/ConfigStatus";
 import type { AppSettings } from "./app-settings";
 
 /**
@@ -19,10 +20,9 @@ export type SettingsPatch = Partial<Omit<AppSettings, "updaterIgnoredVersion">> 
   updaterIgnoredVersion?: string | null;
 };
 
-export type ConfigStatus =
-  | { status: "ok" }
-  | { status: "usingLastKnownGood"; error: string }
-  | { status: "usingDefaults"; error: string };
+/** Whether `config.toml` loaded. Generated from the Rust enum
+ *  (`src-tauri/src/state/atlas_config.rs`, `bun run bindings:gen`). */
+export type { ConfigStatus };
 
 export interface ConfigInfo {
   path: string;

@@ -30,6 +30,8 @@ import {
 } from "../lib/stop-agents-confirm";
 import { markFileIndexClosedFor } from "@/features/file-picker/lib/file-picker-api";
 import { instructionSync } from "../lib/instruction-sync-api";
+import type { Project as ProjectWire } from "@/bindings/app-state/Project";
+import type { NullsDropped } from "@/lib/drop-nulls";
 
 /** The org id used to tag newly-created projects so they belong to
  *  the org the user is currently in. Read lazily to avoid an import-time
@@ -68,27 +70,19 @@ const DEFAULT_MAX_MOUNTED = 8;
 /**
  * A single open project = one project + its UI-state identity. `id` is the
  * stable key that replaces the per-window `webview.label()` everywhere Rust
- * keyed state (file index, git watcher, mention cache, recent files). Mirrors
- * `src-tauri/src/state/app_state.rs:Project`.
+ * keyed state (file index, git watcher, mention cache, recent files).
+ *
+ * The fields are `src-tauri/src/state/app_state.rs:Project`'s, generated into
+ * `@/bindings/app-state/Project`, with one difference: the stores hold an
+ * empty value as an absent key, not `null` (`dropNulls`, where the boot
+ * payload enters).
+ *
+ * `orgId`: every render surface filters STRICTLY by
+ * `orgId === activeOrganisationId`, so an untagged row is invisible. Creation
+ * always tags (see `requireActiveOrgId`), Rust `migrate()` backfills legacy
+ * null rows at boot, and the add actions adopt an in-memory null row in place.
  */
-export interface Project {
-  id: string;
-  name: string;
-  path: string;
-  /** Owning Organisation (mirrors `app_state.rs:Project::org_id`). Every
-   *  render surface filters STRICTLY by `orgId === activeOrganisationId` —
-   *  an untagged row is invisible. Creation always tags (see
-   *  `requireActiveOrgId`), Rust `migrate()` backfills legacy null rows at
-   *  boot, and the add actions adopt an in-memory null row in place. The
-   *  field stays optional only because rows can transit through JSON where
-   *  `undefined` is dropped. */
-  orgId?: string;
-  /** Optional git remote — the only field besides id/name that syncs to the
-   *  server (`project_refs.git_url`) for one-click clone. */
-  gitUrl?: string;
-  /** ISO-8601 of the last time this was the active project. */
-  lastActiveAt?: string;
-}
+export type Project = NullsDropped<ProjectWire>;
 
 interface ProjectState {
   /** The full project REGISTRY — every known project (opened, recent, or
