@@ -1,6 +1,5 @@
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
-import { createSelectors } from "@/lib/create-selectors";
 
 export type SplitDirection = "horizontal" | "vertical";
 
@@ -237,150 +236,108 @@ export function findTerminal(
   return null;
 }
 
-export const useTerminalStore = createSelectors(
-  create<TerminalState & TerminalActions>()(
-    immer((set, get) => ({
-      tabs: {},
-      busy: {},
-      pendingFocus: null,
-      pendingCommands: {},
-      pendingTyped: {},
-      owners: {},
-      cwds: {},
-      actions: {
-        initTab: (tabId, projectId, cwd) => {
-          if (get().tabs[tabId]) {
-            // Already seeded (e.g. by addTerminalForCommand); still record the
-            // owner if we learn it now.
-            if (projectId && get().owners[tabId] !== projectId) {
-              set((s) => {
-                s.owners[tabId] = projectId;
-              });
-            }
-            if (cwd && get().cwds[tabId] !== cwd) {
-              set((s) => {
-                s.cwds[tabId] = cwd;
-              });
-            }
-            return;
+export const useTerminalStore = create<TerminalState & TerminalActions>()(
+  immer((set, get) => ({
+    tabs: {},
+    busy: {},
+    pendingFocus: null,
+    pendingCommands: {},
+    pendingTyped: {},
+    owners: {},
+    cwds: {},
+    actions: {
+      initTab: (tabId, projectId, cwd) => {
+        if (get().tabs[tabId]) {
+          // Already seeded (e.g. by addTerminalForCommand); still record the
+          // owner if we learn it now.
+          if (projectId && get().owners[tabId] !== projectId) {
+            set((s) => {
+              s.owners[tabId] = projectId;
+            });
           }
+          if (cwd && get().cwds[tabId] !== cwd) {
+            set((s) => {
+              s.cwds[tabId] = cwd;
+            });
+          }
+          return;
+        }
+        const ptyId = genId("pty");
+        const paneId = genId("pane");
+        set((s) => {
+          s.tabs[tabId] = {
+            root: { type: "pane", id: paneId, terminals: [ptyId], activeTerminalId: ptyId },
+            activePaneId: paneId,
+          };
+          if (projectId) s.owners[tabId] = projectId;
+          if (cwd) s.cwds[tabId] = cwd;
+        });
+      },
+
+      renameTab: (from, to) =>
+        set((s) => {
+          if (from === to || !s.tabs[from] || s.tabs[to]) return;
+          s.tabs[to] = s.tabs[from];
+          delete s.tabs[from];
+          if (s.owners[from] !== undefined) s.owners[to] = s.owners[from];
+          delete s.owners[from];
+          if (s.cwds[from] !== undefined) s.cwds[to] = s.cwds[from];
+          delete s.cwds[from];
+          if (s.pendingFocus?.tabId === from) s.pendingFocus.tabId = to;
+        }),
+
+      addTerminalToPane: (tabId, paneId) => {
+        set((s) => {
+          const t = s.tabs[tabId];
+          if (!t) return;
+          const pane = findPane(t.root, paneId);
+          if (!pane) return;
           const ptyId = genId("pty");
-          const paneId = genId("pane");
-          set((s) => {
-            s.tabs[tabId] = {
-              root: { type: "pane", id: paneId, terminals: [ptyId], activeTerminalId: ptyId },
-              activePaneId: paneId,
+          pane.terminals.push(ptyId);
+          pane.activeTerminalId = ptyId;
+        });
+      },
+
+      splitPane: (tabId, paneId, direction) => {
+        set((s) => {
+          const t = s.tabs[tabId];
+          if (!t) return;
+          const newPtyId = genId("pty");
+          const newPaneId = genId("pane");
+          const newPane: PaneNode = {
+            type: "pane",
+            id: newPaneId,
+            terminals: [newPtyId],
+            activeTerminalId: newPtyId,
+          };
+          if (t.root.type === "pane" && t.root.id === paneId) {
+            t.root = {
+              type: "split",
+              id: genId("split"),
+              direction,
+              children: [t.root, newPane],
             };
-            if (projectId) s.owners[tabId] = projectId;
-            if (cwd) s.cwds[tabId] = cwd;
-          });
-        },
-
-        renameTab: (from, to) =>
-          set((s) => {
-            if (from === to || !s.tabs[from] || s.tabs[to]) return;
-            s.tabs[to] = s.tabs[from];
-            delete s.tabs[from];
-            if (s.owners[from] !== undefined) s.owners[to] = s.owners[from];
-            delete s.owners[from];
-            if (s.cwds[from] !== undefined) s.cwds[to] = s.cwds[from];
-            delete s.cwds[from];
-            if (s.pendingFocus?.tabId === from) s.pendingFocus.tabId = to;
-          }),
-
-        addTerminalToPane: (tabId, paneId) => {
-          set((s) => {
-            const t = s.tabs[tabId];
-            if (!t) return;
-            const pane = findPane(t.root, paneId);
-            if (!pane) return;
-            const ptyId = genId("pty");
-            pane.terminals.push(ptyId);
-            pane.activeTerminalId = ptyId;
-          });
-        },
-
-        splitPane: (tabId, paneId, direction) => {
-          set((s) => {
-            const t = s.tabs[tabId];
-            if (!t) return;
-            const newPtyId = genId("pty");
-            const newPaneId = genId("pane");
-            const newPane: PaneNode = {
-              type: "pane",
-              id: newPaneId,
-              terminals: [newPtyId],
-              activeTerminalId: newPtyId,
-            };
-            if (t.root.type === "pane" && t.root.id === paneId) {
-              t.root = {
-                type: "split",
-                id: genId("split"),
-                direction,
-                children: [t.root, newPane],
-              };
-            } else {
-              splitPaneInTree(t.root, paneId, direction, newPane);
-            }
-            t.activePaneId = newPaneId;
-            t.zoomedPaneId = null;
-          });
-        },
-
-        closeTerminalInPane: (tabId, paneId, ptyId) => {
-          set((s) => {
-            // A queued command outlives nothing: its terminal is gone, and the
-            // line can hold an agent's login.
-            delete s.pendingCommands[ptyId];
-            delete s.pendingTyped[ptyId];
-            const t = s.tabs[tabId];
-            if (!t) return;
-            const pane = findPane(t.root, paneId);
-            if (!pane) return;
-            const closedIdx = pane.terminals.indexOf(ptyId);
-            pane.terminals = pane.terminals.filter((id) => id !== ptyId);
-            if (pane.terminals.length === 0) {
-              const result = removePaneFromTree(t.root, paneId);
-              if (!result) {
-                delete s.tabs[tabId];
-                delete s.owners[tabId];
-                delete s.cwds[tabId];
-                return;
-              }
-              t.root = result;
-              t.zoomedPaneId = null;
-              if (t.activePaneId === paneId) {
-                t.activePaneId = collectPanes(t.root)[0]?.id ?? null;
-              }
-            } else if (pane.activeTerminalId === ptyId) {
-              // Activate the LEFT neighbour (the tab that was at closedIdx-1);
-              // items before the closed one keep their indices after filtering.
-              const nextIdx = Math.min(Math.max(0, closedIdx - 1), pane.terminals.length - 1);
-              pane.activeTerminalId = pane.terminals[nextIdx];
-            }
-          });
-        },
-
-        closeTerminalById: (ptyId) => {
-          for (const [tabId, t] of Object.entries(get().tabs)) {
-            const pane = collectPanes(t.root).find((p) => p.terminals.includes(ptyId));
-            if (pane) {
-              get().actions.closeTerminalInPane(tabId, pane.id, ptyId);
-              return;
-            }
+          } else {
+            splitPaneInTree(t.root, paneId, direction, newPane);
           }
-          // Never mounted, or already closed — the queued command must still go
-          // (it can hold an agent's login).
-          set((s) => {
-            delete s.pendingCommands[ptyId];
-            delete s.pendingTyped[ptyId];
-          });
-        },
+          t.activePaneId = newPaneId;
+          t.zoomedPaneId = null;
+        });
+      },
 
-        closePane: (tabId, paneId) => {
-          set((s) => {
-            const t = s.tabs[tabId];
-            if (!t) return;
+      closeTerminalInPane: (tabId, paneId, ptyId) => {
+        set((s) => {
+          // A queued command outlives nothing: its terminal is gone, and the
+          // line can hold an agent's login.
+          delete s.pendingCommands[ptyId];
+          delete s.pendingTyped[ptyId];
+          const t = s.tabs[tabId];
+          if (!t) return;
+          const pane = findPane(t.root, paneId);
+          if (!pane) return;
+          const closedIdx = pane.terminals.indexOf(ptyId);
+          pane.terminals = pane.terminals.filter((id) => id !== ptyId);
+          if (pane.terminals.length === 0) {
             const result = removePaneFromTree(t.root, paneId);
             if (!result) {
               delete s.tabs[tabId];
@@ -393,147 +350,187 @@ export const useTerminalStore = createSelectors(
             if (t.activePaneId === paneId) {
               t.activePaneId = collectPanes(t.root)[0]?.id ?? null;
             }
-          });
-        },
-
-        setActiveTerminalInPane: (tabId, paneId, ptyId) => {
-          set((s) => {
-            const t = s.tabs[tabId];
-            if (!t) return;
-            const pane = findPane(t.root, paneId);
-            if (pane) pane.activeTerminalId = ptyId;
-          });
-        },
-        reorderTerminalsInPane: (tabId, paneId, order) => {
-          set((s) => {
-            const t = s.tabs[tabId];
-            if (!t) return;
-            const pane = findPane(t.root, paneId);
-            if (!pane || pane.terminals.length !== order.length) return;
-            const have = new Set(pane.terminals);
-            if (new Set(order).size !== order.length || !order.every((id) => have.has(id))) return;
-            pane.terminals = [...order];
-          });
-        },
-
-        setActivePane: (tabId, paneId) => {
-          set((s) => {
-            const t = s.tabs[tabId];
-            if (t) t.activePaneId = paneId;
-          });
-        },
-
-        setTerminalBusy: (ptyId, busy) => {
-          set((s) => {
-            if (busy) s.busy[ptyId] = true;
-            else delete s.busy[ptyId];
-          });
-        },
-
-        setSplitSizes: (tabId, splitId, sizes) =>
-          set((s) => {
-            const t = s.tabs[tabId];
-            if (!t) return;
-            const split = findSplit(t.root, splitId);
-            if (split) split.sizes = { ...sizes };
-          }),
-
-        toggleZoom: (tabId, paneId) =>
-          set((s) => {
-            const t = s.tabs[tabId];
-            if (!t) return;
-            t.zoomedPaneId = t.zoomedPaneId === paneId ? null : paneId;
-          }),
-
-        exportTrees: (tabIds) => {
-          const out: Record<string, TerminalTabState> = {};
-          const tabs = get().tabs;
-          for (const id of tabIds) if (tabs[id]) out[id] = tabs[id];
-          return out;
-        },
-
-        importTrees: (trees) =>
-          set((s) => {
-            for (const [tabId, t] of Object.entries(trees)) {
-              if (s.tabs[tabId]) continue;
-              const root = remintTree(t.root);
-              const panes = collectPanes(root);
-              s.tabs[tabId] = {
-                root,
-                activePaneId: panes[0]?.id ?? null,
-                zoomedPaneId: null,
-              };
-            }
-          }),
-
-        addTerminalForCommand: (tabId, projectId) => {
-          const ptyId = genId("pty");
-          set((s) => {
-            const paneId = genId("pane");
-            if (projectId) s.owners[tabId] = projectId;
-            const t = s.tabs[tabId];
-            if (!t) {
-              // The tab has no terminal state yet — it was just created, and
-              // the panel has not mounted to `initTab` it. Seed it, so the
-              // terminal we hand back is the one that mounts.
-              s.tabs[tabId] = {
-                root: { type: "pane", id: paneId, terminals: [ptyId], activeTerminalId: ptyId },
-                activePaneId: paneId,
-              };
-              return;
-            }
-            const pane =
-              (t.activePaneId && findPane(t.root, t.activePaneId)) ?? collectPanes(t.root)[0];
-            if (!pane) return;
-            pane.terminals.push(ptyId);
-            pane.activeTerminalId = ptyId;
-            t.activePaneId = pane.id;
-          });
-          return ptyId;
-        },
-
-        setPendingCommand: (terminalId, command, opts) =>
-          set((s) => {
-            s.pendingCommands[terminalId] = command;
-            if (opts?.execute === false) s.pendingTyped[terminalId] = true;
-            else delete s.pendingTyped[terminalId];
-          }),
-
-        takePendingCommand: (terminalId) => {
-          const command = get().pendingCommands[terminalId];
-          if (command === undefined) return undefined;
-          set((s) => {
-            delete s.pendingCommands[terminalId];
-            delete s.pendingTyped[terminalId];
-          });
-          return command;
-        },
-
-        requestTerminalFocus: (tabId) => {
-          set((s) => {
-            s.pendingFocus = { tabId, requestId: (s.pendingFocus?.requestId ?? 0) + 1 };
-          });
-        },
-
-        clearPendingTerminalFocus: () => {
-          set((s) => {
-            s.pendingFocus = null;
-          });
-        },
-        removeTabs: (tabIds) =>
-          set((s) => {
-            for (const id of tabIds) {
-              // Any command still queued for a terminal in this tab will never
-              // run — and the line can hold an agent's login.
-              for (const pane of s.tabs[id] ? collectPanes(s.tabs[id].root) : []) {
-                for (const terminalId of pane.terminals) delete s.pendingCommands[terminalId];
-              }
-              delete s.tabs[id];
-              delete s.owners[id];
-              delete s.cwds[id];
-            }
-          }),
+          } else if (pane.activeTerminalId === ptyId) {
+            // Activate the LEFT neighbour (the tab that was at closedIdx-1);
+            // items before the closed one keep their indices after filtering.
+            const nextIdx = Math.min(Math.max(0, closedIdx - 1), pane.terminals.length - 1);
+            pane.activeTerminalId = pane.terminals[nextIdx];
+          }
+        });
       },
-    })),
-  ),
+
+      closeTerminalById: (ptyId) => {
+        for (const [tabId, t] of Object.entries(get().tabs)) {
+          const pane = collectPanes(t.root).find((p) => p.terminals.includes(ptyId));
+          if (pane) {
+            get().actions.closeTerminalInPane(tabId, pane.id, ptyId);
+            return;
+          }
+        }
+        // Never mounted, or already closed — the queued command must still go
+        // (it can hold an agent's login).
+        set((s) => {
+          delete s.pendingCommands[ptyId];
+          delete s.pendingTyped[ptyId];
+        });
+      },
+
+      closePane: (tabId, paneId) => {
+        set((s) => {
+          const t = s.tabs[tabId];
+          if (!t) return;
+          const result = removePaneFromTree(t.root, paneId);
+          if (!result) {
+            delete s.tabs[tabId];
+            delete s.owners[tabId];
+            delete s.cwds[tabId];
+            return;
+          }
+          t.root = result;
+          t.zoomedPaneId = null;
+          if (t.activePaneId === paneId) {
+            t.activePaneId = collectPanes(t.root)[0]?.id ?? null;
+          }
+        });
+      },
+
+      setActiveTerminalInPane: (tabId, paneId, ptyId) => {
+        set((s) => {
+          const t = s.tabs[tabId];
+          if (!t) return;
+          const pane = findPane(t.root, paneId);
+          if (pane) pane.activeTerminalId = ptyId;
+        });
+      },
+      reorderTerminalsInPane: (tabId, paneId, order) => {
+        set((s) => {
+          const t = s.tabs[tabId];
+          if (!t) return;
+          const pane = findPane(t.root, paneId);
+          if (!pane || pane.terminals.length !== order.length) return;
+          const have = new Set(pane.terminals);
+          if (new Set(order).size !== order.length || !order.every((id) => have.has(id))) return;
+          pane.terminals = [...order];
+        });
+      },
+
+      setActivePane: (tabId, paneId) => {
+        set((s) => {
+          const t = s.tabs[tabId];
+          if (t) t.activePaneId = paneId;
+        });
+      },
+
+      setTerminalBusy: (ptyId, busy) => {
+        set((s) => {
+          if (busy) s.busy[ptyId] = true;
+          else delete s.busy[ptyId];
+        });
+      },
+
+      setSplitSizes: (tabId, splitId, sizes) =>
+        set((s) => {
+          const t = s.tabs[tabId];
+          if (!t) return;
+          const split = findSplit(t.root, splitId);
+          if (split) split.sizes = { ...sizes };
+        }),
+
+      toggleZoom: (tabId, paneId) =>
+        set((s) => {
+          const t = s.tabs[tabId];
+          if (!t) return;
+          t.zoomedPaneId = t.zoomedPaneId === paneId ? null : paneId;
+        }),
+
+      exportTrees: (tabIds) => {
+        const out: Record<string, TerminalTabState> = {};
+        const tabs = get().tabs;
+        for (const id of tabIds) if (tabs[id]) out[id] = tabs[id];
+        return out;
+      },
+
+      importTrees: (trees) =>
+        set((s) => {
+          for (const [tabId, t] of Object.entries(trees)) {
+            if (s.tabs[tabId]) continue;
+            const root = remintTree(t.root);
+            const panes = collectPanes(root);
+            s.tabs[tabId] = {
+              root,
+              activePaneId: panes[0]?.id ?? null,
+              zoomedPaneId: null,
+            };
+          }
+        }),
+
+      addTerminalForCommand: (tabId, projectId) => {
+        const ptyId = genId("pty");
+        set((s) => {
+          const paneId = genId("pane");
+          if (projectId) s.owners[tabId] = projectId;
+          const t = s.tabs[tabId];
+          if (!t) {
+            // The tab has no terminal state yet — it was just created, and
+            // the panel has not mounted to `initTab` it. Seed it, so the
+            // terminal we hand back is the one that mounts.
+            s.tabs[tabId] = {
+              root: { type: "pane", id: paneId, terminals: [ptyId], activeTerminalId: ptyId },
+              activePaneId: paneId,
+            };
+            return;
+          }
+          const pane =
+            (t.activePaneId && findPane(t.root, t.activePaneId)) ?? collectPanes(t.root)[0];
+          if (!pane) return;
+          pane.terminals.push(ptyId);
+          pane.activeTerminalId = ptyId;
+          t.activePaneId = pane.id;
+        });
+        return ptyId;
+      },
+
+      setPendingCommand: (terminalId, command, opts) =>
+        set((s) => {
+          s.pendingCommands[terminalId] = command;
+          if (opts?.execute === false) s.pendingTyped[terminalId] = true;
+          else delete s.pendingTyped[terminalId];
+        }),
+
+      takePendingCommand: (terminalId) => {
+        const command = get().pendingCommands[terminalId];
+        if (command === undefined) return undefined;
+        set((s) => {
+          delete s.pendingCommands[terminalId];
+          delete s.pendingTyped[terminalId];
+        });
+        return command;
+      },
+
+      requestTerminalFocus: (tabId) => {
+        set((s) => {
+          s.pendingFocus = { tabId, requestId: (s.pendingFocus?.requestId ?? 0) + 1 };
+        });
+      },
+
+      clearPendingTerminalFocus: () => {
+        set((s) => {
+          s.pendingFocus = null;
+        });
+      },
+      removeTabs: (tabIds) =>
+        set((s) => {
+          for (const id of tabIds) {
+            // Any command still queued for a terminal in this tab will never
+            // run — and the line can hold an agent's login.
+            for (const pane of s.tabs[id] ? collectPanes(s.tabs[id].root) : []) {
+              for (const terminalId of pane.terminals) delete s.pendingCommands[terminalId];
+            }
+            delete s.tabs[id];
+            delete s.owners[id];
+            delete s.cwds[id];
+          }
+        }),
+    },
+  })),
 );

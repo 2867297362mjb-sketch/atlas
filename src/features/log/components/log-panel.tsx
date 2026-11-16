@@ -15,14 +15,15 @@ import { LogPanelView, type LogCopyFormat } from "./views/log-panel-view";
 
 /** The Log tab: the activity buffer and the pins, filtered. */
 export function LogPanel() {
-  const buffer = useLogStore.use.buffer();
-  const pinned = useLogStore.use.pinned();
-  const ready = useLogStore.use.ready();
-  const { loadPinned, loadProject, pin, unpin, clearBuffer, clearPinned } =
-    useLogStore.use.actions();
+  const buffer = useLogStore((s) => s.buffer);
+  const pinned = useLogStore((s) => s.pinned);
+  const ready = useLogStore((s) => s.ready);
+  const { loadPinned, loadProject, pin, unpin, clearBuffer, clearPinned } = useLogStore(
+    (s) => s.actions,
+  );
 
-  const currentProject = useAppStore.use.currentProject();
-  const activeOrganisationId = useOrgStore.use.activeOrganisationId();
+  const currentProject = useAppStore((s) => s.currentProject);
+  const activeOrganisationId = useOrgStore((s) => s.activeOrganisationId);
 
   const [filters, setFilters] = useState<LogFilters>(defaultLogFilters);
 

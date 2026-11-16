@@ -11,7 +11,7 @@ const EFFORT_CYCLE = ["", "low", "medium", "high", "max"] as const;
 export function EffortPill({ tabId }: { tabId: string }) {
   const provider = useChatStore((s) => s.sessions[tabId]?.nativeProvider ?? "");
   const effort = useChatStore((s) => s.sessions[tabId]?.nativeEffort ?? "");
-  const { setNativeEffort } = useChatStore.use.actions();
+  const { setNativeEffort } = useChatStore((s) => s.actions);
   if (provider !== "anthropic") return null;
   const cycle = () => {
     const i = EFFORT_CYCLE.indexOf(effort as (typeof EFFORT_CYCLE)[number]);

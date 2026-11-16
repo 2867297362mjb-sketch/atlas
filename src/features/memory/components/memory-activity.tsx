@@ -45,13 +45,13 @@ export function MemoryActivity({
   /** The search field's ⌘↵: the typed words, as a memory instruction. */
   onAsk: (text: string, anchor: HTMLElement) => void;
 }) {
-  const events = useSharedMemoryStore.use.events();
-  const entries = useSharedMemoryStore.use.entries();
-  const loaded = useSharedMemoryStore.use.loaded();
-  const error = useSharedMemoryStore.use.error();
-  const projectPath = useSharedMemoryStore.use.projectPath();
-  const { load } = useSharedMemoryStore.use.actions();
-  const { focusEntry } = useMemoryStore.use.actions();
+  const events = useSharedMemoryStore((s) => s.events);
+  const entries = useSharedMemoryStore((s) => s.entries);
+  const loaded = useSharedMemoryStore((s) => s.loaded);
+  const error = useSharedMemoryStore((s) => s.error);
+  const projectPath = useSharedMemoryStore((s) => s.projectPath);
+  const { load } = useSharedMemoryStore((s) => s.actions);
+  const { focusEntry } = useMemoryStore((s) => s.actions);
   const [query, setQuery] = useState("");
   const [agentFilter, setAgentFilter] = useState("");
 

@@ -20,10 +20,10 @@ export function CommsHome({
    *  page: no fade-in, since it is there from the first frame. */
   sidebar?: boolean;
 } = {}) {
-  const conversations = useCommsStore.use.conversations();
-  const discoverable = useCommsStore.use.discoverable();
-  const reads = useCommsStore.use.reads();
-  const memberList = useCommsStore.use.members();
+  const conversations = useCommsStore((s) => s.conversations);
+  const discoverable = useCommsStore((s) => s.discoverable);
+  const reads = useCommsStore((s) => s.reads);
+  const memberList = useCommsStore((s) => s.members);
   // The DM/contact sections are unreadable without the roster (titles resolve
   // to "Unknown", contacts are simply absent), so while it is still on its
   // way the sections show placeholder rows rather than degraded ones.
@@ -32,9 +32,9 @@ export function CommsHome({
     rosterOrgId ? (s.byOrg[rosterOrgId]?.loading ?? false) : false,
   );
   const rosterPending = memberList.length === 0 && rosterLoading;
-  const online = useCommsStore.use.online();
-  const me = useCommsStore.use.me();
-  const actions = useCommsStore.use.actions();
+  const online = useCommsStore((s) => s.online);
+  const me = useCommsStore((s) => s.me);
+  const actions = useCommsStore((s) => s.actions);
 
   /** The member whose DM is being created, for the row's spinner. */
   const [startingDm, setStartingDm] = useState<string | null>(null);

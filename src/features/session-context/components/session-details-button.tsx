@@ -99,7 +99,7 @@ function useDetailsShortcuts(tabId: string, scope: string, docked: boolean) {
 /** Docked: the button shows or hides the card drawn into the panel's room. */
 function DockToggle({ scope }: { scope: string }) {
   const open = useSessionDetailsStore((s) => selectDockedOpen(s, scope));
-  const { toggle } = useSessionDetailsStore.use.actions();
+  const { toggle } = useSessionDetailsStore((s) => s.actions);
   return (
     <HintItem label={DETAILS_LABEL}>
       <IconButton
@@ -128,7 +128,7 @@ function DetailsPopover({
 }) {
   const open = useSessionDetailsStore((s) => s.popoverFor === scope);
   const instant = useSessionDetailsStore((s) => s.instant);
-  const { setPopover } = useSessionDetailsStore.use.actions();
+  const { setPopover } = useSessionDetailsStore((s) => s.actions);
   // Measured only while open: the room under the title bar, down to the
   // composer, less the gap the card keeps from it.
   const stage = useElementHeight(stageRef, open);

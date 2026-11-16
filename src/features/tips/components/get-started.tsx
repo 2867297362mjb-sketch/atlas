@@ -32,9 +32,9 @@ type Item = (typeof ITEMS)[number];
 const PICKER_DELAY_MS = 300;
 
 export function GetStarted() {
-  const done = useTipsStore.use.checklist();
-  const dismissed = useTipsStore.use.checklistDismissed();
-  const skipped = useTipsStore.use.getStartedSkipped();
+  const done = useTipsStore((s) => s.checklist);
+  const dismissed = useTipsStore((s) => s.checklistDismissed);
+  const skipped = useTipsStore((s) => s.getStartedSkipped);
   const hasProject = useProjectStore((s) => s.projects.length > 0);
   const projectPath = useAppStore((s) => s.currentProject?.path ?? null);
   const capturing = useProjectFacts(projectPath)?.binding?.enabled ?? false;

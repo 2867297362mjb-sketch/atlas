@@ -273,8 +273,8 @@ function StorybookNote() {
 const MODES: ThemeMode[] = ["system", "dark", "light"];
 
 function Header() {
-  const themes = useThemeStore.use.themes();
-  const actions = useThemeStore.use.actions();
+  const themes = useThemeStore((s) => s.themes);
+  const actions = useThemeStore((s) => s.actions);
   const [themeId, setThemeId] = useState("atlas");
   const [mode, setMode] = useState<ThemeMode>("dark");
 

@@ -37,8 +37,8 @@ const SWITCH_OPTIONS = [
 ] as const;
 
 export function ChatPage() {
-  const settings = useSettingsStore.use.settings();
-  const { updateSettings } = useSettingsStore.use.actions();
+  const settings = useSettingsStore((s) => s.settings);
+  const { updateSettings } = useSettingsStore((s) => s.actions);
 
   return (
     <SettingsPage

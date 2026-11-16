@@ -53,7 +53,7 @@ export function usePreferredEditor(): {
   editors: ExternalEditor[] | null;
   preferred: ExternalEditor | null;
 } {
-  const editors = useExternalEditorStore.use.editors();
+  const editors = useExternalEditorStore((s) => s.editors);
   const setting = useSettingsStore((s) => s.settings.preferredEditor);
   useEffect(() => {
     if (!editors) void useExternalEditorStore.getState().actions.load();

@@ -52,7 +52,7 @@ export default function SessionTerminalDrawerBody({ tabId, scope }: SessionTermi
   // terminals stop rendering, exactly as a hidden terminal tab's do.
   const tabVisible = useIsTabVisible(tabId);
   const preferred = useSessionDrawerStore((s) => drawerHeightFor(s, scope));
-  const { setHeight, setOpen, setFocusedTab } = useSessionDrawerStore.use.actions();
+  const { setHeight, setOpen, setFocusedTab } = useSessionDrawerStore((s) => s.actions);
 
   const rootRef = useRef<HTMLElement>(null);
   const [maxHeight, setMaxHeight] = useState(() =>

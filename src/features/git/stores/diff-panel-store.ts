@@ -15,7 +15,6 @@
 
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { createSelectors } from "@/lib/create-selectors";
 
 /** What a diff panel reviews: the working tree against the branch's base
  *  ("Changes"), the uncommitted changes, or one turn's own edits (offered only
@@ -129,58 +128,56 @@ function toggled(state: FoldState, id: string): FoldState {
   return { override: state.override, toggled: next };
 }
 
-export const useDiffPanelStore = createSelectors(
-  create<DiffPanelState>()(
-    persist(
-      (set) => ({
-        scope: {},
-        turn: {},
-        baseRef: {},
-        layout: "unified",
-        ignoreWhitespace: null,
-        fileTreeOpen: false,
-        folds: {},
-        actions: {
-          setScope: (panel, scope) => set((s) => ({ scope: withRecent(s.scope, panel, scope) })),
-          setTurn: (panel, turn) =>
-            set((s) => ({
-              scope: withRecent(s.scope, panel, "turn"),
-              turn: withRecent(s.turn, panel, turn),
-            })),
-          setBaseRef: (repo, baseRef) =>
-            set((s) => ({ baseRef: { ...s.baseRef, [repo]: baseRef?.trim() || null } })),
-          setLayout: (layout) => set({ layout }),
-          setIgnoreWhitespace: (ignoreWhitespace) => set({ ignoreWhitespace }),
-          setFileTreeOpen: (fileTreeOpen) => set({ fileTreeOpen }),
-          toggleFold: (scopeKey, id) =>
-            set((s) => ({
-              folds: { ...s.folds, [scopeKey]: toggled(s.folds[scopeKey] ?? NO_FOLDS, id) },
-            })),
-          setFolded: (scopeKey, id, folded, foldedByDefault) =>
-            set((s) => {
-              const current = s.folds[scopeKey] ?? NO_FOLDS;
-              if (isFolded(current, id, foldedByDefault) === folded) return s;
-              return { folds: { ...s.folds, [scopeKey]: toggled(current, id) } };
-            }),
-          foldAll: (scopeKey, override) =>
-            set((s) => ({ folds: { ...s.folds, [scopeKey]: { override, toggled: {} } } })),
-        },
-      }),
-      {
-        name: "atlas.git.diff-panel",
-        // 1: the `session` scope folded into `branch-range` (Changes).
-        version: 1,
-        migrate: (persisted) => migrateDiffPanelState(persisted) as DiffPanelState,
-        partialize: (s) => ({
-          scope: s.scope,
-          turn: s.turn,
-          baseRef: s.baseRef,
-          layout: s.layout,
-          ignoreWhitespace: s.ignoreWhitespace,
-          fileTreeOpen: s.fileTreeOpen,
-        }),
+export const useDiffPanelStore = create<DiffPanelState>()(
+  persist(
+    (set) => ({
+      scope: {},
+      turn: {},
+      baseRef: {},
+      layout: "unified",
+      ignoreWhitespace: null,
+      fileTreeOpen: false,
+      folds: {},
+      actions: {
+        setScope: (panel, scope) => set((s) => ({ scope: withRecent(s.scope, panel, scope) })),
+        setTurn: (panel, turn) =>
+          set((s) => ({
+            scope: withRecent(s.scope, panel, "turn"),
+            turn: withRecent(s.turn, panel, turn),
+          })),
+        setBaseRef: (repo, baseRef) =>
+          set((s) => ({ baseRef: { ...s.baseRef, [repo]: baseRef?.trim() || null } })),
+        setLayout: (layout) => set({ layout }),
+        setIgnoreWhitespace: (ignoreWhitespace) => set({ ignoreWhitespace }),
+        setFileTreeOpen: (fileTreeOpen) => set({ fileTreeOpen }),
+        toggleFold: (scopeKey, id) =>
+          set((s) => ({
+            folds: { ...s.folds, [scopeKey]: toggled(s.folds[scopeKey] ?? NO_FOLDS, id) },
+          })),
+        setFolded: (scopeKey, id, folded, foldedByDefault) =>
+          set((s) => {
+            const current = s.folds[scopeKey] ?? NO_FOLDS;
+            if (isFolded(current, id, foldedByDefault) === folded) return s;
+            return { folds: { ...s.folds, [scopeKey]: toggled(current, id) } };
+          }),
+        foldAll: (scopeKey, override) =>
+          set((s) => ({ folds: { ...s.folds, [scopeKey]: { override, toggled: {} } } })),
       },
-    ),
+    }),
+    {
+      name: "atlas.git.diff-panel",
+      // 1: the `session` scope folded into `branch-range` (Changes).
+      version: 1,
+      migrate: (persisted) => migrateDiffPanelState(persisted) as DiffPanelState,
+      partialize: (s) => ({
+        scope: s.scope,
+        turn: s.turn,
+        baseRef: s.baseRef,
+        layout: s.layout,
+        ignoreWhitespace: s.ignoreWhitespace,
+        fileTreeOpen: s.fileTreeOpen,
+      }),
+    },
   ),
 );
 

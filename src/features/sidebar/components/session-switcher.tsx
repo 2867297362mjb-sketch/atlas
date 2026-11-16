@@ -98,7 +98,7 @@ function SessionList({
   newSessionShortcut: string | undefined;
   onClose: () => void;
 }) {
-  const projectId = useProjectStore.use.activeProjectId();
+  const projectId = useProjectStore((s) => s.activeProjectId);
   const { partition, isLoading } = useProjectSessions(projectId);
   const activeSessionId = useActiveSessionId();
   const live = useLiveSessions();

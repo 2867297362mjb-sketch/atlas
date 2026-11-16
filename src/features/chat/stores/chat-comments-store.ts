@@ -21,7 +21,6 @@ import { visibleCount, type Comment } from "@/features/artifacts/lib/comments-ap
 import type { CommentActions } from "@/features/artifacts/components/comment-thread";
 import type { RowComments } from "@/features/artifacts/components/session-detail";
 import type { OrgDirectory } from "@/features/organisations/lib/use-org-directory";
-import { createSelectors } from "@/lib/create-selectors";
 
 import {
   EMPTY_ANCHOR_MAP,
@@ -107,81 +106,79 @@ function commentCountOf(byAnchor: Record<string, Comment[]>, session: Comment[])
   return n;
 }
 
-export const useChatCommentsStore = createSelectors(
-  create<ChatCommentsState>()((set) => ({
-    byTab: {},
-    focus: {},
-    actions: {
-      focusThread: (tabId, rowId) =>
-        set((s) => ({
-          focus: { ...s.focus, [tabId]: { rowId, n: (s.focus[tabId]?.n ?? 0) + 1 } },
-        })),
-      clearFocus: (tabId) =>
-        set((s) => {
-          if (!s.focus[tabId]) return s;
-          const focus = { ...s.focus };
-          delete focus[tabId];
-          return { focus };
-        }),
-      setTarget: (tabId, target, entries) =>
-        set((s) => {
-          const tab = s.byTab[tabId] ?? EMPTY_TAB;
-          return { byTab: { ...s.byTab, [tabId]: { ...tab, target, entries } } };
-        }),
-      setAnchors: (tabId, anchors) =>
-        set((s) => {
-          const tab = s.byTab[tabId] ?? EMPTY_TAB;
-          return {
-            byTab: {
-              ...s.byTab,
-              [tabId]: { ...tab, anchors, byChatKey: translate(tab.byAnchor, anchors) },
-            },
-          };
-        }),
-      setComments: (tabId, comments) =>
-        set((s) => {
-          const tab = s.byTab[tabId] ?? EMPTY_TAB;
-          if (!comments) {
-            return {
-              byTab: {
-                ...s.byTab,
-                [tabId]: {
-                  ...tab,
-                  byAnchor: {},
-                  byChatKey: {},
-                  session: [],
-                  commentCount: 0,
-                  actions: null,
-                  directory: null,
-                },
-              },
-            };
-          }
+export const useChatCommentsStore = create<ChatCommentsState>()((set) => ({
+  byTab: {},
+  focus: {},
+  actions: {
+    focusThread: (tabId, rowId) =>
+      set((s) => ({
+        focus: { ...s.focus, [tabId]: { rowId, n: (s.focus[tabId]?.n ?? 0) + 1 } },
+      })),
+    clearFocus: (tabId) =>
+      set((s) => {
+        if (!s.focus[tabId]) return s;
+        const focus = { ...s.focus };
+        delete focus[tabId];
+        return { focus };
+      }),
+    setTarget: (tabId, target, entries) =>
+      set((s) => {
+        const tab = s.byTab[tabId] ?? EMPTY_TAB;
+        return { byTab: { ...s.byTab, [tabId]: { ...tab, target, entries } } };
+      }),
+    setAnchors: (tabId, anchors) =>
+      set((s) => {
+        const tab = s.byTab[tabId] ?? EMPTY_TAB;
+        return {
+          byTab: {
+            ...s.byTab,
+            [tabId]: { ...tab, anchors, byChatKey: translate(tab.byAnchor, anchors) },
+          },
+        };
+      }),
+    setComments: (tabId, comments) =>
+      set((s) => {
+        const tab = s.byTab[tabId] ?? EMPTY_TAB;
+        if (!comments) {
           return {
             byTab: {
               ...s.byTab,
               [tabId]: {
                 ...tab,
-                byAnchor: comments.byAnchor,
-                byChatKey: translate(comments.byAnchor, tab.anchors),
-                session: comments.session,
-                commentCount: commentCountOf(comments.byAnchor, comments.session),
-                actions: comments.actions,
-                directory: comments.directory,
+                byAnchor: {},
+                byChatKey: {},
+                session: [],
+                commentCount: 0,
+                actions: null,
+                directory: null,
               },
             },
           };
-        }),
-      clear: (tabId) =>
-        set((s) => {
-          if (!(tabId in s.byTab)) return s;
-          const byTab = { ...s.byTab };
-          delete byTab[tabId];
-          return { byTab };
-        }),
-    },
-  })),
-);
+        }
+        return {
+          byTab: {
+            ...s.byTab,
+            [tabId]: {
+              ...tab,
+              byAnchor: comments.byAnchor,
+              byChatKey: translate(comments.byAnchor, tab.anchors),
+              session: comments.session,
+              commentCount: commentCountOf(comments.byAnchor, comments.session),
+              actions: comments.actions,
+              directory: comments.directory,
+            },
+          },
+        };
+      }),
+    clear: (tabId) =>
+      set((s) => {
+        if (!(tabId in s.byTab)) return s;
+        const byTab = { ...s.byTab };
+        delete byTab[tabId];
+        return { byTab };
+      }),
+  },
+}));
 
 // ── Row-side selectors ───────────────────────────────────────────────────────
 //

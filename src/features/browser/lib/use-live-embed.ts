@@ -60,8 +60,8 @@ export function useLiveEmbed({
 
   // The native child webview floats above the DOM and can't be occluded, so it
   // must hide while any DOM overlay is open (see BrowserOverlayWatcher).
-  const overlayOpen = useBrowserOverlayStore.use.overlayOpen();
-  const { registerEmbed, unregisterEmbed } = useBrowserOverlayStore.use.actions();
+  const overlayOpen = useBrowserOverlayStore((s) => s.overlayOpen);
+  const { registerEmbed, unregisterEmbed } = useBrowserOverlayStore((s) => s.actions);
   const overlayOpenRef = useRef(overlayOpen);
   overlayOpenRef.current = overlayOpen;
 

@@ -91,7 +91,7 @@ const WELCOME_GLOW_COLORS = [
 export function AppearancePage() {
   const appIcon = useSettingsStore((s) => s.settings.appIcon);
   const welcomeBackground = useSettingsStore((s) => s.settings.welcomeBackground);
-  const { updateSettings } = useSettingsStore.use.actions();
+  const { updateSettings } = useSettingsStore((s) => s.actions);
 
   return (
     <SettingsPage
@@ -174,7 +174,7 @@ export function AppearancePage() {
 /** Interface zoom stepper. Also reachable anywhere via the view.zoom* shortcuts. */
 function ZoomControl() {
   const uiScale = useSettingsStore((s) => s.settings.uiScale);
-  const { updateSettings } = useSettingsStore.use.actions();
+  const { updateSettings } = useSettingsStore((s) => s.actions);
   const setScale = (next: number) => void updateSettings({ uiScale: clampScale(next) });
   const zoomIn = useActionShortcut("view.zoomIn")?.label;
   const zoomOut = useActionShortcut("view.zoomOut")?.label;

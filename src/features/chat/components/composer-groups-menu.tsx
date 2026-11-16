@@ -45,7 +45,7 @@ export function ComposerGroupsMenu({
   const modesPending = useChatStore((s) => s.sessions[tabId]?.acpModesPending ?? false);
   const currentModel = useChatStore((s) => s.sessions[tabId]?.acpCurrentModel);
   const availableModels = useChatStore((s) => s.sessions[tabId]?.acpAvailableModels);
-  const { setAcpMode, setAcpModel, setClaudePermissionMode } = useChatStore.use.actions();
+  const { setAcpMode, setAcpModel, setClaudePermissionMode } = useChatStore((s) => s.actions);
   const switchableAgents = useSwitchableAgents();
 
   const [openGroup, setOpenGroup] = useState<ComposerGroup | null>(null);
@@ -107,8 +107,8 @@ export function ComposerGroupsMenu({
   );
 
   const isNative = agentType === "atlas-agent";
-  const refreshingModels = useNativeModelsStore.use.refreshing();
-  const refreshNativeModels = useNativeModelsStore.use.actions().refresh;
+  const refreshingModels = useNativeModelsStore((s) => s.refreshing);
+  const refreshNativeModels = useNativeModelsStore((s) => s.actions).refresh;
 
   // Self-heal: the store is fed by the bind-time snapshot and the
   // `config_options_updated` delta, and a tab can render before either has

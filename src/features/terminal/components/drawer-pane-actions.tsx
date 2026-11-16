@@ -31,7 +31,7 @@ export function DrawerPaneActions({
     closePane,
     setActivePane,
     toggleZoom,
-  } = useTerminalStore.use.actions();
+  } = useTerminalStore((s) => s.actions);
   const only = pane.activeTerminalId ?? pane.terminals[0];
   return (
     <div

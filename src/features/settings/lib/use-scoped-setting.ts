@@ -68,10 +68,10 @@ export function useLoadProjectSettings(projectPath: string | null | undefined) {
 export function useScopedSetting<K extends SettingKey>(key: K): ScopedSetting<K> {
   const scope = usePageScope();
   const globalValue = useSettingsStore((s) => s.settings[key]);
-  const settings = useSettingsStore.use.settings();
-  const { updateSettings } = useSettingsStore.use.actions();
-  const byPath = useProjectSettingsStore.use.byPath();
-  const { update } = useProjectSettingsStore.use.actions();
+  const settings = useSettingsStore((s) => s.settings);
+  const { updateSettings } = useSettingsStore((s) => s.actions);
+  const byPath = useProjectSettingsStore((s) => s.byPath);
+  const { update } = useProjectSettingsStore((s) => s.actions);
   useLoadProjectSettings(scope);
 
   const scopable = Boolean(settingMeta(key)?.project);
@@ -116,8 +116,8 @@ export function useProjectSetting<K extends SettingKey>(
   key: K,
 ): AppSettings[K] {
   useLoadProjectSettings(projectPath);
-  const settings = useSettingsStore.use.settings();
-  const byPath = useProjectSettingsStore.use.byPath();
+  const settings = useSettingsStore((s) => s.settings);
+  const byPath = useProjectSettingsStore((s) => s.byPath);
   return projectValue(byPath, projectPath, key, settings);
 }
 

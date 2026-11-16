@@ -64,8 +64,8 @@ export function FileTabFrame({
     projectId ? (s.projects.find((p) => p.id === projectId) ?? null) : null,
   );
   const root = project?.path || null;
-  const shown = useFileTabTreeStore.use.shown();
-  const { setShown } = useFileTabTreeStore.use.actions();
+  const shown = useFileTabTreeStore((s) => s.shown);
+  const { setShown } = useFileTabTreeStore((s) => s.actions);
   const dock = useFileDock();
   // The main column draws no tab strip; every other column, and the
   // projectless strip, has a tab naming the file.

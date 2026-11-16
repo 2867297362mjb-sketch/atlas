@@ -29,11 +29,11 @@ const OPTIONS: { strategy: Exclude<PullStrategy, "default">; label: string; deta
  * an explicit flag — the same choice JetBrains' Update Project asks.
  */
 export function PullChoiceDialog({ onChoose }: { onChoose: (strategy: PullStrategy) => void }) {
-  const choice = useGitStore.use.pullChoice();
-  const ahead = useGitStore.use.ahead();
-  const behind = useGitStore.use.behind();
-  const actions = useGitStore.use.actions();
-  const repoPath = useGitStore.use.repoPath();
+  const choice = useGitStore((s) => s.pullChoice);
+  const ahead = useGitStore((s) => s.ahead);
+  const behind = useGitStore((s) => s.behind);
+  const actions = useGitStore((s) => s.actions);
+  const repoPath = useGitStore((s) => s.repoPath);
 
   const choose = (strategy: PullStrategy) => {
     actions.dismissPullChoice();

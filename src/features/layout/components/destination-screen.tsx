@@ -60,9 +60,9 @@ const SpacesTab = lazy(() =>
  * another destination replaces it.
  */
 export function DestinationScreen() {
-  const destination = useLayoutStore.use.destination();
-  const shown = useLayoutStore.use.destinationShown();
-  const { hideDestination } = useLayoutStore.use.actions();
+  const destination = useLayoutStore((s) => s.destination);
+  const shown = useLayoutStore((s) => s.destinationShown);
+  const { hideDestination } = useLayoutStore((s) => s.actions);
   // Where the page's own controls render (`DestinationActions`).
   const [actionsSlot, setActionsSlot] = useState<HTMLElement | null>(null);
 

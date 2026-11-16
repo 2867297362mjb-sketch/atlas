@@ -120,9 +120,9 @@ export function EditorPanel({ tabId, filePath, containerHeight }: EditorPanelPro
     markExternallyChanged,
     consumeReveal,
     requestReveal,
-  } = useEditorStore.use.actions();
-  const projectPath = useAppStore.use.currentProject()?.path ?? "";
-  const layoutActions = useLayoutStore.use.actions();
+  } = useEditorStore((s) => s.actions);
+  const projectPath = useAppStore((s) => s.currentProject)?.path ?? "";
+  const layoutActions = useLayoutStore((s) => s.actions);
   const viewRef = useRef<CodeMirrorFileViewHandle | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   // Set when the file is over `MAX_OPEN_BYTES`: it is never read.
@@ -151,7 +151,7 @@ export function EditorPanel({ tabId, filePath, containerHeight }: EditorPanelPro
   // Rooted at the tab's own project (the frame's), then the active one; a
   // file outside both is crumbed from the filesystem root.
   const frame = useFileTabFrame();
-  const projectName = useAppStore.use.currentProject()?.name ?? "";
+  const projectName = useAppStore((s) => s.currentProject)?.name ?? "";
   const crumbTarget = (() => {
     if (!path || isUntitled) return null;
     const root = frame?.root ?? (relPath !== null ? projectPath : null);

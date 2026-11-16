@@ -355,8 +355,8 @@ export function App() {
   // rather than whichever one the server listed first. Once per launch, and
   // not at all after a switch: `pushActiveOrgAtBoot` owns that.
   const bootAuthStatus = useAuthStore((s) => s.snapshot.status);
-  const bootLocalActiveOrg = useOrgStore.use.activeOrganisationId();
-  const bootOrganisations = useOrgStore.use.organisations();
+  const bootLocalActiveOrg = useOrgStore((s) => s.activeOrganisationId);
+  const bootOrganisations = useOrgStore((s) => s.organisations);
   useEffect(() => {
     pushActiveOrgAtBoot({
       signedIn: bootAuthStatus === "signed-in",
@@ -485,11 +485,11 @@ export function App() {
     closeGroup,
     focusAdjacentGroup,
     toggleZenMode,
-  } = useLayoutStore.use.actions();
-  const tabs = useLayoutStore.use.tabs();
-  const activeTabId = useLayoutStore.use.activeTabId();
-  const groupOrder = useLayoutStore.use.groupOrder();
-  const focusedGroupId = useLayoutStore.use.focusedGroupId();
+  } = useLayoutStore((s) => s.actions);
+  const tabs = useLayoutStore((s) => s.tabs);
+  const activeTabId = useLayoutStore((s) => s.activeTabId);
+  const groupOrder = useLayoutStore((s) => s.groupOrder);
+  const focusedGroupId = useLayoutStore((s) => s.focusedGroupId);
 
   // ⌘J — toggle the terminal WITHIN the focused split column (not a global
   // instance), so it respects which pane you're working in.
@@ -533,7 +533,7 @@ export function App() {
       focusTerminalSoon(newTabId);
     }
   };
-  const currentProject = useAppStore.use.currentProject();
+  const currentProject = useAppStore((s) => s.currentProject);
   // The open project's `.atlas/config.toml`, read before anything acts in the
   // project: a new chat's agent (`defaultAgent`) is decided synchronously.
   useLoadProjectSettings(currentProject?.path);

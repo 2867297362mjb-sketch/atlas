@@ -59,10 +59,10 @@ const CATEGORY_NOTE: Record<ProviderCategory, string> = {
 type Filter = "all" | "set";
 
 export function ProviderKeysSection() {
-  const entries = useByokStore.use.entries();
-  const profile = useByokStore.use.profile();
-  const loaded = useByokStore.use.loaded();
-  const { load } = useByokStore.use.actions();
+  const entries = useByokStore((s) => s.entries);
+  const profile = useByokStore((s) => s.profile);
+  const loaded = useByokStore((s) => s.loaded);
+  const { load } = useByokStore((s) => s.actions);
   const [query, setQuery] = useState("");
   // Unpicked, it follows the keys: Set while any is, else All.
   const [picked, setPicked] = useState<Filter | null>(null);
@@ -201,8 +201,8 @@ function ProviderKeyRow({
   provider: ProviderDef;
   entry: EnvEntry | undefined;
 }) {
-  const pending = useByokStore.use.pending();
-  const { save, remove } = useByokStore.use.actions();
+  const pending = useByokStore((s) => s.pending);
+  const { save, remove } = useByokStore((s) => s.actions);
   const [revealed, setRevealed] = useState<string | null>(null);
 
   // The var an edit writes: whatever it was found as, else the canonical one.

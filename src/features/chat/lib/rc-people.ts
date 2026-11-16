@@ -33,14 +33,14 @@ export type RcPeopleResolver = (id: string, wireName?: string | null) => RcPerso
  * one request.
  */
 export function useRcPeople(scopeOrgId: string | null): RcPeopleResolver {
-  const snapshot = useAuthStore.use.snapshot();
+  const snapshot = useAuthStore((s) => s.snapshot);
   const me = snapshot.status === "signed-in" ? (snapshot.user ?? null) : null;
   const activeRemoteId = useOrgStore(
     (s) => s.organisations.find((o) => o.id === s.activeOrganisationId)?.remoteId ?? null,
   );
   const orgId = scopeOrgId ?? activeRemoteId;
   const members = useMembersStore((s) => (orgId ? s.byOrg[orgId]?.members : undefined));
-  const { load } = useMembersStore.use.actions();
+  const { load } = useMembersStore((s) => s.actions);
   useEffect(() => {
     if (orgId) void load(orgId);
   }, [orgId, load]);

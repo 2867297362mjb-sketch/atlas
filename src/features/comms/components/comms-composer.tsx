@@ -79,10 +79,10 @@ export function CommsComposer({
   // re-rendered the entire transcript above it.
   const composer = useCommsStore((s) => s.composers[convId]) ?? EMPTY_COMPOSER;
   const { draft, replyTo, editing, attachments } = composer;
-  const actions = useCommsStore.use.actions();
+  const actions = useCommsStore((s) => s.actions);
   // Only so a mention of YOU reads differently in the pill, as it does in the
   // rendered message.
-  const me = useCommsStore.use.me();
+  const me = useCommsStore((s) => s.me);
   const onChange = (value: string) => actions.setDraft(convId, value);
   const onSend = () => actions.send(convId);
   const onCommitEdit = () => actions.commitEdit(convId);

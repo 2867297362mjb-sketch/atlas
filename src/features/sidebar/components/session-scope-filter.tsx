@@ -34,8 +34,11 @@ export function SessionScopeFilter() {
     () => orgProjects.map((p) => ({ id: p.id, name: p.name, path: p.path })),
     [orgProjects],
   );
-  const scopeProjectId = resolveScopeProjectId(useSidebarStore.use.scopeProjectId(), projects);
-  const { setScopeProjectId } = useSidebarStore.use.actions();
+  const scopeProjectId = resolveScopeProjectId(
+    useSidebarStore((s) => s.scopeProjectId),
+    projects,
+  );
+  const { setScopeProjectId } = useSidebarStore((s) => s.actions);
   const [query, setQuery] = useState("");
   const scoped = projects.find((project) => project.id === scopeProjectId) ?? null;
   const searchable = projects.length > SEARCH_THRESHOLD;

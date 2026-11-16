@@ -387,7 +387,7 @@ export function PullRequestGuideTab({
 
   const reviewKey = reviewKeyOf(repoPath, number);
   const pending = usePendingReviewComments(repoPath, number);
-  const reviewActions = usePullRequestReviewStore.use.actions();
+  const reviewActions = usePullRequestReviewStore((s) => s.actions);
   // Asking is open to every reader; adding to the review needs the right to.
   const commenting: ExcerptCommenting = {
     canComment,

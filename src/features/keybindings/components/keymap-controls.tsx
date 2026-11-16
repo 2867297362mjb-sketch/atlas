@@ -41,8 +41,8 @@ const KEYMAP_OPTIONS = [
  *  user's own changes. On the built-in Default this forks it (the store's
  *  rule), so choosing a keymap never asks for a profile first. */
 export function KeymapSelect() {
-  const file = useKeybindingsStore.use.file();
-  const { setProfilePreset } = useKeybindingsStore.use.actions();
+  const file = useKeybindingsStore((s) => s.file);
+  const { setProfilePreset } = useKeybindingsStore((s) => s.actions);
   const active = file.profiles.find((p) => p.id === file.activeProfileId) ?? file.profiles[0]!;
   return (
     <Select
@@ -70,7 +70,7 @@ const NAMING_COPY = {
  * never needs to see them, because editing just works.
  */
 export function ProfileControls() {
-  const file = useKeybindingsStore.use.file();
+  const file = useKeybindingsStore((s) => s.file);
   const {
     setActiveProfile,
     createProfile,
@@ -78,7 +78,7 @@ export function ProfileControls() {
     renameProfile,
     deleteProfile,
     resetProfile,
-  } = useKeybindingsStore.use.actions();
+  } = useKeybindingsStore((s) => s.actions);
   const active = file.profiles.find((p) => p.id === file.activeProfileId) ?? file.profiles[0]!;
   const locked = !!active.builtIn;
   const changes = Object.keys(active.bindings).length;

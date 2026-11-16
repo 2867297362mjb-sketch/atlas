@@ -122,9 +122,9 @@ export function ThemeEditorPanel({
   onClose: () => void;
 }) {
   const editing = session.kind === "edit";
-  const themes = useThemeStore.use.themes();
-  const { load, reapply } = useThemeStore.use.actions();
-  const { updateSettings } = useSettingsStore.use.actions();
+  const themes = useThemeStore((s) => s.themes);
+  const { load, reapply } = useThemeStore((s) => s.actions);
+  const { updateSettings } = useSettingsStore((s) => s.actions);
 
   const [name, setName] = useState(() =>
     editing ? source.name : session.kind === "duplicate" ? `${source.name} copy` : "",

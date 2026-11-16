@@ -306,7 +306,7 @@ function chipPlugins(root: string | null): PluggableList {
 }
 
 export default function MessageBodyImpl({ body }: { body: string }) {
-  const root = useAppStore.use.currentProject()?.path ?? null;
+  const root = useAppStore((s) => s.currentProject)?.path ?? null;
   const rehypePlugins = useMemo(() => chipPlugins(root), [root]);
   const open = useMemo(() => (root ? openFileChipUnder(root) : null), [root]);
   const host = useFileChipHost(open);

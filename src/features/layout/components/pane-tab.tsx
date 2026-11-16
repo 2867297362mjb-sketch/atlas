@@ -295,7 +295,7 @@ export function PaneTab({
  * that is not about it.
  */
 function PaneTabMenuItems({ tab, filePath }: { tab: Tab; filePath: string | null }) {
-  const tabs = useLayoutStore.use.tabs();
+  const tabs = useLayoutStore((s) => s.tabs);
   const group = groupOf(tab);
   const strip = tabs.filter((t) => groupOf(t) === group);
   const closable = strip.filter((t) => t.closable);

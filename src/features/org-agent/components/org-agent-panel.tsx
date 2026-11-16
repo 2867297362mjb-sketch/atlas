@@ -62,16 +62,17 @@ const HISTORY_WIDTH = 244;
 
 export function OrgAgentPanel() {
   useTipOnMount("ask-atlas");
-  const asks = useOrgAgentStore.use.asks();
-  const pageId = useOrgAgentStore.use.pageId();
-  const pageView = useOrgAgentStore.use.pageView();
-  const pinned = useOrgAgentStore.use.pinned();
-  const asksLoaded = useOrgAgentStore.use.asksLoaded();
-  const asksCursor = useOrgAgentStore.use.asksCursor();
-  const asksError = useOrgAgentStore.use.asksError();
-  const connection = useOrgAgentStore.use.connection();
-  const { newChat, restoreToPanel, loadAsks, loadMoreAsks, setPageView } =
-    useOrgAgentStore.use.actions();
+  const asks = useOrgAgentStore((s) => s.asks);
+  const pageId = useOrgAgentStore((s) => s.pageId);
+  const pageView = useOrgAgentStore((s) => s.pageView);
+  const pinned = useOrgAgentStore((s) => s.pinned);
+  const asksLoaded = useOrgAgentStore((s) => s.asksLoaded);
+  const asksCursor = useOrgAgentStore((s) => s.asksCursor);
+  const asksError = useOrgAgentStore((s) => s.asksError);
+  const connection = useOrgAgentStore((s) => s.connection);
+  const { newChat, restoreToPanel, loadAsks, loadMoreAsks, setPageView } = useOrgAgentStore(
+    (s) => s.actions,
+  );
   const [collapsed, setCollapsed] = useState(false);
   const reduceMotion = useReducedMotion();
   const selected = pageId;
@@ -275,13 +276,13 @@ function Section({ label, children }: { label: string; children: React.ReactNode
 }
 
 function Row({ conversation: c, pinned }: { conversation: AskSummary; pinned: boolean }) {
-  const pageId = useOrgAgentStore.use.pageId();
-  const pageView = useOrgAgentStore.use.pageView();
+  const pageId = useOrgAgentStore((s) => s.pageId);
+  const pageView = useOrgAgentStore((s) => s.pageView);
   const unread = useOrgAgentStore((s) => s.unread.includes(c.id));
   const busy = useOrgAgentStore((s) => askBusy(s, c.id));
   const waiting = useOrgAgentStore((s) => askWaiting(s, c.id));
   const title = useOrgAgentStore((s) => askTitle(s, c.id));
-  const { openOnPage, togglePin, deleteConversation } = useOrgAgentStore.use.actions();
+  const { openOnPage, togglePin, deleteConversation } = useOrgAgentStore((s) => s.actions);
   const [confirming, setConfirming] = useState(false);
   const active = c.id === pageId && pageView === "chat";
   const temp = isTempAsk(c.id);

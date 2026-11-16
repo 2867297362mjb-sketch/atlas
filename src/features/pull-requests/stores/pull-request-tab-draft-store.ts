@@ -13,8 +13,6 @@
 import type { SelectedLineRange } from "@pierre/diffs";
 import { create } from "zustand";
 
-import { createSelectors } from "@/lib/create-selectors";
-
 import type { PrReviewPosition, PrReviewVerdict } from "../lib/pull-requests-types";
 
 /** The line comment open in the Code tab. */
@@ -50,28 +48,26 @@ interface PullRequestTabDraftState {
 
 export const NO_DRAFT: PullRequestTabDraft = Object.freeze({});
 
-export const usePullRequestTabDraftStore = createSelectors(
-  create<PullRequestTabDraftState>()((set) => ({
-    drafts: {},
-    actions: {
-      patch: (tabId, patch) =>
-        set((s) => ({ drafts: { ...s.drafts, [tabId]: { ...s.drafts[tabId], ...patch } } })),
-      clear: (tabId) =>
-        set((s) => {
-          if (!(tabId in s.drafts)) return s;
-          const { [tabId]: _gone, ...rest } = s.drafts;
-          return { drafts: rest };
-        }),
-      prune: (open) =>
-        set((s) => {
-          const kept = Object.entries(s.drafts).filter(([id]) => open.has(id));
-          return kept.length === Object.keys(s.drafts).length
-            ? s
-            : { drafts: Object.fromEntries(kept) };
-        }),
-    },
-  })),
-);
+export const usePullRequestTabDraftStore = create<PullRequestTabDraftState>()((set) => ({
+  drafts: {},
+  actions: {
+    patch: (tabId, patch) =>
+      set((s) => ({ drafts: { ...s.drafts, [tabId]: { ...s.drafts[tabId], ...patch } } })),
+    clear: (tabId) =>
+      set((s) => {
+        if (!(tabId in s.drafts)) return s;
+        const { [tabId]: _gone, ...rest } = s.drafts;
+        return { drafts: rest };
+      }),
+    prune: (open) =>
+      set((s) => {
+        const kept = Object.entries(s.drafts).filter(([id]) => open.has(id));
+        return kept.length === Object.keys(s.drafts).length
+          ? s
+          : { drafts: Object.fromEntries(kept) };
+      }),
+  },
+}));
 
 /** The draft as the tab left it, read once on mount. */
 export function readPullRequestTabDraft(tabId: string): PullRequestTabDraft {

@@ -50,7 +50,7 @@ export function ChatCommentsController({ tabId }: { tabId: string }) {
   const busy = useChatStore((s) => isBusyAgentStatus(s.sessions[tabId]?.status));
   const shape = useChatStore((s) => structureKey(s.sessions[tabId]?.messages));
   const visible = useIsTabVisible(tabId);
-  const { setTarget, setAnchors, setComments, clear } = useChatCommentsStore.use.actions();
+  const { setTarget, setAnchors, setComments, clear } = useChatCommentsStore((s) => s.actions);
 
   const [target, setLocalTarget] = useState<CommentTarget | null>(null);
   const targetRef = useRef<CommentTarget | null>(null);

@@ -87,7 +87,7 @@ export function CommitRow({
   const client = useQueryClient();
   const run = useGitActionStore((s) => s.runs[path] ?? null);
   const success = useGitActionStore((s) => s.success[path] ?? null);
-  const { clearSuccess } = useGitActionStore.use.actions();
+  const { clearSuccess } = useGitActionStore((s) => s.actions);
 
   useEffect(() => {
     if (!success) return;

@@ -34,7 +34,7 @@ const ICON_OPTIONS = PROJECT_SCRIPT_ICONS.map((entry) => ({
 }));
 
 export function ProjectScriptDialogHost() {
-  const request = useSessionDetailsStore.use.scriptEditor();
+  const request = useSessionDetailsStore((s) => s.scriptEditor);
   if (!request) return null;
   // Keyed so a second request starts from its own script, not the last form.
   return (

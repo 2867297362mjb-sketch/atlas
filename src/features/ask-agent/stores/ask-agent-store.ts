@@ -4,7 +4,6 @@
 // anchor is a DOM element.
 
 import { create } from "zustand";
-import { createSelectors } from "@/lib/create-selectors";
 import type { AgentContext } from "../lib/agent-context";
 import type { AskResult } from "../lib/ask-agent";
 
@@ -41,13 +40,11 @@ interface AskAgentStoreState {
   };
 }
 
-export const useAskAgentStore = createSelectors(
-  create<AskAgentStoreState>()((set) => ({
-    request: null,
-    serial: 0,
-    actions: {
-      open: (request) => set((s) => ({ request, serial: s.serial + 1 })),
-      close: () => set({ request: null }),
-    },
-  })),
-);
+export const useAskAgentStore = create<AskAgentStoreState>()((set) => ({
+  request: null,
+  serial: 0,
+  actions: {
+    open: (request) => set((s) => ({ request, serial: s.serial + 1 })),
+    close: () => set({ request: null }),
+  },
+}));

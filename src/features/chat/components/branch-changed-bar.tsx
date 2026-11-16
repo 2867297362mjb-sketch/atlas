@@ -21,7 +21,7 @@ import { ChatNoticeView } from "./views/chat-notice-view";
  */
 export function BranchChangedBar({ tabId }: { tabId: string }) {
   const change = useBranchChangeStore((s) => s.changes[tabId]);
-  const { clear } = useBranchChangeStore.use.actions();
+  const { clear } = useBranchChangeStore((s) => s.actions);
   const [restoring, setRestoring] = useState(false);
   if (!change) return null;
 

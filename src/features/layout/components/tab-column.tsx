@@ -68,7 +68,7 @@ export const TabColumn = memo(function TabColumn({
   placementControls: boolean;
   projectId: string;
 }) {
-  const { setActiveTab, setFocusedGroup, moveTab } = useLayoutStore.use.actions();
+  const { setActiveTab, setFocusedGroup, moveTab } = useLayoutStore((s) => s.actions);
 
   const tabsAll = view.tabs;
   const tabs = useMemo(() => tabsAll.filter((t) => GROUP_OF(t) === groupId), [tabsAll, groupId]);
@@ -210,8 +210,8 @@ function MainTitle({ tab }: { tab: Tab }) {
  * (`RightPanelToggle`), and it always sits on the right.
  */
 function PanelPlacementControls() {
-  const surfaces = useLayoutStore.use.surfaces();
-  const { setSurfaces } = useLayoutStore.use.actions();
+  const surfaces = useLayoutStore((s) => s.surfaces);
+  const { setSurfaces } = useLayoutStore((s) => s.actions);
   const maximized = surfaces === "expanded";
   const maximizeLabel = maximized ? "Restore panel size" : "Maximize panel";
   return (

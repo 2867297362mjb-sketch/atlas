@@ -36,7 +36,7 @@ export function AtlasAgentPermissions() {
 /** Under the card: what applies to every agent. */
 export function AllAgentsSection() {
   const favorites = useSettingsStore((s) => s.settings.favoriteModels);
-  const { updateSettings } = useSettingsStore.use.actions();
+  const { updateSettings } = useSettingsStore((s) => s.actions);
   return (
     <SettingsSection title="All agents">
       <SettingsGroup>
@@ -72,9 +72,9 @@ export function AllAgentsSection() {
 }
 
 function ModelPricingRow() {
-  const prices = useModelPricingStore.use.prices();
-  const loading = useModelPricingStore.use.loading();
-  const { load, refresh } = useModelPricingStore.use.actions();
+  const prices = useModelPricingStore((s) => s.prices);
+  const loading = useModelPricingStore((s) => s.loading);
+  const { load, refresh } = useModelPricingStore((s) => s.actions);
   useEffect(() => {
     void load();
   }, [load]);

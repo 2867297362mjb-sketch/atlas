@@ -118,7 +118,7 @@ function GitDiffPanel({
   const turnChoice = useDiffPanelStore((s) => s.turn[tabId] ?? LATEST_TURN);
   const baseRef = useDiffPanelStore((s) => s.baseRef[repoPath] ?? null);
   const ignoreWhitespace = useDiffIgnoreWhitespace();
-  const actionsApi = useDiffPanelStore.use.actions();
+  const actionsApi = useDiffPanelStore((s) => s.actions);
   const preview = useQuery({
     queryKey: ["git-diff-preview", repoPath, baseRef, ignoreWhitespace],
     queryFn: () => getDiffPreview(repoPath, { baseRef: baseRef ?? undefined, ignoreWhitespace }),

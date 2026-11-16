@@ -33,15 +33,15 @@ export function ThemesSection() {
   const themeLight = useSettingsStore((s) => s.settings.themeLight);
   const themeDark = useSettingsStore((s) => s.settings.themeDark);
   const themeMode = useSettingsStore((s) => s.settings.themeMode);
-  const { updateSettings } = useSettingsStore.use.actions();
-  const themes = useThemeStore.use.themes();
-  const loaded = useThemeStore.use.loaded();
-  const skipped = useThemeStore.use.skipped();
-  const loading = useThemeStore.use.loading();
-  const error = useThemeStore.use.error();
-  const { load, loadAll, reapply } = useThemeStore.use.actions();
+  const { updateSettings } = useSettingsStore((s) => s.actions);
+  const themes = useThemeStore((s) => s.themes);
+  const loaded = useThemeStore((s) => s.loaded);
+  const skipped = useThemeStore((s) => s.skipped);
+  const loading = useThemeStore((s) => s.loading);
+  const error = useThemeStore((s) => s.error);
+  const { load, loadAll, reapply } = useThemeStore((s) => s.actions);
   const [importing, setImporting] = useState(false);
-  const { open: openEditor } = useThemeEditorStore.use.actions();
+  const { open: openEditor } = useThemeEditorStore((s) => s.actions);
 
   useEffect(() => {
     void load();

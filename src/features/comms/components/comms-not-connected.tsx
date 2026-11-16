@@ -17,8 +17,8 @@ import { CommsNotConnectedView } from "./views/comms-not-connected-view";
  * immediately), which is why the spinner below is only armed when signed in.
  */
 export function CommsNotConnected({ org }: { org: Organisation | null }) {
-  const signedIn = useAuthStore.use.snapshot().status === "signed-in";
-  const { enableSync } = useOrgStore.use.actions();
+  const signedIn = useAuthStore((s) => s.snapshot).status === "signed-in";
+  const { enableSync } = useOrgStore((s) => s.actions);
   const [syncing, setSyncing] = useState(false);
 
   const connect = () => {

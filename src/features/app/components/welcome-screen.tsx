@@ -11,16 +11,16 @@ export function WelcomeScreen() {
   // "Open Folder" is the same pick-a-folder-and-add-it flow as the
   // `workspace.add` action, so show that action's live chord (hidden if unbound).
   const openFolderHint = useActionShortcut("workspace.add")?.label;
-  const allRecents = useAppStore.use.recentProjects();
-  const activeOrgId = useOrgStore.use.activeOrganisationId();
-  const projects = useProjectStore.use.projects();
+  const allRecents = useAppStore((s) => s.recentProjects);
+  const activeOrgId = useOrgStore((s) => s.activeOrganisationId);
+  const projects = useProjectStore((s) => s.projects);
   // Scoped to the active org: this list used to show every org's project
   // names and absolute paths, and opening one forked it into the wrong org.
   const recentProjects = useMemo(
     () => recentsForOrg(allRecents, projects, activeOrgId),
     [allRecents, projects, activeOrgId],
   );
-  const { openProject, removeRecent } = useAppStore.use.actions();
+  const { openProject, removeRecent } = useAppStore((s) => s.actions);
 
   const handleOpenFolder = async () => {
     try {

@@ -13,8 +13,8 @@ const pillButton =
  * in App. Radix handles Esc/overlay-click as dismiss → treated as "Go back".
  */
 export function StopAgentsDialog() {
-  const pending = useStopAgentsConfirmStore.use.pending();
-  const { settle } = useStopAgentsConfirmStore.use.actions();
+  const pending = useStopAgentsConfirmStore((s) => s.pending);
+  const { settle } = useStopAgentsConfirmStore((s) => s.actions);
   if (!pending) return null;
 
   const plural = pending.count === 1 ? "agent is" : "agents are";

@@ -35,7 +35,8 @@ vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: mocks.openUrl }));
 vi.mock("@/features/log/lib/log", () => ({ logEvent: mocks.logEvent }));
 vi.mock("sonner", () => ({ toast: mocks.toast }));
 vi.mock("@/features/app/stores/app-store", () => ({
-  useAppStore: { use: { currentProject: () => mocks.currentProject } },
+  useAppStore: (select: (s: { currentProject: typeof mocks.currentProject }) => unknown) =>
+    select({ currentProject: mocks.currentProject }),
 }));
 
 const { GithubPanel } = await import("./github-panel");

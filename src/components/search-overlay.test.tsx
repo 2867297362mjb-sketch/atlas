@@ -9,21 +9,21 @@ const mocks = vi.hoisted(() => ({ codeGrep: vi.fn() }));
 vi.mock("@/lib/code-search-api", () => ({ codeGrep: mocks.codeGrep }));
 vi.mock("@/lib/open-file", () => ({ openFile: vi.fn() }));
 vi.mock("@/features/app/stores/app-store", () => ({
-  useAppStore: { use: { currentProject: () => ({ path: "/repo" }) } },
+  useAppStore: (select: (s: { currentProject: { path: string } }) => unknown) =>
+    select({ currentProject: { path: "/repo" } }),
 }));
-vi.mock("@/features/app/stores/session-store", () => ({
-  useSessionStore: {
-    use: {
-      session: () => ({ searchHistory: [] }),
-      actions: () => ({
-        addSearchHistory: vi.fn(),
-        removeSearchHistory: vi.fn(),
-        clearSearchHistory: vi.fn(),
-        saveSession: vi.fn(),
-      }),
+vi.mock("@/features/app/stores/session-store", () => {
+  const state = {
+    session: { searchHistory: [] },
+    actions: {
+      addSearchHistory: vi.fn(),
+      removeSearchHistory: vi.fn(),
+      clearSearchHistory: vi.fn(),
+      saveSession: vi.fn(),
     },
-  },
-}));
+  };
+  return { useSessionStore: (select: (s: typeof state) => unknown) => select(state) };
+});
 
 const { SearchOverlay } = await import("./search-overlay");
 

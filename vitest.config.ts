@@ -1,11 +1,18 @@
 import { defineConfig } from "vitest/config";
+import react from "@vitejs/plugin-react";
 import path from "path";
 
 // Deliberately standalone rather than extending `vite.config.ts`. That config
 // carries the dev-server warmup list, `optimizeDeps` pre-bundling and the
 // Rollup chunk splitter — all of it irrelevant to tests, and all of it work
-// Vitest would redo on every run. Tests only need the `@` alias.
+// Vitest would redo on every run. Tests need the `@` alias, and the React
+// Compiler: production runs compiled components, so the tests must too. A
+// component that breaks under the compiler (a hook it cannot see, a value it
+// caches that should not be cached) passes every uncompiled test and fails only
+// in the shipped app. `react-compiler-contract.test.ts` keeps this in step with
+// `vite.config.ts`.
 export default defineConfig({
+  plugins: [react({ compiler: true })],
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "./src"),

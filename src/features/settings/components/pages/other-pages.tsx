@@ -143,10 +143,10 @@ function LocalDataSection() {
 }
 
 export function UpdatesPage() {
-  const phase = useUpdaterStore.use.phase();
-  const version = useUpdaterStore.use.version();
-  const progress = useUpdaterStore.use.progress();
-  const { beginApply, setError } = useUpdaterStore.use.actions();
+  const phase = useUpdaterStore((s) => s.phase);
+  const version = useUpdaterStore((s) => s.version);
+  const progress = useUpdaterStore((s) => s.progress);
+  const { beginApply, setError } = useUpdaterStore((s) => s.actions);
   const [checking, setChecking] = useState(false);
   // A dev-profile build (`bun run dev:app`) never fetches or installs a
   // release: the backend refuses both, since the release would replace the

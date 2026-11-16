@@ -6,7 +6,6 @@
 
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { createSelectors } from "@/lib/create-selectors";
 import {
   cleanActionArgs,
   isNotificationKind,
@@ -191,75 +190,72 @@ function isAppTarget(t: unknown): t is NonNullable<AppNotification["target"]> {
   );
 }
 
-export const useNotificationsStore = createSelectors(
-  create<NotificationsState>()(
-    persist(
-      (set) => ({
-        items: [],
-        panelOpen: false,
-        actions: {
-          add: (n) =>
-            set((s) => ({
-              items: [
-                {
-                  ...n,
-                  actions: cleanActions(n.actions),
-                  id: uid(),
-                  timestamp: new Date().toISOString(),
-                  // If the panel is already open, count it as read immediately.
-                  read: s.panelOpen,
-                },
-                ...s.items,
-              ].slice(0, MAX_ITEMS),
-            })),
-          dismiss: (id) => set((s) => ({ items: s.items.filter((i) => i.id !== id) })),
-          clearAll: () => set({ items: [] }),
-          markAllRead: () =>
-            set((s) => ({ items: s.items.map((i) => (i.read ? i : { ...i, read: true })) })),
-          markSessionKindRead: (sessionId, kind) =>
-            set((s) => ({
-              items: s.items.map((i) =>
-                !i.read && i.kind === kind && i.sessionId === sessionId ? { ...i, read: true } : i,
-              ),
-            })),
-          markKindRead: (kind, match) =>
-            set((s) => ({
-              items: s.items.map((i) =>
-                !i.read && i.kind === kind && (!match || match(i)) ? { ...i, read: true } : i,
-              ),
-            })),
-          markReadWhere: (match) =>
-            set((s) => ({
-              items: s.items.map((i) => (!i.read && match(i) ? { ...i, read: true } : i)),
-            })),
-          resolveWhere: (match) =>
-            set((s) => ({
-              items: s.items.map((i) =>
-                match(i) && (!i.read || !i.resolved)
-                  ? { ...i, read: true, resolved: true, actions: undefined }
-                  : i,
-              ),
-            })),
-          open: (orgId) =>
-            set((s) => ({ panelOpen: true, items: markVisibleRead(s.items, orgId) })),
-          close: () => set({ panelOpen: false }),
-          toggle: (orgId) =>
-            set((s) =>
-              s.panelOpen
-                ? { panelOpen: false }
-                : { panelOpen: true, items: markVisibleRead(s.items, orgId) },
+export const useNotificationsStore = create<NotificationsState>()(
+  persist(
+    (set) => ({
+      items: [],
+      panelOpen: false,
+      actions: {
+        add: (n) =>
+          set((s) => ({
+            items: [
+              {
+                ...n,
+                actions: cleanActions(n.actions),
+                id: uid(),
+                timestamp: new Date().toISOString(),
+                // If the panel is already open, count it as read immediately.
+                read: s.panelOpen,
+              },
+              ...s.items,
+            ].slice(0, MAX_ITEMS),
+          })),
+        dismiss: (id) => set((s) => ({ items: s.items.filter((i) => i.id !== id) })),
+        clearAll: () => set({ items: [] }),
+        markAllRead: () =>
+          set((s) => ({ items: s.items.map((i) => (i.read ? i : { ...i, read: true })) })),
+        markSessionKindRead: (sessionId, kind) =>
+          set((s) => ({
+            items: s.items.map((i) =>
+              !i.read && i.kind === kind && i.sessionId === sessionId ? { ...i, read: true } : i,
             ),
-        },
-      }),
-      {
-        name: "atlas-notifications",
-        version: 1,
-        partialize: (s) => ({ items: s.items }),
-        merge: (persisted, current) => ({
-          ...current,
-          items: sanitize((persisted as { items?: unknown } | undefined)?.items),
-        }),
+          })),
+        markKindRead: (kind, match) =>
+          set((s) => ({
+            items: s.items.map((i) =>
+              !i.read && i.kind === kind && (!match || match(i)) ? { ...i, read: true } : i,
+            ),
+          })),
+        markReadWhere: (match) =>
+          set((s) => ({
+            items: s.items.map((i) => (!i.read && match(i) ? { ...i, read: true } : i)),
+          })),
+        resolveWhere: (match) =>
+          set((s) => ({
+            items: s.items.map((i) =>
+              match(i) && (!i.read || !i.resolved)
+                ? { ...i, read: true, resolved: true, actions: undefined }
+                : i,
+            ),
+          })),
+        open: (orgId) => set((s) => ({ panelOpen: true, items: markVisibleRead(s.items, orgId) })),
+        close: () => set({ panelOpen: false }),
+        toggle: (orgId) =>
+          set((s) =>
+            s.panelOpen
+              ? { panelOpen: false }
+              : { panelOpen: true, items: markVisibleRead(s.items, orgId) },
+          ),
       },
-    ),
+    }),
+    {
+      name: "atlas-notifications",
+      version: 1,
+      partialize: (s) => ({ items: s.items }),
+      merge: (persisted, current) => ({
+        ...current,
+        items: sanitize((persisted as { items?: unknown } | undefined)?.items),
+      }),
+    },
   ),
 );

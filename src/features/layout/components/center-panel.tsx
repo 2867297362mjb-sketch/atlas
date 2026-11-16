@@ -19,26 +19,26 @@ import { initialCenterLayout } from "../lib/center-layout";
  * column. The single-column case is the normal IDE.
  */
 export function CenterPanel() {
-  const currentProject = useAppStore.use.currentProject();
+  const currentProject = useAppStore((s) => s.currentProject);
   // Render ONLY the bounded HOT set, not the full project registry — keeps
   // memory/DOM bounded at 100+ projects (Chrome tab-discard model). Resolve ids
   // to projects, preserving registry order for stable React keys.
-  const projectsAll = useProjectStore.use.projects();
-  const mountedProjectIds = useProjectStore.use.mountedProjectIds();
+  const projectsAll = useProjectStore((s) => s.projects);
+  const mountedProjectIds = useProjectStore((s) => s.mountedProjectIds);
   const projects = useMemo(() => {
     const mounted = new Set(mountedProjectIds);
     return projectsAll.filter((w) => mounted.has(w.id));
   }, [projectsAll, mountedProjectIds]);
-  const activeProjectId = useProjectStore.use.activeProjectId();
-  const viewsByWs = useLayoutStore.use.viewsByWs();
+  const activeProjectId = useProjectStore((s) => s.activeProjectId);
+  const viewsByWs = useLayoutStore((s) => s.viewsByWs);
 
   // Live mirror of the ACTIVE project's view.
-  const tabs = useLayoutStore.use.tabs();
-  const groupOrder = useLayoutStore.use.groupOrder();
-  const activeByGroup = useLayoutStore.use.activeByGroup();
-  const focusedGroupId = useLayoutStore.use.focusedGroupId();
-  const tabHistory = useLayoutStore.use.tabHistory();
-  const tabHistoryIndex = useLayoutStore.use.tabHistoryIndex();
+  const tabs = useLayoutStore((s) => s.tabs);
+  const groupOrder = useLayoutStore((s) => s.groupOrder);
+  const activeByGroup = useLayoutStore((s) => s.activeByGroup);
+  const focusedGroupId = useLayoutStore((s) => s.focusedGroupId);
+  const tabHistory = useLayoutStore((s) => s.tabHistory);
+  const tabHistoryIndex = useLayoutStore((s) => s.tabHistoryIndex);
   const mirrorView: ProjectView = useMemo(
     () => ({
       tabs,
@@ -117,7 +117,7 @@ const ProjectColumns = memo(function ProjectColumns({
   isActive: boolean;
   runningTabIds: Set<string>;
 }) {
-  const surfaces = useLayoutStore.use.surfaces();
+  const surfaces = useLayoutStore((s) => s.surfaces);
   const split = view.groupOrder.length > 1;
   // The first column is the main pane; every one after it is the surfaces
   // pane. Hidden or expanded, a column is collapsed to zero width rather than

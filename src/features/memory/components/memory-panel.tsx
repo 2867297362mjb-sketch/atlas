@@ -67,13 +67,13 @@ import {
 
 export function MemoryPanel() {
   useTipOnMount("memory");
-  const project = useAppStore.use.currentProject();
+  const project = useAppStore((s) => s.currentProject);
   const projectPath = project?.path ?? null;
   const projectName = project?.name ?? projectPath?.split("/").pop() ?? "this project";
-  const sub = useMemoryStore.use.subTab();
-  const { setSubTab } = useMemoryStore.use.actions();
-  const review = useSharedMemoryStore.use.review();
-  const { load, refresh, clear } = useSharedMemoryStore.use.actions();
+  const sub = useMemoryStore((s) => s.subTab);
+  const { setSubTab } = useMemoryStore((s) => s.actions);
+  const review = useSharedMemoryStore((s) => s.review);
+  const { load, refresh, clear } = useSharedMemoryStore((s) => s.actions);
   const [importing, setImporting] = useState(false);
   const [importingRepo, setImportingRepo] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);

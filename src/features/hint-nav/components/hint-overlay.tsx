@@ -26,8 +26,8 @@ function charFromEvent(e: KeyboardEvent): string | null {
 }
 
 export function HintOverlay() {
-  const open = useHintStore.use.open();
-  const { toggle, close } = useHintStore.use.actions();
+  const open = useHintStore((s) => s.open);
+  const { toggle, close } = useHintStore((s) => s.actions);
 
   const [targets, setTargets] = useState<HintTarget[]>([]);
   const [labels, setLabels] = useState<string[]>([]);

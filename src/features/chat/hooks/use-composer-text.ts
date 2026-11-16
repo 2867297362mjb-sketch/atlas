@@ -26,7 +26,7 @@ export function useComposerText({
   // draft mirror is `useComposerDraft`: a 300ms trailing debounce + a flush on
   // unmount (tab switches unmount this component, so nothing is lost; the
   // live-insert paths go through `atlas:chat-insert`, not the draft).
-  const { setDraft } = useChatStore.use.actions();
+  const { setDraft } = useChatStore((s) => s.actions);
   const draft = useComposerDraft(
     tabId,
     () => useChatStore.getState().drafts[tabId] ?? "",

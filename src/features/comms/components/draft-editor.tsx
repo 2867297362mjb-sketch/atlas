@@ -28,8 +28,8 @@ import { onWindowEvent } from "@/lib/window-events";
  */
 export function DraftEditor({ conv, draft }: { conv: ChatConversation; draft: PromptDraft }) {
   const { ytext, ready, meta, peers, publishCursor } = useDraftSession(draft);
-  const memberList = useCommsStore.use.members();
-  const me = useCommsStore.use.me();
+  const memberList = useCommsStore((s) => s.members);
+  const me = useCommsStore((s) => s.me);
   const members = useMemo(() => new Map(memberList.map((m) => [m.id, m])), [memberList]);
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);

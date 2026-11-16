@@ -51,7 +51,7 @@ function defaultFallback(kind: IconKind): FallbackIcon {
 }
 
 export function FileIcon({ path, kind = "file", size = 14, className, fallback }: FileIconProps) {
-  const { want } = useIconThemeStore.use.actions();
+  const { want } = useIconThemeStore((s) => s.actions);
   // The editor's own language table is the language-id source (decision 4
   // requires a `languageIds` table and there is no reason for a second one).
   // `plaintext` is dropped rather than sent: it is "we could not tell", and no
@@ -62,7 +62,7 @@ export function FileIcon({ path, kind = "file", size = 14, className, fallback }
 
   // Re-asking when the theme changes is what makes a switch repaint the rows
   // that are already on screen; see `generation` in the store.
-  const generation = useIconThemeStore.use.generation();
+  const generation = useIconThemeStore((s) => s.generation);
   const icon = useIconThemeStore((state) => state.resolved[key]);
   const prepared = useIconThemeStore((state) =>
     icon && icon.kind === "image" ? state.prepared[icon.definition] : undefined,
@@ -143,7 +143,7 @@ function PreparedImage({
  * never loads a font or pays for this at all.
  */
 export function IconThemeFonts() {
-  const fonts = useIconThemeStore.use.fonts();
+  const fonts = useIconThemeStore((s) => s.fonts);
   if (fonts.length === 0) return null;
   const css = fonts
     .map((font) => fontFaceCss(`atlas-icon-font-${font.id}`, font))

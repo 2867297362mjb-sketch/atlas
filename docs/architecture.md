@@ -89,7 +89,7 @@ Reference: `docs/reference/design-system.md` and `docs/reference/theme-keys.md`.
 
 ### State management
 
-- **Stores are Zustand + Immer**, wrapped in `createSelectors` (`src/lib/create-selectors.ts`), which auto-generates `useStore.use.x()` selectors.
+- **Stores are Zustand + Immer**, read as `useXStore((s) => s.x)`. The Vite build and the tests run the React Compiler, which treats a call as a hook only when the called name is `useX`; a hook behind another name, like the retired generated `useXStore.use.x()`, is cached after the first render and breaks hook order (`tests/react-compiler-contract.test.ts`).
 - **Stores never call other stores directly.** Cross-feature coordination happens by reading another feature's state via `getState()` at an action boundary, or by firing a window event for looser coupling: `emitWindowEvent("atlas:...", detail)` from `src/lib/window-events.ts`, whose map declares every such event and its payload (`tests/window-event-contract.test.ts`). Importing one feature's store into another feature's store module violates this.
 - **Tailwind classes compose through `cn()`** (`src/lib/utils.ts`), never concatenated ad hoc.
 
@@ -116,7 +116,7 @@ A view is what can move into `@tryatlas/design`, render from fixtures, and be re
 
 ```tsx
 // components/session-masthead.tsx: the container
-const prices = useModelPricingStore.use.prices();
+const prices = useModelPricingStore((s) => s.prices);
 const cost = spent > 0 ? costOf(spend, priceForModel(prices, s.model)) : null;
 return <SessionMastheadView detail={detail} pr={pr} cost={cost} spent={spent} … />;
 
@@ -419,7 +419,7 @@ atlas/
 │   ├── features/                 one folder per feature (~30 slices)
 │   ├── components/                cross-feature widgets
 │   ├── hooks/                     shared React hooks
-│   ├── lib/                       utilities (cn, createSelectors, constants)
+│   ├── lib/                       utilities (cn, constants)
 │   ├── styles/                    desktop-only CSS over @tryatlas/design's styles-core.css
 │   └── types/                     shared TS types (agent.ts, acp.ts, etc.)
 │

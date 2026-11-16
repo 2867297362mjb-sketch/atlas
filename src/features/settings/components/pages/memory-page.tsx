@@ -13,10 +13,10 @@ import { EmbeddingModelSection } from "./embedding-model-section";
 import { Button } from "@tryatlas/design";
 
 export function MemoryPage() {
-  const settings = useSettingsStore.use.settings();
+  const settings = useSettingsStore((s) => s.settings);
   // The memory mirror lives outside the project; this shows the open
   // project's copy in the file manager.
-  const projectPath = useAppStore.use.currentProject()?.path ?? null;
+  const projectPath = useAppStore((s) => s.currentProject)?.path ?? null;
   const openMemoryMirror = async () => {
     if (!projectPath) return;
     try {

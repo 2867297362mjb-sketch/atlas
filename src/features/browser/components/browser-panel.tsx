@@ -46,7 +46,7 @@ export function BrowserPanel({ tabId, initialUrl, groupId }: BrowserPanelProps) 
   const [searchQuery, setSearchQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
-  const currentProject = useAppStore.use.currentProject();
+  const currentProject = useAppStore((s) => s.currentProject);
 
   // ── Live (embedded native webview): state, geometry, lifecycle ──────────
   const {

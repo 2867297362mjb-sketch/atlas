@@ -42,12 +42,12 @@ export function SessionChatPanel({
 }) {
   const sessionId = detail.summary.id;
 
-  const metas = useSessionChatStore.use.metasByAgent()[sessionId] ?? [];
-  const activeId = useSessionChatStore.use.activeByAgent()[sessionId] ?? null;
-  const threads = useSessionChatStore.use.threads();
-  const streaming = useSessionChatStore.use.streaming();
-  const sourcesByMsg = useSessionChatStore.use.sourcesByMsg();
-  const errors = useSessionChatStore.use.errors();
+  const metas = useSessionChatStore((s) => s.metasByAgent)[sessionId] ?? [];
+  const activeId = useSessionChatStore((s) => s.activeByAgent)[sessionId] ?? null;
+  const threads = useSessionChatStore((s) => s.threads);
+  const streaming = useSessionChatStore((s) => s.streaming);
+  const sourcesByMsg = useSessionChatStore((s) => s.sourcesByMsg);
+  const errors = useSessionChatStore((s) => s.errors);
   const {
     init,
     open,
@@ -59,16 +59,16 @@ export function SessionChatPanel({
     setCheckpointScope,
     send,
     stop,
-  } = useSessionChatStore.use.actions();
+  } = useSessionChatStore((s) => s.actions);
 
   // A new thread starts scoped to the latest Checkpoint — the commit someone
   // almost always means when they open a chat about a Session they just watched
   // finish. Sessions without Checkpoints get the whole timeline.
   const newThreadScope = () => defaultScope(detail.entries);
 
-  const byokKeys = useByokStore.use.keys();
-  const byokLoaded = useByokStore.use.loaded();
-  const loadByok = useByokStore.use.actions().load;
+  const byokKeys = useByokStore((s) => s.keys);
+  const byokLoaded = useByokStore((s) => s.loaded);
+  const loadByok = useByokStore((s) => s.actions).load;
 
   const thread = activeId ? threads[activeId] : undefined;
   const running = activeId ? !!streaming[activeId] : false;

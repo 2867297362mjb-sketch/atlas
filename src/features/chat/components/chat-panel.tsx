@@ -108,7 +108,7 @@ export const ChatPanel = memo(function ChatPanel({ tabId }: ChatPanelProps) {
   // unchanged sub-paths, so `s.sessions[tabId]` only changes when this tab
   // mutates.
   const session = useChatStore((s) => s.sessions[tabId]);
-  const { createSession, clearElicitation } = useChatStore.use.actions();
+  const { createSession, clearElicitation } = useChatStore((s) => s.actions);
   // Narrow subscription — an unanswered `elicitation/create` (P3.3).
   const pendingElicitation = useChatStore((s) => s.sessions[tabId]?.pendingElicitation);
   // Answering a question is steering: while someone else drives from remote
@@ -119,7 +119,7 @@ export const ChatPanel = memo(function ChatPanel({ tabId }: ChatPanelProps) {
   // Opened from the Details card's Activity section, so kept by tab in a
   // store rather than here (`session-side-panel-store.ts`).
   const sidePanel = useSessionSidePanel(tabId);
-  const { close: closeSidePanel } = useSessionSidePanelStore.use.actions();
+  const { close: closeSidePanel } = useSessionSidePanelStore((s) => s.actions);
   // Narrow boolean — changes only when the detail panel opens or closes.
   const detailOpen = useDetailPanelStore((s) => !!s.targets[tabId]);
   // The session's scope, the key of its Details card and terminal drawer.
@@ -130,7 +130,7 @@ export const ChatPanel = memo(function ChatPanel({ tabId }: ChatPanelProps) {
   // agent" and history both reuse this tab, and a tab-keyed card followed the
   // user into every session it showed.
   const scope = sessionScope(tabId, session?.acpSessionId);
-  const { adopt: adoptDetails } = useSessionDetailsStore.use.actions();
+  const { adopt: adoptDetails } = useSessionDetailsStore((s) => s.actions);
   // The title-bar slot this session's controls portal into, while its column
   // shows it (`session-header-slot-store.ts`).
   const headerSlot = useSessionHeaderSlot(tabId);
@@ -467,7 +467,7 @@ export const ChatPanel = memo(function ChatPanel({ tabId }: ChatPanelProps) {
 /** The empty session's greeting, from the signed-in user's first name. Its own
  *  component so the auth subscription re-renders this and not the panel. */
 function WelcomeState() {
-  const snapshot = useAuthStore.use.snapshot();
+  const snapshot = useAuthStore((s) => s.snapshot);
   const firstName =
     snapshot.status === "signed-in" ? snapshot.user?.name.trim().split(/\s+/)[0] : undefined;
   const greeting = firstName ? `Hi, ${firstName} 👋` : "Welcome back 👋";

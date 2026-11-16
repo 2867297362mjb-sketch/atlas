@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { createSelectors } from "@/lib/create-selectors";
 import {
   completeChecklistItem,
   dismissGetStarted,
@@ -82,125 +81,123 @@ interface TipsStoreState {
   };
 }
 
-export const useTipsStore = createSelectors(
-  create<TipsStoreState>()((set, get) => {
-    /** `lastShownAt` before the active tip started, to undo on anchor loss. */
-    let shownBefore: number | null = null;
-    /** The active tip was asked for by name, so on anchor loss it is again. */
-    let activeWasForced = false;
+export const useTipsStore = create<TipsStoreState>()((set, get) => {
+  /** `lastShownAt` before the active tip started, to undo on anchor loss. */
+  let shownBefore: number | null = null;
+  /** The active tip was asked for by name, so on anchor loss it is again. */
+  let activeWasForced = false;
 
-    const adopt = (state: TipsState) =>
-      set({
-        cohort: state.cohort,
-        seen: state.seen,
-        checklist: state.checklist,
-        checklistDismissed: state.checklistDismissed,
-        activeDays: state.activeDays,
-      });
+  const adopt = (state: TipsState) =>
+    set({
+      cohort: state.cohort,
+      seen: state.seen,
+      checklist: state.checklist,
+      checklistDismissed: state.checklistDismissed,
+      activeDays: state.activeDays,
+    });
 
-    return {
-      loaded: false,
-      cohort: "upgrade",
-      seen: [],
-      queue: [],
-      forced: null,
-      active: null,
-      lastShownAt: null,
-      checklist: [],
-      checklistDismissed: false,
-      getStartedSkipped: null,
-      activeDays: [],
-      actions: {
-        load: async () => {
-          try {
-            adopt(await loadTips());
-            set({ loaded: true });
-          } catch {
-            // No record means no tips this launch, rather than every tip again.
-          }
-        },
-        applyRemote: adopt,
-        request: (id) => {
-          const { seen, queue } = get();
-          if (seen.includes(id) || queue.includes(id)) return;
-          set({ queue: [...queue, id] });
-        },
-        showByName: (id) => set({ forced: id }),
-        withdraw: (id) =>
-          set((s) => ({
-            queue: s.queue.filter((q) => q !== id),
-            forced: s.forced === id ? null : s.forced,
-            ...(s.active?.id === id ? { active: null, lastShownAt: shownBefore } : {}),
-          })),
-        start: (id, now) => {
-          shownBefore = get().lastShownAt;
-          activeWasForced = get().forced === id;
-          set((s) => ({
-            active: { id, step: 0 },
-            queue: s.queue.filter((q) => q !== id),
-            forced: s.forced === id ? null : s.forced,
-            lastShownAt: now,
-          }));
-          void reportTipShown(id).catch(() => {});
-        },
-        nextStep: () =>
-          set((s) => (s.active ? { active: { ...s.active, step: s.active.step + 1 } } : {})),
-        finish: async (outcome = "dismissed") => {
-          const active = get().active;
-          if (!active) return;
-          set({ active: null });
-          await get().actions.markSeen(active.id, outcome);
-        },
-        markSeen: async (id, outcome) => {
-          set((s) => (s.seen.includes(id) ? {} : { seen: [...s.seen, id] }));
-          try {
-            adopt(await markTipSeen(id, outcome));
-          } catch {
-            // Kept seen for this launch; the next launch may show it again.
-          }
-        },
-        completeItem: async (item) => {
-          if (!get().loaded || get().checklist.includes(item)) return;
-          set((s) => ({ checklist: [...s.checklist, item] }));
-          try {
-            adopt(await completeChecklistItem(item));
-          } catch {
-            // Ticked for this launch; the real event will report it again.
-          }
-        },
-        decideGetStarted: (hasProject) => {
-          const s = get();
-          if (!s.loaded || s.getStartedSkipped !== null) return;
-          set({
-            getStartedSkipped:
-              s.cohort === "upgrade" && hasProject && !s.checklist.includes("add-project"),
-          });
-        },
-        dismissChecklist: async () => {
-          set({ checklistDismissed: true });
-          try {
-            adopt(await dismissGetStarted());
-          } catch {
-            // Closed for this launch.
-          }
-        },
-        anchorLost: () => {
-          const active = get().active;
-          if (!active) return;
-          set((s) =>
-            activeWasForced
-              ? { active: null, forced: s.forced ?? active.id, lastShownAt: shownBefore }
-              : {
-                  active: null,
-                  queue: [active.id, ...s.queue.filter((q) => q !== active.id)],
-                  lastShownAt: shownBefore,
-                },
-          );
-        },
-        replayAll: async () => {
-          adopt(await resetTips([...NEVER_REPLAYED]));
-        },
+  return {
+    loaded: false,
+    cohort: "upgrade",
+    seen: [],
+    queue: [],
+    forced: null,
+    active: null,
+    lastShownAt: null,
+    checklist: [],
+    checklistDismissed: false,
+    getStartedSkipped: null,
+    activeDays: [],
+    actions: {
+      load: async () => {
+        try {
+          adopt(await loadTips());
+          set({ loaded: true });
+        } catch {
+          // No record means no tips this launch, rather than every tip again.
+        }
       },
-    };
-  }),
-);
+      applyRemote: adopt,
+      request: (id) => {
+        const { seen, queue } = get();
+        if (seen.includes(id) || queue.includes(id)) return;
+        set({ queue: [...queue, id] });
+      },
+      showByName: (id) => set({ forced: id }),
+      withdraw: (id) =>
+        set((s) => ({
+          queue: s.queue.filter((q) => q !== id),
+          forced: s.forced === id ? null : s.forced,
+          ...(s.active?.id === id ? { active: null, lastShownAt: shownBefore } : {}),
+        })),
+      start: (id, now) => {
+        shownBefore = get().lastShownAt;
+        activeWasForced = get().forced === id;
+        set((s) => ({
+          active: { id, step: 0 },
+          queue: s.queue.filter((q) => q !== id),
+          forced: s.forced === id ? null : s.forced,
+          lastShownAt: now,
+        }));
+        void reportTipShown(id).catch(() => {});
+      },
+      nextStep: () =>
+        set((s) => (s.active ? { active: { ...s.active, step: s.active.step + 1 } } : {})),
+      finish: async (outcome = "dismissed") => {
+        const active = get().active;
+        if (!active) return;
+        set({ active: null });
+        await get().actions.markSeen(active.id, outcome);
+      },
+      markSeen: async (id, outcome) => {
+        set((s) => (s.seen.includes(id) ? {} : { seen: [...s.seen, id] }));
+        try {
+          adopt(await markTipSeen(id, outcome));
+        } catch {
+          // Kept seen for this launch; the next launch may show it again.
+        }
+      },
+      completeItem: async (item) => {
+        if (!get().loaded || get().checklist.includes(item)) return;
+        set((s) => ({ checklist: [...s.checklist, item] }));
+        try {
+          adopt(await completeChecklistItem(item));
+        } catch {
+          // Ticked for this launch; the real event will report it again.
+        }
+      },
+      decideGetStarted: (hasProject) => {
+        const s = get();
+        if (!s.loaded || s.getStartedSkipped !== null) return;
+        set({
+          getStartedSkipped:
+            s.cohort === "upgrade" && hasProject && !s.checklist.includes("add-project"),
+        });
+      },
+      dismissChecklist: async () => {
+        set({ checklistDismissed: true });
+        try {
+          adopt(await dismissGetStarted());
+        } catch {
+          // Closed for this launch.
+        }
+      },
+      anchorLost: () => {
+        const active = get().active;
+        if (!active) return;
+        set((s) =>
+          activeWasForced
+            ? { active: null, forced: s.forced ?? active.id, lastShownAt: shownBefore }
+            : {
+                active: null,
+                queue: [active.id, ...s.queue.filter((q) => q !== active.id)],
+                lastShownAt: shownBefore,
+              },
+        );
+      },
+      replayAll: async () => {
+        adopt(await resetTips([...NEVER_REPLAYED]));
+      },
+    },
+  };
+});

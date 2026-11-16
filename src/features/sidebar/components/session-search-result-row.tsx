@@ -27,7 +27,7 @@ export const SessionSearchResultRow = memo(function SessionSearchResultRow(props
     heldWorking: session.heldWorking,
     watching: session.pullRequests.some((p) => p.watching),
   });
-  const listScrolling = useSessionListScroll.use.scrolling();
+  const listScrolling = useSessionListScroll((s) => s.scrolling);
   return (
     <li role="presentation" className="list-none">
       <TooltipPrimitive.Root disabled={listScrolling}>

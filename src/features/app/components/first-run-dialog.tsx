@@ -27,8 +27,8 @@ import {
  * DRAFT COPY: the product card's wording is for the user to rewrite.
  */
 export function FirstRunDialog() {
-  const open = useKeybindingsStore.use.firstRun();
-  const { completeOnboarding } = useKeybindingsStore.use.actions();
+  const open = useKeybindingsStore((s) => s.firstRun);
+  const { completeOnboarding } = useKeybindingsStore((s) => s.actions);
   const [step, setStep] = useState<"product" | "keymap">("product");
   const report = (answer: KeymapAnswer) => void reportFirstRunComplete(answer).catch(() => {});
 

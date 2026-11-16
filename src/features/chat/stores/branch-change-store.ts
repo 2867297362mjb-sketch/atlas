@@ -4,7 +4,6 @@
 // just did, and a restart is a new look at the checkout.
 
 import { create } from "zustand";
-import { createSelectors } from "@/lib/create-selectors";
 
 export interface BranchChange {
   /** The checkout the turn ran in. */
@@ -24,17 +23,15 @@ interface BranchChangeState {
   };
 }
 
-export const useBranchChangeStore = createSelectors(
-  create<BranchChangeState>()((set) => ({
-    changes: {},
-    actions: {
-      record: (tabId, change) => set((s) => ({ changes: { ...s.changes, [tabId]: change } })),
-      clear: (tabId) =>
-        set((s) => {
-          if (!(tabId in s.changes)) return s;
-          const { [tabId]: _gone, ...rest } = s.changes;
-          return { changes: rest };
-        }),
-    },
-  })),
-);
+export const useBranchChangeStore = create<BranchChangeState>()((set) => ({
+  changes: {},
+  actions: {
+    record: (tabId, change) => set((s) => ({ changes: { ...s.changes, [tabId]: change } })),
+    clear: (tabId) =>
+      set((s) => {
+        if (!(tabId in s.changes)) return s;
+        const { [tabId]: _gone, ...rest } = s.changes;
+        return { changes: rest };
+      }),
+  },
+}));

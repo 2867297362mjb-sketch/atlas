@@ -11,7 +11,6 @@
 
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
-import { createSelectors } from "@/lib/create-selectors";
 
 interface LiveElsewhereState {
   /** Session ids another process is writing now. A record rather than a Set so
@@ -29,31 +28,29 @@ interface LiveElsewhereState {
   };
 }
 
-export const useLiveElsewhereStore = createSelectors(
-  create<LiveElsewhereState>()(
-    immer((set) => ({
-      live: {},
-      overridden: {},
-      actions: {
-        setLive: (ids) =>
-          set((s) => {
-            const next: Record<string, true> = {};
-            for (const id of ids) next[id] = true;
-            const sameLive =
-              Object.keys(next).length === Object.keys(s.live).length &&
-              Object.keys(next).every((id) => s.live[id]);
-            if (!sameLive) s.live = next;
-            for (const id of Object.keys(s.overridden)) {
-              if (!next[id]) delete s.overridden[id];
-            }
-          }),
-        sendAnyway: (sessionId) =>
-          set((s) => {
-            s.overridden[sessionId] = true;
-          }),
-      },
-    })),
-  ),
+export const useLiveElsewhereStore = create<LiveElsewhereState>()(
+  immer((set) => ({
+    live: {},
+    overridden: {},
+    actions: {
+      setLive: (ids) =>
+        set((s) => {
+          const next: Record<string, true> = {};
+          for (const id of ids) next[id] = true;
+          const sameLive =
+            Object.keys(next).length === Object.keys(s.live).length &&
+            Object.keys(next).every((id) => s.live[id]);
+          if (!sameLive) s.live = next;
+          for (const id of Object.keys(s.overridden)) {
+            if (!next[id]) delete s.overridden[id];
+          }
+        }),
+      sendAnyway: (sessionId) =>
+        set((s) => {
+          s.overridden[sessionId] = true;
+        }),
+    },
+  })),
 );
 
 /** Whether a send from this session is held: live elsewhere and not overridden. */

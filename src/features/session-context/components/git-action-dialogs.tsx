@@ -32,7 +32,7 @@ import {
 } from "@tryatlas/design";
 
 export function GitActionDialogHost() {
-  const prompt = useSessionDetailsStore.use.gitPrompt();
+  const prompt = useSessionDetailsStore((s) => s.gitPrompt);
   if (!prompt) return null;
   const key = `${prompt.kind}:${prompt.path}:${prompt.action}`;
   return prompt.kind === "commit" ? (

@@ -21,7 +21,7 @@ export function PageProperties({
   referencesLabel = "—",
 }: PagePropertiesProps) {
   const meta = usePageMeta(entryId);
-  const { patch } = useKnowledgeMetaStore.use.actions();
+  const { patch } = useKnowledgeMetaStore((s) => s.actions);
 
   return (
     <PagePropertiesView

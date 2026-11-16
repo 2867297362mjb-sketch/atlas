@@ -14,8 +14,8 @@ import { MemoryGraph } from "./memory-graph";
 import { MemoryPolicyView } from "./memory-policy-view";
 
 export function MemoryAgentFiles() {
-  const view = useMemoryStore.use.filesView();
-  const { setFilesView } = useMemoryStore.use.actions();
+  const view = useMemoryStore((s) => s.filesView);
+  const { setFilesView } = useMemoryStore((s) => s.actions);
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 items-center gap-3 border-b border-border px-3 py-1.5">

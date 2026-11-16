@@ -21,7 +21,7 @@ export function RenameChannelMenu({
   conv: ChatConversation;
   children: ReactElement;
 }) {
-  const actions = useCommsStore.use.actions();
+  const actions = useCommsStore((s) => s.actions);
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState(false);
 

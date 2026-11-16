@@ -13,7 +13,6 @@
 import { create } from "zustand";
 import { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { createSelectors } from "@/lib/create-selectors";
 import { useAuthStore } from "@/features/auth/stores/auth-store";
 import { useOrgStore } from "@/features/organisations/stores/org-store";
 import type { Organisation } from "@/features/organisations/types";
@@ -62,74 +61,72 @@ interface AiGrantState {
  *  something anything renders. */
 let inFlight: Promise<Entitlement | null> | null = null;
 
-export const useAiGrantStore = createSelectors(
-  create<AiGrantState>()((set, get) => ({
-    entitlement: null,
-    probedOrgId: null,
-    checking: false,
-    dismissed: false,
-    actions: {
-      probe: () => {
-        if (inFlight) return inFlight;
-        // The org this answer will be ABOUT, captured before the await.
-        const askedFor = get().probedOrgId;
-        const run = async (): Promise<Entitlement | null> => {
-          try {
-            const result = await invoke<Entitlement>("native_agent_entitlement");
-            // The user can switch orgs mid-flight. A refusal that belongs to
-            // org1 must never land on org2 and lock its composer.
-            if (get().probedOrgId === askedFor) set({ entitlement: result });
-            return result;
-          } catch {
-            // A probe that fails tells us nothing about the grant.
-            return null;
-          }
-        };
-        const started = run().finally(() => {
-          // Only clear if a newer probe has not already replaced this one.
-          if (inFlight === started) inFlight = null;
-        });
-        inFlight = started;
-        return started;
-      },
-      refresh: async () => {
-        set({ checking: true });
-        const result = await get().actions.probe();
-        set({ checking: false });
-        return result !== null;
-      },
-      dismiss: () => set({ dismissed: true }),
-      resetForOrg: () =>
-        set({
-          entitlement: null,
-          probedOrgId: null,
-          dismissed: false,
-          checking: false,
-        }),
-      ensureProbed: (orgId) => {
-        const { probedOrgId, actions } = get();
-        // Already answered (or answering) for this org — the second, third and
-        // Nth composer just read what the first one fetched.
-        if (probedOrgId === orgId) return;
-        actions.resetForOrg();
-        set({ probedOrgId: orgId });
-        // Any probe still running is asking about the org we just left, so it
-        // must not be reused as this org's answer.
-        inFlight = null;
-        void actions.probe();
-      },
-      settleLocalOrg: (orgId) => {
-        const { probedOrgId, actions } = get();
-        if (probedOrgId === orgId) return;
-        actions.resetForOrg();
-        // A probe still running belongs to the synced org we just left; its
-        // answer must not land on this one.
-        inFlight = null;
-        set({ probedOrgId: orgId, entitlement: { state: "localOrg" } });
-      },
+export const useAiGrantStore = create<AiGrantState>()((set, get) => ({
+  entitlement: null,
+  probedOrgId: null,
+  checking: false,
+  dismissed: false,
+  actions: {
+    probe: () => {
+      if (inFlight) return inFlight;
+      // The org this answer will be ABOUT, captured before the await.
+      const askedFor = get().probedOrgId;
+      const run = async (): Promise<Entitlement | null> => {
+        try {
+          const result = await invoke<Entitlement>("native_agent_entitlement");
+          // The user can switch orgs mid-flight. A refusal that belongs to
+          // org1 must never land on org2 and lock its composer.
+          if (get().probedOrgId === askedFor) set({ entitlement: result });
+          return result;
+        } catch {
+          // A probe that fails tells us nothing about the grant.
+          return null;
+        }
+      };
+      const started = run().finally(() => {
+        // Only clear if a newer probe has not already replaced this one.
+        if (inFlight === started) inFlight = null;
+      });
+      inFlight = started;
+      return started;
     },
-  })),
-);
+    refresh: async () => {
+      set({ checking: true });
+      const result = await get().actions.probe();
+      set({ checking: false });
+      return result !== null;
+    },
+    dismiss: () => set({ dismissed: true }),
+    resetForOrg: () =>
+      set({
+        entitlement: null,
+        probedOrgId: null,
+        dismissed: false,
+        checking: false,
+      }),
+    ensureProbed: (orgId) => {
+      const { probedOrgId, actions } = get();
+      // Already answered (or answering) for this org — the second, third and
+      // Nth composer just read what the first one fetched.
+      if (probedOrgId === orgId) return;
+      actions.resetForOrg();
+      set({ probedOrgId: orgId });
+      // Any probe still running is asking about the org we just left, so it
+      // must not be reused as this org's answer.
+      inFlight = null;
+      void actions.probe();
+    },
+    settleLocalOrg: (orgId) => {
+      const { probedOrgId, actions } = get();
+      if (probedOrgId === orgId) return;
+      actions.resetForOrg();
+      // A probe still running belongs to the synced org we just left; its
+      // answer must not land on this one.
+      inFlight = null;
+      set({ probedOrgId: orgId, entitlement: { state: "localOrg" } });
+    },
+  },
+}));
 
 /** The organisation Atlas is acting for — the DESKTOP's active org, which is
  *  the one the user sees in the switcher. The auth snapshot's `activeOrgId`

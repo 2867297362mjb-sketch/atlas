@@ -17,8 +17,8 @@ import { opOutputText } from "../../lib/ask-git";
  * unless "Commit, push & PR" stopped on it: its progress block offers the same.
  */
 export function GitOpOutput() {
-  const activeOp = useGitStore.use.activeOp();
-  const repoPath = useGitStore.use.repoPath();
+  const activeOp = useGitStore((s) => s.activeOp);
+  const repoPath = useGitStore((s) => s.repoPath);
   // The command "Commit, push & PR" stopped on, while it is stopped.
   const shipFailedOn = useShipStore((s) => {
     const run = repoPath ? s.runs[repoPath] : undefined;

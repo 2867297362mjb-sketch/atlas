@@ -86,8 +86,8 @@ export function FileDockColumn({
   const root = useProjectStore(
     (s) => (projectId && s.projects.find((p) => p.id === projectId)?.path) || null,
   );
-  const treeShown = useFileTabTreeStore.use.shown();
-  const { setShown } = useFileTabTreeStore.use.actions();
+  const treeShown = useFileTabTreeStore((s) => s.shown);
+  const { setShown } = useFileTabTreeStore((s) => s.actions);
   const mode = fileDockMode({ root, activeTab, treeShown });
   const activeFile = activeTab && fileInProject(root, activeTab) ? fileTabPath(activeTab) : null;
   const activeId = activeTab?.id ?? null;
@@ -116,8 +116,8 @@ export function FileDockColumn({
   // being read. Taken during render, so the tree never reveals the reader's
   // file for a frame first. A path in another project means follow the reader.
   const filesActive = activeTab?.type === "files";
-  const request = useFilesRevealStore.use.request();
-  const { take } = useFilesRevealStore.use.actions();
+  const request = useFilesRevealStore((s) => s.request);
+  const { take } = useFilesRevealStore((s) => s.actions);
   const [filesReveal, setFilesReveal] = useState<{ path: string; nonce: number } | null>(null);
   const [seenRequest, setSeenRequest] = useState<number | null>(null);
   if (filesActive && root && request && request.nonce !== seenRequest) {

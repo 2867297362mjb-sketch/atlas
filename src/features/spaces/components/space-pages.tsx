@@ -37,7 +37,7 @@ export function SpacePages({
 }) {
   const pages = session.meta?.pages ?? [];
   const activeId = session.pageId;
-  const members = useCommsStore.use.members();
+  const members = useCommsStore((s) => s.members);
   const authors = useSpacesStore((s) => s.pageAuthors[convId]);
 
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());

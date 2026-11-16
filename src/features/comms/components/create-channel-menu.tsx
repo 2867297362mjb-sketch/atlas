@@ -6,7 +6,7 @@ import { CreateChannelMenuView } from "./views/create-channel-menu-view";
 
 /** The Channels section's `+`: creates the channel, then opens it. */
 export function CreateChannelMenu() {
-  const actions = useCommsStore.use.actions();
+  const actions = useCommsStore((s) => s.actions);
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState(false);
 

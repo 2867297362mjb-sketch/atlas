@@ -29,8 +29,8 @@ export function CreateOrgDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const { createOrgSynced } = useOrgStore.use.actions();
-  const signedIn = useAuthStore.use.snapshot().status === "signed-in";
+  const { createOrgSynced } = useOrgStore((s) => s.actions);
+  const signedIn = useAuthStore((s) => s.snapshot).status === "signed-in";
 
   const [name, setName] = useState("");
   const [handle, setHandle] = useState("");

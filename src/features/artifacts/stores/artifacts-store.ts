@@ -9,7 +9,6 @@
  */
 
 import { create } from "zustand";
-import { createSelectors } from "@/lib/create-selectors";
 import type { ProjectFilter } from "../types";
 
 /** Which Session the board is showing, and where inside it to land. */
@@ -41,13 +40,11 @@ interface ArtifactsState {
   };
 }
 
-export const useArtifactsStore = createSelectors(
-  create<ArtifactsState>((set) => ({
-    open: null,
-    projectFilter: null,
-    actions: {
-      openSession: (open) => set({ open }),
-      setProjectFilter: (projectFilter) => set({ projectFilter }),
-    },
-  })),
-);
+export const useArtifactsStore = create<ArtifactsState>((set) => ({
+  open: null,
+  projectFilter: null,
+  actions: {
+    openSession: (open) => set({ open }),
+    setProjectFilter: (projectFilter) => set({ projectFilter }),
+  },
+}));

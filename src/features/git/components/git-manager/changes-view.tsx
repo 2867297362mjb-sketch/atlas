@@ -220,7 +220,7 @@ function StashesGroup({
   open: boolean;
   setOpen: (update: (open: boolean) => boolean) => void;
 }) {
-  const actions = useGitStore.use.actions();
+  const actions = useGitStore((s) => s.actions);
   if (stashes.length === 0) return null;
   return (
     <div>
@@ -288,12 +288,12 @@ function StashesGroup({
  * hunk or a few lines be staged or discarded.
  */
 export function ChangesView() {
-  const files = useGitStore.use.files();
-  const stashes = useGitStore.use.stashes();
-  const inProgress = useGitStore.use.inProgress();
-  const repoPath = useGitStore.use.repoPath();
-  const actions = useGitStore.use.actions();
-  const currentProject = useAppStore.use.currentProject();
+  const files = useGitStore((s) => s.files);
+  const stashes = useGitStore((s) => s.stashes);
+  const inProgress = useGitStore((s) => s.inProgress);
+  const repoPath = useGitStore((s) => s.repoPath);
+  const actions = useGitStore((s) => s.actions);
+  const currentProject = useAppStore((s) => s.currentProject);
 
   const [selected, setSelected] = useState<string | null>(null);
   const [stashesOpen, setStashesOpen] = useState(false);

@@ -230,7 +230,7 @@ export function PullRequestCodeTab({
   const canPick = canComment || canAsk;
   const threads = useMemo(() => activity?.reviewThreads ?? [], [activity]);
   const pendingComments = usePendingReviewComments(repoPath, number);
-  const reviewActions = usePullRequestReviewStore.use.actions();
+  const reviewActions = usePullRequestReviewStore((s) => s.actions);
   const reviewKey = reviewKeyOf(repoPath, number);
   // The line comment being written, kept per tab (`pull-request-tab-draft-
   // store.ts`) so leaving the tab and coming back finds it as it was.

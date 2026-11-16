@@ -5,11 +5,11 @@ import { UpdateAvailableModalView } from "./views/update-available-modal-view";
 
 /** The update prompt's wiring. Mounted once at the app root. */
 export function UpdateAvailableModal() {
-  const phase = useUpdaterStore.use.phase();
-  const version = useUpdaterStore.use.version();
-  const error = useUpdaterStore.use.error();
-  const modalOpen = useUpdaterStore.use.modalOpen();
-  const { dismissModal } = useUpdaterStore.use.actions();
+  const phase = useUpdaterStore((s) => s.phase);
+  const version = useUpdaterStore((s) => s.version);
+  const error = useUpdaterStore((s) => s.error);
+  const modalOpen = useUpdaterStore((s) => s.modalOpen);
+  const { dismissModal } = useUpdaterStore((s) => s.actions);
 
   // Only the staged-ready, applying, and error phases have a modal.
   const state = phase === "ready" || phase === "applying" || phase === "error" ? phase : null;

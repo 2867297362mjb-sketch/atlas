@@ -255,9 +255,9 @@ export function SourceControlButton(props: DockButtonProps) {
 
 /** Opens the notification drawer; a dot while the active org has unread. */
 export function NotificationsButton(props: DockButtonProps) {
-  const activeOrgId = useOrgStore.use.activeOrganisationId();
+  const activeOrgId = useOrgStore((s) => s.activeOrganisationId);
   const unread = useNotificationsStore((s) => hasUnread(s.items, activeOrgId));
-  const { toggle } = useNotificationsStore.use.actions();
+  const { toggle } = useNotificationsStore((s) => s.actions);
   return (
     <DestinationButton
       {...props}

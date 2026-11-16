@@ -21,7 +21,7 @@ const FORMAT_BY_ID: Record<string, ExportFormat> = {
  */
 export function useCanvasExport(containerRef: RefObject<HTMLElement | null>) {
   const rf = useReactFlow();
-  const { setSelectedIds } = useCanvasStore.use.actions();
+  const { setSelectedIds } = useCanvasStore((s) => s.actions);
   const [exporting, setExporting] = useState<ExportFormat | null>(null);
 
   const run = async (format: ExportFormat) => {

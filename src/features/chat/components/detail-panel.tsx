@@ -66,7 +66,7 @@ function useToolCalls(messages: ChatMessage[]) {
 export function DetailPanel({ tabId, messages }: { tabId: string; messages: ChatMessage[] }) {
   const target = useDetailPanelStore((s) => s.targets[tabId] ?? null);
   const width = useDetailPanelStore((s) => s.width);
-  const { close, setWidth } = useDetailPanelStore.use.actions();
+  const { close, setWidth } = useDetailPanelStore((s) => s.actions);
   const byId = useToolCalls(messages);
   // The session column's window bar floats over this pane (z-titlebar); start
   // below it, or the bar covers this panel's header and eats its clicks.

@@ -10,13 +10,13 @@ import { Badge, Button, Callout, IconButton, Input, HintGroup, HintItem } from "
 /** Branch switcher popover: filter, checkout, create, delete, merge-into-current.
  *  The filter is a combobox over the list: ↑/↓ move (wrapping), Enter picks. */
 export function BranchSwitcher() {
-  const branch = useGitStore.use.branch();
-  const detached = useGitStore.use.detached();
-  const branchesFull = useGitStore.use.branchesFull();
+  const branch = useGitStore((s) => s.branch);
+  const detached = useGitStore((s) => s.detached);
+  const branchesFull = useGitStore((s) => s.branchesFull);
   // A merge, rebase, cherry-pick or revert under way: checking out or merging
   // now would tangle it, so the list only shows where things stand.
-  const busy = inProgressLabel(useGitStore.use.inProgress());
-  const actions = useGitStore.use.actions();
+  const busy = inProgressLabel(useGitStore((s) => s.inProgress));
+  const actions = useGitStore((s) => s.actions);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [creating, setCreating] = useState(false);

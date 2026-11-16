@@ -20,9 +20,9 @@ export function useSessionShelves(input: {
   scopeProjectId: string | null;
 }) {
   const { snoozed, settled, activeSessionId, live, scopeProjectId } = input;
-  const snoozedExpanded = useSidebarStore.use.snoozedExpanded();
-  const settledExpanded = useSidebarStore.use.settledExpanded();
-  const settledSearch = useSidebarStore.use.settledSearch();
+  const snoozedExpanded = useSidebarStore((s) => s.snoozedExpanded);
+  const settledExpanded = useSidebarStore((s) => s.settledExpanded);
+  const settledSearch = useSidebarStore((s) => s.settledSearch);
 
   // ── The Snoozed shelf ───────────────────────────────────────────────────
   const snoozedRows = useMemo(

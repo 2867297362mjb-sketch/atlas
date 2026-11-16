@@ -67,9 +67,9 @@ export function ProviderModelPills({
   onProvider: (id: string) => void;
   onModel: (id: string) => void;
 }) {
-  const keys = useByokStore.use.keys();
-  const loaded = useByokStore.use.loaded();
-  const { load } = useByokStore.use.actions();
+  const keys = useByokStore((s) => s.keys);
+  const loaded = useByokStore((s) => s.loaded);
+  const { load } = useByokStore((s) => s.actions);
 
   // Self-heal: make sure the BYOK keys are loaded before we read them.
   useEffect(() => {
@@ -162,9 +162,9 @@ export function ProviderModelPills({
   }, []);
 
   // Model pricing (models.dev, cached by Rust) — shows $/1M per model.
-  const prices = useModelPricingStore.use.prices();
-  const pricingLoading = useModelPricingStore.use.loading();
-  const { load: loadPricing, refresh: refreshPricing } = useModelPricingStore.use.actions();
+  const prices = useModelPricingStore((s) => s.prices);
+  const pricingLoading = useModelPricingStore((s) => s.loading);
+  const { load: loadPricing, refresh: refreshPricing } = useModelPricingStore((s) => s.actions);
   useEffect(() => {
     void loadPricing();
   }, [loadPricing]);

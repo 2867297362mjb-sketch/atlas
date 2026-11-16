@@ -2,7 +2,6 @@ import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useEffect, useMemo, useState } from "react";
-import { createSelectors } from "@/lib/create-selectors";
 
 export interface Backlink {
   fromEntryId: string;
@@ -65,13 +64,13 @@ const store = create<KnowledgeLinksState>()((set, get) => ({
   },
 }));
 
-export const useKnowledgeLinksStore = createSelectors(store);
+export const useKnowledgeLinksStore = store;
 
 /** Hook: fetch backlinks for a given entry id, re-runs when the store
  *  bumps `rev`. Returns an empty array while loading. */
 export function useBacklinks(entryId: string | null): Backlink[] {
-  const projectPath = useKnowledgeLinksStore.use.projectPath();
-  const rev = useKnowledgeLinksStore.use.rev();
+  const projectPath = useKnowledgeLinksStore((s) => s.projectPath);
+  const rev = useKnowledgeLinksStore((s) => s.rev);
   const [items, setItems] = useState<Backlink[]>([]);
   useEffect(() => {
     let cancelled = false;
@@ -96,8 +95,8 @@ export function useBacklinks(entryId: string | null): Backlink[] {
 /** Hook: live counts for the Properties strip's "References" row and
  *  any "N backlinks" badges. */
 function useLinkCounts(entryId: string | null): LinkCounts {
-  const projectPath = useKnowledgeLinksStore.use.projectPath();
-  const rev = useKnowledgeLinksStore.use.rev();
+  const projectPath = useKnowledgeLinksStore((s) => s.projectPath);
+  const rev = useKnowledgeLinksStore((s) => s.rev);
   const [counts, setCounts] = useState<LinkCounts>({ backlinks: 0, forwardlinks: 0 });
   useEffect(() => {
     let cancelled = false;

@@ -1,7 +1,6 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { createSelectors } from "@/lib/create-selectors";
 import type { ProjectGraph } from "../lib/knowledge-graph-model";
 
 export type { GraphEdge, GraphNode, ProjectGraph } from "../lib/knowledge-graph-model";
@@ -67,15 +66,15 @@ const store = create<KnowledgeGraphState>()((set, get) => ({
   },
 }));
 
-export const useKnowledgeGraphStore = createSelectors(store);
+export const useKnowledgeGraphStore = store;
 
 /** Hook: returns the cached graph + loading flag.
  *  - `loading` is true only on the first hydrate per project bind.
  *  - After that, the cached graph is returned synchronously and
  *    updates in-place when Rust emits `links-changed`. */
 export function useProjectGraph(): { graph: ProjectGraph; loading: boolean } {
-  const projectPath = useKnowledgeGraphStore.use.projectPath();
-  const graph = useKnowledgeGraphStore.use.graph();
+  const projectPath = useKnowledgeGraphStore((s) => s.projectPath);
+  const graph = useKnowledgeGraphStore((s) => s.graph);
   return {
     graph: graph ?? { nodes: [], edges: [] },
     loading: projectPath !== null && graph === null,

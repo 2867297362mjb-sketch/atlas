@@ -26,7 +26,6 @@
 import { create } from "zustand";
 
 import type { PrCreateDraft } from "@/features/pull-requests/lib/pull-requests-types";
-import { createSelectors } from "@/lib/create-selectors";
 
 import type { ProjectScript } from "../lib/session-context-api";
 import type { GitAction } from "../lib/git-quick-action";
@@ -97,53 +96,51 @@ interface SessionDetailsState {
   };
 }
 
-export const useSessionDetailsStore = createSelectors(
-  create<SessionDetailsState>()((set) => ({
-    hidden: {},
-    popoverFor: null,
-    instant: false,
-    scriptEditor: null,
-    scriptConfirm: null,
-    createPr: null,
-    gitPrompt: null,
-    actions: {
-      toggle: (scope, opts) =>
-        set((s) => {
-          const hidden = { ...s.hidden };
-          if (hidden[scope]) delete hidden[scope];
-          else hidden[scope] = true;
-          return { hidden, instant: !!opts?.instant };
-        }),
-      setPopover: (scope, next, opts) =>
-        set((s) => {
-          if (next) return { popoverFor: scope, instant: !!opts?.instant };
-          return s.popoverFor === scope ? { popoverFor: null } : s;
-        }),
-      close: (scope) =>
-        set((s) => {
-          if (s.hidden[scope] && s.popoverFor !== scope) return s;
-          return {
-            hidden: { ...s.hidden, [scope]: true },
-            popoverFor: s.popoverFor === scope ? null : s.popoverFor,
-          };
-        }),
-      adopt: (from, to) =>
-        set((s) => {
-          if (from === to || (!s.hidden[from] && s.popoverFor !== from)) return s;
-          const hidden = { ...s.hidden };
-          if (hidden[from]) {
-            delete hidden[from];
-            hidden[to] = true;
-          }
-          return { hidden, popoverFor: s.popoverFor === from ? to : s.popoverFor };
-        }),
-      editScript: (request) => set({ scriptEditor: request }),
-      confirmScript: (request) => set({ scriptConfirm: request }),
-      requestCreatePr: (request) => set({ createPr: request }),
-      promptGitAction: (request) => set({ gitPrompt: request }),
-    },
-  })),
-);
+export const useSessionDetailsStore = create<SessionDetailsState>()((set) => ({
+  hidden: {},
+  popoverFor: null,
+  instant: false,
+  scriptEditor: null,
+  scriptConfirm: null,
+  createPr: null,
+  gitPrompt: null,
+  actions: {
+    toggle: (scope, opts) =>
+      set((s) => {
+        const hidden = { ...s.hidden };
+        if (hidden[scope]) delete hidden[scope];
+        else hidden[scope] = true;
+        return { hidden, instant: !!opts?.instant };
+      }),
+    setPopover: (scope, next, opts) =>
+      set((s) => {
+        if (next) return { popoverFor: scope, instant: !!opts?.instant };
+        return s.popoverFor === scope ? { popoverFor: null } : s;
+      }),
+    close: (scope) =>
+      set((s) => {
+        if (s.hidden[scope] && s.popoverFor !== scope) return s;
+        return {
+          hidden: { ...s.hidden, [scope]: true },
+          popoverFor: s.popoverFor === scope ? null : s.popoverFor,
+        };
+      }),
+    adopt: (from, to) =>
+      set((s) => {
+        if (from === to || (!s.hidden[from] && s.popoverFor !== from)) return s;
+        const hidden = { ...s.hidden };
+        if (hidden[from]) {
+          delete hidden[from];
+          hidden[to] = true;
+        }
+        return { hidden, popoverFor: s.popoverFor === from ? to : s.popoverFor };
+      }),
+    editScript: (request) => set({ scriptEditor: request }),
+    confirmScript: (request) => set({ scriptConfirm: request }),
+    requestCreatePr: (request) => set({ createPr: request }),
+    promptGitAction: (request) => set({ gitPrompt: request }),
+  },
+}));
 
 /** Whether `scope`'s docked card shows, where its panel has room. */
 export function selectDockedOpen(s: SessionDetailsState, scope: string): boolean {

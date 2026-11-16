@@ -36,7 +36,7 @@ export interface DraftPeer {
  */
 export function useDraftSession(draft: PromptDraft) {
   const draftId = draft.id;
-  const me = useCommsStore.use.me();
+  const me = useCommsStore((s) => s.me);
 
   const doc = useMemo(() => new Y.Doc(), []);
   const ytext = useMemo(() => doc.getText(PROMPT_TEXT_KEY), [doc]);

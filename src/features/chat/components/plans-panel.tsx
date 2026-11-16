@@ -21,12 +21,12 @@ interface PlansPanelProps {
  * bash-history panel's right-side slide-in overlay.
  */
 export function PlansPanel({ onClose }: PlansPanelProps) {
-  const plansPanel = useLayoutStore.use.plansPanel();
+  const plansPanel = useLayoutStore((s) => s.plansPanel);
   // The session column's window bar floats over this pane (z-titlebar); start
   // below it, or the bar covers this panel's header and eats its clicks.
   const topInset = usePaneTopInset();
-  const { setPlansPanelWidth } = useLayoutStore.use.actions();
-  const projectPath = useAppStore.use.currentProject()?.path ?? null;
+  const { setPlansPanelWidth } = useLayoutStore((s) => s.actions);
+  const projectPath = useAppStore((s) => s.currentProject)?.path ?? null;
 
   const [plans, setPlans] = useState<PlanRecord[]>([]);
 

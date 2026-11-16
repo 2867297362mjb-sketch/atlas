@@ -14,7 +14,7 @@ import { ChatNoticeView } from "./views/chat-notice-view";
 export function LiveElsewhereBar({ tabId }: { tabId: string }) {
   const sessionId = useChatStore((s) => s.sessions[tabId]?.acpSessionId);
   const held = useSendHeldForTerminal(sessionId);
-  const sendAnyway = useLiveElsewhereStore.use.actions().sendAnyway;
+  const sendAnyway = useLiveElsewhereStore((s) => s.actions).sendAnyway;
   // Hiding the notice does not release the hold: a send still waits until
   // the session stops being live, or for "Send anyway" — hidden, that wait
   // has no explanation on screen, which is the user's call to make.

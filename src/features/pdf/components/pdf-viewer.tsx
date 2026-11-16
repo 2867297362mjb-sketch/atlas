@@ -21,11 +21,11 @@ export function PdfViewer({ filePath, tabId }: PdfViewerProps) {
   const [zoom, setZoom] = useState(1); // 1 = fit-to-width
   const [saving, setSaving] = useState(false);
 
-  const dirtyMap = usePdfAnnotationStore.use.dirty();
-  const tool = usePdfAnnotationStore.use.tool();
-  const color = usePdfAnnotationStore.use.color();
-  const selectedId = usePdfAnnotationStore.use.selectedId();
-  const annotations = usePdfAnnotationStore.use.byPath()[filePath] ?? NO_ANNOTATIONS;
+  const dirtyMap = usePdfAnnotationStore((s) => s.dirty);
+  const tool = usePdfAnnotationStore((s) => s.tool);
+  const color = usePdfAnnotationStore((s) => s.color);
+  const selectedId = usePdfAnnotationStore((s) => s.selectedId);
+  const annotations = usePdfAnnotationStore((s) => s.byPath)[filePath] ?? NO_ANNOTATIONS;
   const {
     load,
     save: saveAnnotations,
@@ -35,7 +35,7 @@ export function PdfViewer({ filePath, tabId }: PdfViewerProps) {
     remove,
     select,
     updateNoteText,
-  } = usePdfAnnotationStore.use.actions();
+  } = usePdfAnnotationStore((s) => s.actions);
   const saveShortcut = useActionShortcut("pdf.save");
   const isDirty = !!dirtyMap[filePath];
 

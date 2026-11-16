@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { create } from "zustand";
-import { createSelectors } from "@/lib/create-selectors";
 import { collectStores, restoreStores, snapshotStores } from "./reset-stores";
 
 interface Counter {
@@ -10,13 +9,11 @@ interface Counter {
 }
 
 function counterStore() {
-  return createSelectors(
-    create<Counter>()((set) => ({
-      count: 0,
-      tags: [],
-      actions: { bump: () => set((s) => ({ count: s.count + 1 })) },
-    })),
-  );
+  return create<Counter>()((set) => ({
+    count: 0,
+    tags: [],
+    actions: { bump: () => set((s) => ({ count: s.count + 1 })) },
+  }));
 }
 
 describe("collectStores", () => {

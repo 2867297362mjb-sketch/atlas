@@ -40,12 +40,12 @@ import {
 } from "@tryatlas/design";
 
 export function IconThemesSection() {
-  const settings = useSettingsStore.use.settings();
-  const { updateSettings } = useSettingsStore.use.actions();
-  const themes = useIconThemeStore.use.themes();
-  const loading = useIconThemeStore.use.loading();
-  const error = useIconThemeStore.use.error();
-  const { load } = useIconThemeStore.use.actions();
+  const settings = useSettingsStore((s) => s.settings);
+  const { updateSettings } = useSettingsStore((s) => s.actions);
+  const themes = useIconThemeStore((s) => s.themes);
+  const loading = useIconThemeStore((s) => s.loading);
+  const error = useIconThemeStore((s) => s.error);
+  const { load } = useIconThemeStore((s) => s.actions);
   const [adding, setAdding] = useState(false);
 
   useEffect(() => {
@@ -150,8 +150,8 @@ export function IconThemesSection() {
 
 function RemoveButton({ id, name }: { id: string; name: string }) {
   const [busy, setBusy] = useState(false);
-  const settings = useSettingsStore.use.settings();
-  const { updateSettings } = useSettingsStore.use.actions();
+  const settings = useSettingsStore((s) => s.settings);
+  const { updateSettings } = useSettingsStore((s) => s.actions);
 
   return (
     <Hint label={`Remove “${name}”`}>
@@ -196,7 +196,7 @@ function OpenVsxSearch() {
   const [query, setQuery] = useState("");
   const [state, setState] = useState<SearchState>({ phase: "idle" });
   const [installing, setInstalling] = useState<string | null>(null);
-  const themes = useIconThemeStore.use.themes();
+  const themes = useIconThemeStore((s) => s.themes);
   const installedIds = useMemo(() => new Set(themes.map((theme) => theme.id)), [themes]);
 
   // Only the latest search may land: a slow answer to an earlier query must

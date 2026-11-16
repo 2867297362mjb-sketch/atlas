@@ -56,7 +56,7 @@ export function TerminalTabStrip({
     setActivePane,
     toggleZoom,
     reorderTerminalsInPane,
-  } = useTerminalStore.use.actions();
+  } = useTerminalStore((s) => s.actions);
   // The tab being dragged; a drop on another tab moves it to that slot.
   const dragged = useRef<string | null>(null);
 

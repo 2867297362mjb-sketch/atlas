@@ -53,10 +53,10 @@ export function SearchOverlay({
   const searchSeq = useRef(0);
   // The query the shown results answer.
   const searchedQuery = useRef("");
-  const session = useSessionStore.use.session();
+  const session = useSessionStore((s) => s.session);
   const { addSearchHistory, removeSearchHistory, clearSearchHistory, saveSession } =
-    useSessionStore.use.actions();
-  const currentProject = useAppStore.use.currentProject();
+    useSessionStore((s) => s.actions);
+  const currentProject = useAppStore((s) => s.currentProject);
   const rootPath = currentProject?.path ?? null;
 
   useEffect(() => {

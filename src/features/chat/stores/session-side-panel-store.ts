@@ -8,7 +8,6 @@
 // panel's: opening one must not re-render a transcript row.
 
 import { create } from "zustand";
-import { createSelectors } from "@/lib/create-selectors";
 
 export type SessionSidePanel = "bash" | "plans";
 
@@ -42,7 +41,7 @@ const store = create<SessionSidePanelState>()((set) => ({
   },
 }));
 
-export const useSessionSidePanelStore = createSelectors(store);
+export const useSessionSidePanelStore = store;
 
 /** The tab's open side panel, or `null`. */
 export function useSessionSidePanel(tabId: string): SessionSidePanel | null {

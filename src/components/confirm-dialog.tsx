@@ -10,8 +10,8 @@ const pillButton =
  *  that asks one (`ConfirmPrompt.scope`). Escape and a click outside answer
  *  Cancel; Cancel has the focus, so Enter never destroys. */
 export function ConfirmDialog({ scope }: { scope?: string }) {
-  const pending = useConfirmStore.use.pending();
-  const { settle } = useConfirmStore.use.actions();
+  const pending = useConfirmStore((s) => s.pending);
+  const { settle } = useConfirmStore((s) => s.actions);
   if (!pending || pending.scope !== scope) return null;
 
   return (
