@@ -396,6 +396,69 @@ mod tests {
             .any(|e| matches!(e, Effect::TelemetryIdentity { .. })));
     }
 
+    /// The guard this module exists for: an effect applied on one path only.
+    ///
+    /// Both paths walk [`WIRING`], so a row is on both unless it says
+    /// otherwise, and the rows that say otherwise are named here. Wiring a new
+    /// effect to boot only or to a change only fails this test until the
+    /// effect is added to the list below, with the reason on its row.
+    #[test]
+    fn an_effect_on_one_path_only_is_a_named_exception() {
+        let settings = AppSettings::default();
+        let one_path_only: Vec<Effect> = WIRING
+            .iter()
+            .filter(|wiring| wiring.paths != Paths::Both)
+            .map(|wiring| (wiring.decide)(&settings))
+            .collect();
+        assert_eq!(
+            one_path_only,
+            vec![Effect::TelemetryIdentity {
+                link_to_account: settings.link_telemetry_to_account,
+            }],
+            "an effect is applied at boot only or on a change only"
+        );
+        for wiring in WIRING {
+            if let Paths::ChangeOnly(why) = wiring.paths {
+                assert!(why.len() >= 20, "a one-path effect states its reason");
+            }
+        }
+
+        // And the two paths agree on everything else: same effects, same
+        // order, same values.
+        let boot = effects(&settings, BOOT);
+        let changed: Vec<Effect> = effects(&settings, CHANGED)
+            .into_iter()
+            .filter(|effect| !one_path_only.contains(effect))
+            .collect();
+        assert_eq!(boot, changed);
+    }
+
+    /// Every [`Effect`] has a row in [`WIRING`]. The `match` has no wildcard,
+    /// so a new variant does not compile until it is given a slot here, and
+    /// then fails until it has a row.
+    #[test]
+    fn every_effect_is_wired() {
+        fn slot(effect: &Effect) -> usize {
+            match effect {
+                Effect::TelemetryGate(_) => 0,
+                Effect::TelemetryIdentity { .. } => 1,
+                Effect::CuratedPluginSync(_) => 2,
+                Effect::WindowBackground { .. } => 3,
+                Effect::AppIcon(_) => 4,
+                Effect::InstructionSync(_) => 5,
+                Effect::AtlasOnlyMemory(_) => 6,
+                Effect::KeepAwake(_) => 7,
+            }
+        }
+        const SLOTS: usize = 8;
+        let settings = AppSettings::default();
+        let mut rows = [0usize; SLOTS];
+        for wiring in WIRING {
+            rows[slot(&(wiring.decide)(&settings))] += 1;
+        }
+        assert_eq!(rows, [1; SLOTS], "each effect has exactly one row");
+    }
+
     /// The two effects whose target is process-wide, observed for real: the
     /// environment variable the engine reads, and the flag an agent launch
     /// reads. One test, because both targets are shared by the whole test
