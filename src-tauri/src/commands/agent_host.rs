@@ -19,6 +19,22 @@
 //!    touchpoint #3 depends on it — and turn identity is stamped here, at send
 //!    time, not by the thread (touchpoint #6).
 //!
+//! # Sessions
+//!
+//! The host does not keep the table of open sessions. The session registry
+//! (`atlas_agent_manager::sessions`) does: each session's record, its holds,
+//! and its steering state (`steering::Steering`). A session is bound through
+//! it and ended through it, whichever way it ends, and the host's part of an
+//! end is `AgentHost::follow_up`: the steps the registry hands back, done in
+//! the order given. The registry's module docs state that order and the lock
+//! rules.
+//!
+//! What is keyed by session id here and is *not* the registry's, because an
+//! end does not clear it: `activity` (a closed tab still owns its turn's
+//! trailing write), `wakes` (a held wake reopens a closed session),
+//! `aliases`, `access_requests` and the branch probes, each of which is
+//! settled by its own event rather than by the session ending.
+//!
 //! # No default agents
 //!
 //! There is no builtin table, no auto-acquire, and no spawn ladder (research
