@@ -869,8 +869,10 @@ mod tests {
         );
     }
 
-    /// A folder that is gone is not "git is not installed": both are a
-    /// `NotFound` from the spawn.
+    /// A folder that is gone is not "git is not installed": on Unix both are
+    /// a `NotFound` from the spawn. (Windows reports a missing folder with
+    /// its own error kind, which never read as git missing.)
+    #[cfg(unix)]
     #[test]
     fn a_missing_folder_is_not_reported_as_git_missing() {
         let gone = tempfile::tempdir().unwrap().path().join("deleted-worktree");
