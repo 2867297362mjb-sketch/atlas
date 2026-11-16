@@ -462,9 +462,12 @@ mod tests {
     /// The two effects whose target is process-wide, observed for real: the
     /// environment variable the engine reads, and the flag an agent launch
     /// reads. One test, because both targets are shared by the whole test
-    /// process; each is put back afterwards.
+    /// process; each is put back afterwards. The command-seam tests commit
+    /// settings through a real app and so write both too: the lock keeps the
+    /// two apart.
     #[test]
     fn process_wide_effects_reach_their_targets_on_both_paths() {
+        let _env = crate::command_seam::process_env();
         let gate = || std::env::var(CURATED_PLUGIN_SYNC_VAR).ok();
         let gate_before = gate();
         let memory_before = atlas_agent_servers::atlas_only_memory();
