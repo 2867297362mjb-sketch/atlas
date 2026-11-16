@@ -36,3 +36,12 @@
 //!
 //! Security: skill names are sanitized and every resolved path is verified to
 //! stay inside `<root>/.agents/skills` so a crafted name can't escape via `..`.
+
+mod disk;
+mod frontmatter;
+mod ledger;
+mod model;
+mod paths;
+mod registry;
+#[cfg(test)]
+mod test_support;
