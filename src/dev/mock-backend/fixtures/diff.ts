@@ -1,11 +1,10 @@
 // A tiny structured-diff engine for the mock backend.
 //
-// Rust builds `FileDiff` in `crates/atlas-gitdiff/src/engine.rs`: whole-file
-// context, `-`/`+` blocks paired into `changed` rows with word-level `emph`
-// spans, everything else left as `added` / `removed` / `context`. Hand-writing
-// that row model per fixture is unreadable and drifts the moment a fixture file
-// is edited, so the fakes hand this module two texts instead and get the same
-// shape back.
+// A row model of a file's diff: whole-file context, `-`/`+` blocks paired
+// into `changed` rows with word-level `emph` spans, everything else left as
+// `added` / `removed` / `context`. Hand-writing that per fixture is unreadable
+// and drifts the moment a fixture file is edited, so the fakes hand this
+// module two texts instead and get the rows back.
 //
 // The pairing heuristic is deliberately simpler than delta's `infer_edits`
 // (index-wise, gated on token similarity). It only has to produce a diff that
@@ -20,9 +19,10 @@ import type {
   DiffSource,
 } from "@/features/git/lib/git-review-api";
 
-// The engine's structured row model. The app no longer reads it (the review
-// diff parses unified patches), so it is the mock's own: the fakes derive the
-// editor gutter's line status and their +/- counts from it.
+// The row model is the mock's own: the app reads none of it (the review diff
+// parses unified patches, and Rust answers the gutter's line status straight
+// from the diff). The fakes derive that line status and their +/- counts
+// from it.
 type DiffLineKind = "context" | "added" | "removed" | "changed";
 interface DiffSegment {
   text: string;

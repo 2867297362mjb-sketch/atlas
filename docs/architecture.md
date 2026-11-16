@@ -349,7 +349,7 @@ All wired in as `path` dependencies from `src-tauri/Cargo.toml`, and all members
 | `atlas-redact` | Single source of truth for secret redaction: layered scrubbing (Shannon entropy, vendored betterleaks rules, provider prefixes, credentialed URIs, connection strings) with JSON-aware traversal. String in, redacted string out — no I/O, no async. |
 | `atlas-git` | Git for the whole workspace, Tauri-free. `GitCommand` is the single `git` spawn chokepoint over the real binary (so hooks run): one no-prompt environment, a timeout that kills, a raw run for callers that read the exit code or bytes themselves, streaming output for long operations, and a typed stderr→error taxonomy with friendly messages. `tests/spawn_audit.rs` fails on a git process built anywhere else. `Repository` holds the source-control rules (branches, sync, stash, history, commit) as plain functions, with the "repository changed" notification injected; the `git_ops` and `git` commands are adapters over it. Also porcelain-v2 status parsing. |
 | `atlas-gh` | The single `gh` spawn chokepoint (`GhCommand`), Tauri-free: a fixed no-prompt environment, a timeout that kills, a shared pool of API permits, the rate-limit pause, and one failure taxonomy for a run that produced no answer. What an answer means stays with the caller (`pull_requests/gh.rs` reads it as HTTP). |
-| `atlas-gitdiff` | Structured side-by-side diff engine: parses unified diffs, computes word-level intra-line change spans (word-diff vendored from `dandavison/delta`, MIT). |
+| `atlas-gitdiff` | The editor gutter's line status: parses a file's unified diff and tells its added lines from its changed ones (line pairing vendored from `dandavison/delta`, MIT). |
 | `atlas-terminal` | Wraps `portable-pty`, manages `TerminalSession`s, bridges PTY bytes to Tauri events. |
 | `atlas-memory` | On-device RAG/memory engine: MiniLM → a healing per-model vector file plus `corpus.sqlite` behind a `MemorySearchFn` seam; the shared-memory record store (`record`: SQLite per repository scope, redact-on-write, immutable hash-chained revisions as the canonical record (ADR-0017), hybrid BM25 + dense search); the reconciler (`health`); code citations checked at read time (`citation`, ADR-0018); consolidation, handoff notes, the dream pass and the Agent Memory Repo format (`consolidate`, `handoff`, `dream`, `amr`); and global promotion of Facts seen in two or more repositories to `~/.atlas/memory` (`global`). Read its `README.md` and `MIGRATION.md` before changing on-disk index formats. |
 | `atlas-instruction-sync` | Mirrors `CLAUDE.md` and `.claude/rules/` into one marked block of a project's `AGENTS.md`, for agents that read only `AGENTS.md`. Plain file I/O, no async, no Tauri; every byte outside the block is kept, and anything it cannot be sure of is skipped and logged. `commands::instruction_sync` decides when it runs. |
@@ -453,7 +453,7 @@ atlas/
 │   ├── atlas-redact               secret redaction (single source of truth)
 │   ├── atlas-git                  git spawn chokepoint, error taxonomy, source-control rules
 │   ├── atlas-gh                   gh spawn chokepoint: budget, pause, error taxonomy
-│   ├── atlas-gitdiff              structured diff engine
+│   ├── atlas-gitdiff              editor gutter line status
 │   ├── atlas-terminal             PTY (portable-pty)
 │   ├── atlas-memory               on-device RAG/memory engine
 │   ├── atlas-instruction-sync     CLAUDE.md + .claude/rules → AGENTS.md block

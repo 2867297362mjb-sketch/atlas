@@ -2,14 +2,14 @@
 //! a file's `git diff` in, the new file's added and changed lines out, plus
 //! the lines that follow a removal.
 
-use atlas_gitdiff::{build_file_diff, line_status, LineStatus};
+use atlas_gitdiff::{line_status, LineStatus};
 
 fn status(diff: &str) -> (Vec<u32>, Vec<u32>, Vec<u32>) {
     let LineStatus {
         added,
         changed,
         deleted_before,
-    } = line_status(&build_file_diff(diff, "", ""));
+    } = line_status(diff);
     (added, changed, deleted_before)
 }
 
