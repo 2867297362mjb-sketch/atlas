@@ -7,6 +7,7 @@
 //! wire, the `session/close` the agent was sent.
 
 use super::*;
+use atlas_acp_thread::test_support::FakeHandle;
 use atlas_agent_wire::{SessionDelta, SessionDeltaEnvelope};
 
 const SESSION: &str = "s-end";
@@ -147,13 +148,12 @@ struct Opened {
     deltas: Arc<Deltas>,
     /// Every id the end observers heard, in order.
     ended: Arc<std::sync::Mutex<Vec<String>>>,
-    /// Every id the agent was sent `session/close` for.
-    closes: Arc<std::sync::Mutex<Vec<String>>>,
+    /// The agent's script: every id it was sent `session/close` for, and the
+    /// release of one parked turn when the session was opened holding them.
+    fake: FakeHandle,
     /// The connection the session runs on, held weakly: whether it can still
     /// be upgraded is whether anything still pins the agent's process.
     connection: std::sync::Weak<dyn AgentConnection>,
-    /// Releases one parked turn, when the session was opened holding them.
-    turns: Arc<tokio::sync::Notify>,
     _watchdog: Watchdog,
 }
 
@@ -167,7 +167,7 @@ impl Opened {
     }
 
     fn closes(&self) -> Vec<String> {
-        self.closes.lock().unwrap().clone()
+        self.fake.closes()
     }
 
     fn connection_pinned(&self) -> bool {
@@ -182,13 +182,26 @@ impl Opened {
 /// The ids `on_session_ended` was told, in order.
 type EndedIds = Arc<std::sync::Mutex<Vec<String>>>;
 
+/// The native agent's script before a test adds what it advertises.
+fn script() -> FakeConnectionBuilder {
+    agent_script(ATLAS_AGENT_ID, SESSION)
+}
+
 fn observed_host(
-    advertised: Advertised,
-) -> (Arc<AgentHost>, PathBuf, Arc<Deltas>, EndedIds, Watchdog) {
+    script: FakeConnectionBuilder,
+) -> (
+    Arc<AgentHost>,
+    PathBuf,
+    Arc<Deltas>,
+    EndedIds,
+    Watchdog,
+    FakeHandle,
+) {
     let watchdog = Watchdog::arm();
     let deltas = Arc::new(Deltas::default());
+    let fake = script.handle();
     let (host, dir) = super::super::test_support::fresh_host_with_native_and_sink(
-        CapabilityAgent::new(ATLAS_AGENT_ID, SESSION, advertised),
+        ScriptedServer::new(fake.clone()),
         deltas.clone(),
     );
     let ended: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
@@ -196,21 +209,20 @@ fn observed_host(
     host.observe_session_end(Arc::new(move |session_id: &str| {
         heard.lock().unwrap().push(session_id.to_string());
     }));
-    (host, dir, deltas, ended, watchdog)
+    (host, dir, deltas, ended, watchdog, fake)
 }
 
 async fn open_with(hold_turns: bool) -> Opened {
-    let closes: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
-    let turns = Arc::new(tokio::sync::Notify::new());
-    let (host, dir, deltas, ended, watchdog) = observed_host(Advertised {
-        closes: Some(closes.clone()),
-        load: true,
-        hold_turns: hold_turns.then(|| turns.clone()),
-        live_catalogue: Some(ScriptedCatalogue::answering(
+    let mut script = script()
+        .supports_close()
+        .supports_load()
+        .model_catalogue(Arc::new(ScriptedCatalogue::answering(
             atlas_acp_thread::ModelCatalogueOutcome::ReconnectRequired,
-        )),
-        ..Advertised::default()
-    });
+        )));
+    if hold_turns {
+        script = script.hold_prompts();
+    }
+    let (host, dir, deltas, ended, watchdog, fake) = observed_host(script);
     let agent_id = host.spawn(ATLAS_AGENT_ID).await.expect("spawn").agent_id;
     tokio::task::yield_now().await;
     let connection = Arc::downgrade(
@@ -242,9 +254,8 @@ async fn open_with(hold_turns: bool) -> Opened {
         key: init.key,
         deltas,
         ended,
-        closes,
+        fake,
         connection,
-        turns,
         _watchdog: watchdog,
     }
 }
@@ -377,7 +388,7 @@ async fn closing_during_a_running_turn_ends_it_and_the_late_turn_brings_nothing_
     assert_eq!(s.residue(), only_the_row);
 
     // The turn's own task now comes back to a session that is gone.
-    s.turns.notify_one();
+    s.fake.release_prompt();
     until("the turn never returned", || {
         s.host
             .atlas_activity()
@@ -648,11 +659,7 @@ async fn a_remote_control_seat_outlives_the_agents_process() {
 
 #[tokio::test]
 async fn an_agent_killed_while_a_session_is_opening_on_it() {
-    let opens = Arc::new(tokio::sync::Notify::new());
-    let (host, dir, _deltas, ended, _watchdog) = observed_host(Advertised {
-        hold_opens: Some(opens.clone()),
-        ..Advertised::default()
-    });
+    let (host, dir, _deltas, ended, _watchdog, fake) = observed_host(script().hold_opens());
     let agent_id = host.spawn(ATLAS_AGENT_ID).await.expect("spawn").agent_id;
     let opening = tokio::spawn({
         let (host, dir) = (host.clone(), dir.clone());
@@ -661,7 +668,7 @@ async fn an_agent_killed_while_a_session_is_opening_on_it() {
     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 
     host.kill(agent_id).expect("kill");
-    opens.notify_one();
+    fake.release_open();
     let opened = opening.await.expect("joined");
 
     assert!(opened.is_err(), "the session opened on a killed agent");
@@ -675,14 +682,8 @@ async fn an_agent_killed_while_a_session_is_opening_on_it() {
 
 #[tokio::test]
 async fn a_session_closed_while_it_is_loading_does_not_come_back() {
-    let opens = Arc::new(tokio::sync::Notify::new());
-    let closes: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
-    let (host, dir, _deltas, ended, _watchdog) = observed_host(Advertised {
-        hold_opens: Some(opens.clone()),
-        load: true,
-        closes: Some(closes.clone()),
-        ..Advertised::default()
-    });
+    let (host, dir, _deltas, ended, _watchdog, fake) =
+        observed_host(script().hold_opens().supports_load().supports_close());
     let agent_id = host.spawn(ATLAS_AGENT_ID).await.expect("spawn").agent_id;
     let loading = tokio::spawn({
         let (host, dir) = (host.clone(), dir.clone());
@@ -692,13 +693,13 @@ async fn a_session_closed_while_it_is_loading_does_not_come_back() {
 
     // The tab closes before the agent has answered the load.
     host.drop_session(SESSION).await.expect("drop");
-    opens.notify_one();
+    fake.release_open();
     let loaded = loading.await.expect("joined");
 
     assert!(loaded.is_err(), "the session bound with no tab to show it");
     assert_eq!(residue(&host, SESSION), Residue::default());
     assert_eq!(
-        *closes.lock().unwrap(),
+        fake.closes(),
         [SESSION],
         "the agent is told to let go of what it loaded"
     );

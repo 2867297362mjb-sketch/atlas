@@ -29,7 +29,15 @@ url = "2"
 uuid = { version = "1", features = ["v4"] }
 tracing = "0.1.44"
 
+[features]
+# `test_support::FakeConnection`, the one scripted `AgentConnection` every
+# crate's tests share. Turned on under `[dev-dependencies]` only, here and in
+# every consumer, so no shipping build compiles it.
+test-support = []
+
 [dev-dependencies]
+# This crate's own integration tests use the fake too.
+atlas-acp-thread = { path = ".", features = ["test-support"] }
 tokio = { version = "1", features = ["full", "test-util"] }
 
 # The workspace lint table is only real for members that opt in —

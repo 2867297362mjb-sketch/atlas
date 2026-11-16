@@ -27,6 +27,8 @@ uuid = { version = "1", features = ["v4"] }
 libc = "0.2"
 
 [dev-dependencies]
+# The shared scripted `AgentConnection`; the feature is for tests only.
+atlas-acp-thread = { path = "../atlas-acp-thread", features = ["test-support"] }
 tokio = { version = "1", features = ["full", "test-util"] }
 
 # The workspace lint table is only real for members that opt in —

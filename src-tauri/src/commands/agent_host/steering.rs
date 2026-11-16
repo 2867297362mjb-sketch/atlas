@@ -1289,13 +1289,10 @@ impl AgentHost {
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_support::fresh_host_with_native_and_sink;
+    use super::super::test_support::{fresh_host_with_native_and_sink, ScriptedServer};
     use super::*;
-    use atlas_acp_thread::AgentConnection;
-    use atlas_agent_servers::AgentServerDelegate;
+    use atlas_acp_thread::test_support::{FakeConnection, FakeHandle};
     use atlas_agent_wire::{SessionDelta, SessionDeltaEnvelope};
-    use futures::future::BoxFuture;
-    use futures::FutureExt;
     use std::time::Duration;
 
     #[derive(Default)]
@@ -1327,109 +1324,6 @@ mod tests {
         }
     }
 
-    /// A native agent whose turns run until released (or cancelled), and
-    /// which remembers every prompt it was sent.
-    struct GatedNative {
-        session_id: &'static str,
-        events: Mutex<Option<atlas_agent_servers::ThreadEventSink>>,
-        prompts: Mutex<Vec<String>>,
-        release: Arc<tokio::sync::Notify>,
-    }
-
-    impl GatedNative {
-        fn new(session_id: &'static str) -> Arc<Self> {
-            Arc::new(Self {
-                session_id,
-                events: Mutex::new(None),
-                prompts: Mutex::new(Vec::new()),
-                release: Arc::new(tokio::sync::Notify::new()),
-            })
-        }
-
-        fn prompts(&self) -> Vec<String> {
-            self.prompts.lock().unwrap().clone()
-        }
-    }
-
-    impl AgentConnection for GatedNative {
-        fn agent_id(&self) -> atlas_acp_thread::AgentId {
-            atlas_acp_thread::AgentId::new(ATLAS_AGENT_ID)
-        }
-
-        fn telemetry_id(&self) -> Arc<str> {
-            ATLAS_AGENT_ID.into()
-        }
-
-        fn new_session(
-            self: Arc<Self>,
-            work_dirs: Vec<PathBuf>,
-        ) -> BoxFuture<'static, anyhow::Result<AcpThreadHandle>> {
-            let session_id = acp::SessionId::new(self.session_id);
-            let sink = self.events.lock().unwrap().clone().expect("connected");
-            let thread = Arc::new(Mutex::new(AcpThread::new(
-                session_id.clone(),
-                self.clone() as Arc<dyn AgentConnection>,
-                work_dirs,
-                None,
-                sink(&session_id),
-            )));
-            async move { Ok(thread) }.boxed()
-        }
-
-        fn auth_methods(&self) -> &[acp::AuthMethod] {
-            &[]
-        }
-
-        fn authenticate(
-            &self,
-            _method: acp::AuthMethodId,
-        ) -> BoxFuture<'static, anyhow::Result<()>> {
-            async { Ok(()) }.boxed()
-        }
-
-        fn prompt(
-            &self,
-            params: acp::PromptRequest,
-        ) -> BoxFuture<'static, anyhow::Result<acp::PromptResponse>> {
-            self.prompts
-                .lock()
-                .unwrap()
-                .push(prompt::flatten_text(&params.prompt));
-            let release = self.release.clone();
-            async move {
-                release.notified().await;
-                Ok(acp::PromptResponse::new(acp::StopReason::EndTurn))
-            }
-            .boxed()
-        }
-
-        fn cancel(&self, _session_id: &acp::SessionId) {
-            self.release.notify_one();
-        }
-    }
-
-    struct GatedServer(Arc<GatedNative>);
-
-    impl AgentServer for GatedServer {
-        fn agent_id(&self) -> atlas_acp_thread::AgentId {
-            atlas_acp_thread::AgentId::new(ATLAS_AGENT_ID)
-        }
-
-        fn connect(
-            &self,
-            _delegate: AgentServerDelegate,
-            options: ConnectOptions,
-        ) -> BoxFuture<'static, anyhow::Result<Arc<dyn AgentConnection>>> {
-            *self.0.events.lock().unwrap() = Some(options.thread_events);
-            let connection = self.0.clone();
-            async move { Ok(connection as Arc<dyn AgentConnection>) }.boxed()
-        }
-
-        fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
-            self
-        }
-    }
-
     #[derive(Default)]
     struct SeenPrompts(Mutex<Vec<(String, String, Origin)>>);
 
@@ -1445,19 +1339,23 @@ mod tests {
 
     struct Fixture {
         host: Arc<AgentHost>,
-        native: Arc<GatedNative>,
+        /// The native agent's script: its turns run until released (or
+        /// cancelled), and it remembers every prompt it was sent.
+        native: FakeHandle,
         recorder: Arc<Recorder>,
         key: SessionKey,
         dir: PathBuf,
     }
 
     async fn fixture(session_id: &'static str) -> Fixture {
-        let native = GatedNative::new(session_id);
+        let native = FakeConnection::builder()
+            .agent(ATLAS_AGENT_ID)
+            .session_id(session_id)
+            .hold_prompts()
+            .handle();
         let recorder = Arc::new(Recorder::default());
-        let (host, dir) = fresh_host_with_native_and_sink(
-            Arc::new(GatedServer(native.clone())),
-            recorder.clone(),
-        );
+        let (host, dir) =
+            fresh_host_with_native_and_sink(ScriptedServer::new(native.clone()), recorder.clone());
         let agent_id = host.spawn(ATLAS_AGENT_ID).await.expect("spawn").agent_id;
         let init = host
             .new_session(agent_id, dir.clone(), Vec::new())
@@ -1543,7 +1441,7 @@ mod tests {
         f.host
             .set_remote_seat(&f.key.session_id, OWNER, None, ada_drives().map(|d| d.id));
         assert_eq!(f.recorder.last_queue(), Some(vec!["ada two".into()]));
-        f.native.release.notify_one();
+        f.native.release_prompt();
         idle(&f).await;
         assert_eq!(f.native.prompts(), ["ada one"], "held, not run");
 
@@ -1552,7 +1450,7 @@ mod tests {
             .set_remote_driver(&f.key.session_id, OWNER, ada_drives());
         until("ada two runs", || f.native.prompts().len() == 2).await;
         assert_eq!(f.native.prompts(), ["ada one", "ada two"]);
-        f.native.release.notify_one();
+        f.native.release_prompt();
         idle(&f).await;
         let _ = std::fs::remove_dir_all(&f.dir);
     }
@@ -1591,7 +1489,7 @@ mod tests {
         assert_eq!(f.recorder.last_queue(), Some(Vec::new()));
         assert!(f.host.snapshot_meta(&f.key).unwrap().queue.is_empty());
 
-        f.native.release.notify_one();
+        f.native.release_prompt();
         idle(&f).await;
         assert_eq!(f.native.prompts(), ["ada one"], "nothing of Ada's drained");
         let _ = std::fs::remove_dir_all(&f.dir);
@@ -1646,10 +1544,10 @@ mod tests {
             )
             .unwrap();
 
-        f.native.release.notify_one();
+        f.native.release_prompt();
         until("ada's prompt ran next", || f.native.prompts().len() == 2).await;
         assert_eq!(f.native.prompts()[1], "ada's", "the driver's went first");
-        f.native.release.notify_one();
+        f.native.release_prompt();
         idle(&f).await;
         assert_eq!(
             f.native.prompts().len(),
@@ -1668,10 +1566,10 @@ mod tests {
         })
         .await;
         assert_eq!(f.native.prompts()[2], "mine, later");
-        f.native.release.notify_one();
+        f.native.release_prompt();
         until("then the phone's", || f.native.prompts().len() == 4).await;
         assert_eq!(f.native.prompts()[3], "from my phone");
-        f.native.release.notify_one();
+        f.native.release_prompt();
         let _ = std::fs::remove_dir_all(&f.dir);
     }
 
@@ -1743,10 +1641,10 @@ mod tests {
             "the snapshot shows the same head"
         );
 
-        f.native.release.notify_one();
+        f.native.release_prompt();
         until("the long prompt ran", || f.native.prompts().len() == 2).await;
         assert_eq!(f.native.prompts()[1], long, "the agent got all of it");
-        f.native.release.notify_one();
+        f.native.release_prompt();
         let _ = std::fs::remove_dir_all(&f.dir);
     }
 
@@ -1852,9 +1750,9 @@ mod tests {
             .enqueue(&f.key, Prompt::text("mine"), Origin::Local)
             .expect("the seat is the owner's");
         assert_eq!(f.native.prompts(), ["ada's"]);
-        f.native.release.notify_one();
+        f.native.release_prompt();
         until("then the owner's", || f.native.prompts().len() == 2).await;
-        f.native.release.notify_one();
+        f.native.release_prompt();
         let _ = std::fs::remove_dir_all(&f.dir);
     }
 
@@ -1880,7 +1778,7 @@ mod tests {
             f.native.prompts() == ["ada's"]
         })
         .await;
-        f.native.release.notify_one();
+        f.native.release_prompt();
         let _ = std::fs::remove_dir_all(&f.dir);
     }
 
@@ -1934,7 +1832,7 @@ mod tests {
             })
         })
         .await;
-        f.native.release.notify_one();
+        f.native.release_prompt();
         let _ = std::fs::remove_dir_all(&f.dir);
     }
 
@@ -2007,7 +1905,7 @@ mod tests {
             )
             .expect("the seat is back");
         until("the owner's prompt ran", || f.native.prompts().len() == 2).await;
-        f.native.release.notify_one();
+        f.native.release_prompt();
         let _ = std::fs::remove_dir_all(&f.dir);
     }
 
@@ -2045,14 +1943,14 @@ mod tests {
         );
         assert_eq!(f.host.snapshot_meta(&f.key).unwrap().queue.len(), 2);
 
-        f.native.release.notify_one();
+        f.native.release_prompt();
         until("turn two runs", || f.native.prompts().len() == 2).await;
         assert_eq!(f.native.prompts()[1], "two");
         assert_eq!(f.recorder.last_queue(), Some(vec!["three".into()]));
 
-        f.native.release.notify_one();
+        f.native.release_prompt();
         until("turn three runs", || f.native.prompts().len() == 3).await;
-        f.native.release.notify_one();
+        f.native.release_prompt();
         let _ = std::fs::remove_dir_all(&f.dir);
     }
 
@@ -2093,7 +1991,7 @@ mod tests {
         assert_eq!(f.host.drain_queue(&f.key).unwrap(), None, "paused");
         f.host.set_queue_paused(&f.key, false).unwrap();
         until("released, it runs", || f.native.prompts().len() == 2).await;
-        f.native.release.notify_one();
+        f.native.release_prompt();
         let _ = std::fs::remove_dir_all(&f.dir);
     }
 
@@ -2123,9 +2021,9 @@ mod tests {
         until("the urgent prompt runs", || f.native.prompts().len() == 2).await;
         assert_eq!(f.native.prompts()[1], "urgent");
         assert_eq!(f.recorder.last_queue(), Some(vec!["later".into()]));
-        f.native.release.notify_one();
+        f.native.release_prompt();
         until("then the rest", || f.native.prompts().len() == 3).await;
-        f.native.release.notify_one();
+        f.native.release_prompt();
         let _ = std::fs::remove_dir_all(&f.dir);
     }
 

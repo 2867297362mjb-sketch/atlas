@@ -4503,18 +4503,27 @@ mod tests {
         assert!(probes.latest.is_empty(), "nothing in flight, nothing kept");
     }
 
-    use super::test_support::{fresh_host, fresh_host_with_native};
+    use super::test_support::{fresh_host, fresh_host_with_native, ScriptedServer};
     use super::*;
-    use atlas_acp_thread::{AcpThread, AcpThreadHandle, AgentConnection};
-    use atlas_agent_servers::AgentServerDelegate;
+    use atlas_acp_thread::test_support::{FakeConnection, FakeConnectionBuilder};
+    use atlas_acp_thread::AgentConnection;
     use futures::future::BoxFuture;
     use futures::FutureExt;
 
     /// A native agent that reopens every session under one fixed id of its
     /// own choosing — the shape of the engine's fresh-thread fallback for a
-    /// row whose stored id it does not know.
-    struct RebindingNative {
-        fresh_id: &'static str,
+    /// row whose stored id it does not know. A load does not honour the
+    /// stored id: the thread comes back under the agent's own fresh id.
+    fn rebinding_native(fresh_id: &str) -> Arc<ScriptedServer> {
+        ScriptedServer::detached(
+            FakeConnection::builder()
+                .agent(ATLAS_AGENT_ID)
+                .session_id(fresh_id)
+                .supports_load()
+                .loads_rebind()
+                .model_selector(Arc::new(FakeSelector))
+                .handle(),
+        )
     }
 
     /// A selector that knows its default before any pick — the shape the
@@ -4555,192 +4564,11 @@ mod tests {
         }
     }
 
-    impl AgentConnection for RebindingNative {
-        fn agent_id(&self) -> atlas_acp_thread::AgentId {
-            atlas_acp_thread::AgentId::new(ATLAS_AGENT_ID)
-        }
-
-        fn telemetry_id(&self) -> Arc<str> {
-            ATLAS_AGENT_ID.into()
-        }
-
-        fn new_session(
-            self: Arc<Self>,
-            work_dirs: Vec<PathBuf>,
-        ) -> BoxFuture<'static, anyhow::Result<AcpThreadHandle>> {
-            let thread = self.thread(acp::SessionId::new(self.fresh_id), work_dirs);
-            async move { Ok(thread) }.boxed()
-        }
-
-        fn supports_load_session(&self) -> bool {
-            true
-        }
-
-        fn load_session(
-            self: Arc<Self>,
-            _session_id: acp::SessionId,
-            work_dirs: Vec<PathBuf>,
-            _title: Option<Arc<str>>,
-        ) -> BoxFuture<'static, anyhow::Result<AcpThreadHandle>> {
-            // The stored id is not honoured: the thread comes back under the
-            // agent's own fresh id, exactly like the engine's fallback.
-            let thread = self.thread(acp::SessionId::new(self.fresh_id), work_dirs);
-            async move { Ok(thread) }.boxed()
-        }
-
-        fn auth_methods(&self) -> &[acp::AuthMethod] {
-            &[]
-        }
-
-        fn authenticate(
-            &self,
-            _method: acp::AuthMethodId,
-        ) -> BoxFuture<'static, anyhow::Result<()>> {
-            async { Ok(()) }.boxed()
-        }
-
-        fn prompt(
-            &self,
-            _params: acp::PromptRequest,
-        ) -> BoxFuture<'static, anyhow::Result<acp::PromptResponse>> {
-            async { Ok(acp::PromptResponse::new(acp::StopReason::EndTurn)) }.boxed()
-        }
-
-        fn cancel(&self, _session_id: &acp::SessionId) {}
-
-        fn model_selector(
-            &self,
-            _session_id: &acp::SessionId,
-        ) -> Option<Arc<dyn atlas_acp_thread::AgentModelSelector>> {
-            Some(Arc::new(FakeSelector))
-        }
-    }
-
-    impl RebindingNative {
-        fn thread(
-            self: &Arc<Self>,
-            session_id: acp::SessionId,
-            work_dirs: Vec<PathBuf>,
-        ) -> AcpThreadHandle {
-            Arc::new(std::sync::Mutex::new(AcpThread::new(
-                session_id,
-                self.clone() as Arc<dyn AgentConnection>,
-                work_dirs,
-                None,
-                atlas_acp_thread::event_channel().0,
-            )))
-        }
-    }
-
-    impl AgentServer for RebindingNative {
-        fn agent_id(&self) -> atlas_acp_thread::AgentId {
-            atlas_acp_thread::AgentId::new(ATLAS_AGENT_ID)
-        }
-
-        fn connect(
-            &self,
-            _delegate: AgentServerDelegate,
-            _options: ConnectOptions,
-        ) -> BoxFuture<'static, anyhow::Result<Arc<dyn AgentConnection>>> {
-            let connection = Arc::new(RebindingNative {
-                fresh_id: self.fresh_id,
-            });
-            async move { Ok(connection as Arc<dyn AgentConnection>) }.boxed()
-        }
-
-        fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
-            self
-        }
-    }
-
     /// A native agent whose threads report to the host the way a real
     /// connection's do — through the `thread_events` sink it was handed at
     /// connect — so an event on the thread reaches the host's observer.
-    struct LiveNative {
-        session_id: &'static str,
-        events: std::sync::Mutex<Option<atlas_agent_servers::ThreadEventSink>>,
-    }
-
-    impl LiveNative {
-        fn new(session_id: &'static str) -> Arc<Self> {
-            Arc::new(Self {
-                session_id,
-                events: std::sync::Mutex::new(None),
-            })
-        }
-    }
-
-    impl AgentConnection for LiveNative {
-        fn agent_id(&self) -> atlas_acp_thread::AgentId {
-            atlas_acp_thread::AgentId::new(ATLAS_AGENT_ID)
-        }
-
-        fn telemetry_id(&self) -> Arc<str> {
-            ATLAS_AGENT_ID.into()
-        }
-
-        fn new_session(
-            self: Arc<Self>,
-            work_dirs: Vec<PathBuf>,
-        ) -> BoxFuture<'static, anyhow::Result<AcpThreadHandle>> {
-            let session_id = acp::SessionId::new(self.session_id);
-            let sink = self
-                .events
-                .lock()
-                .unwrap()
-                .clone()
-                .expect("connected first");
-            let thread = Arc::new(std::sync::Mutex::new(AcpThread::new(
-                session_id.clone(),
-                self.clone() as Arc<dyn AgentConnection>,
-                work_dirs,
-                None,
-                sink(&session_id),
-            )));
-            async move { Ok(thread) }.boxed()
-        }
-
-        fn auth_methods(&self) -> &[acp::AuthMethod] {
-            &[]
-        }
-
-        fn authenticate(
-            &self,
-            _method: acp::AuthMethodId,
-        ) -> BoxFuture<'static, anyhow::Result<()>> {
-            async { Ok(()) }.boxed()
-        }
-
-        fn prompt(
-            &self,
-            _params: acp::PromptRequest,
-        ) -> BoxFuture<'static, anyhow::Result<acp::PromptResponse>> {
-            async { Ok(acp::PromptResponse::new(acp::StopReason::EndTurn)) }.boxed()
-        }
-
-        fn cancel(&self, _session_id: &acp::SessionId) {}
-    }
-
-    impl AgentServer for LiveNative {
-        fn agent_id(&self) -> atlas_acp_thread::AgentId {
-            atlas_acp_thread::AgentId::new(ATLAS_AGENT_ID)
-        }
-
-        fn connect(
-            &self,
-            _delegate: AgentServerDelegate,
-            options: ConnectOptions,
-        ) -> BoxFuture<'static, anyhow::Result<Arc<dyn AgentConnection>>> {
-            let connection = Arc::new(LiveNative {
-                session_id: self.session_id,
-                events: std::sync::Mutex::new(Some(options.thread_events)),
-            });
-            async move { Ok(connection as Arc<dyn AgentConnection>) }.boxed()
-        }
-
-        fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
-            self
-        }
+    fn live_native(session_id: &str) -> Arc<ScriptedServer> {
+        ScriptedServer::new(agent_script(ATLAS_AGENT_ID, session_id).handle())
     }
 
     /// A host recording session lifecycle into shared memory, a project
@@ -4771,7 +4599,7 @@ mod tests {
     /// agent like any other here, recorded under its stored id.
     #[tokio::test]
     async fn a_dropped_session_leaves_its_start_end_and_agent() {
-        let (host, dir, project, record) = recording_host(LiveNative::new("s-drop"));
+        let (host, dir, project, record) = recording_host(live_native("s-drop"));
         let agent_id = host.spawn(ATLAS_AGENT_ID).await.expect("spawn").agent_id;
         host.new_session(agent_id, project.clone(), Vec::new())
             .await
@@ -4799,7 +4627,7 @@ mod tests {
     /// instead of retrying a snapshot of a session that no longer exists.
     #[tokio::test]
     async fn an_agent_process_exit_ends_a_held_session_and_tells_the_observers() {
-        let (host, dir, project, _record) = recording_host(LiveNative::new("s-exit-held"));
+        let (host, dir, project, _record) = recording_host(live_native("s-exit-held"));
         let ended: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
         let heard = ended.clone();
         host.observe_session_end(Arc::new(move |session_id: &str| {
@@ -4853,7 +4681,7 @@ mod tests {
     /// connection announces the exit on every live thread as a load error.
     #[tokio::test]
     async fn an_agent_process_exit_ends_its_session() {
-        let (host, dir, project, record) = recording_host(LiveNative::new("s-exit"));
+        let (host, dir, project, record) = recording_host(live_native("s-exit"));
         let agent_id = host.spawn(ATLAS_AGENT_ID).await.expect("spawn").agent_id;
         host.new_session(agent_id, project.clone(), Vec::new())
             .await
@@ -4891,7 +4719,7 @@ mod tests {
     /// session it had open.
     #[tokio::test]
     async fn killing_an_agent_ends_its_sessions() {
-        let (host, dir, project, record) = recording_host(LiveNative::new("s-kill"));
+        let (host, dir, project, record) = recording_host(live_native("s-kill"));
         let agent_id = host.spawn(ATLAS_AGENT_ID).await.expect("spawn").agent_id;
         host.new_session(agent_id, project.clone(), Vec::new())
             .await
@@ -4910,7 +4738,7 @@ mod tests {
     /// tab rebinds through `session/load` instead.
     #[tokio::test]
     async fn an_evicted_agents_sessions_are_forgotten_so_the_tab_rebinds() {
-        let (host, dir, project, record) = recording_host(LiveNative::new("s-evict"));
+        let (host, dir, project, record) = recording_host(live_native("s-evict"));
         let agent_id = host.spawn(ATLAS_AGENT_ID).await.expect("spawn").agent_id;
         host.new_session(agent_id, project.clone(), Vec::new())
             .await
@@ -4939,9 +4767,7 @@ mod tests {
     /// model, while the agent knew its model the whole time.
     #[tokio::test]
     async fn a_new_native_session_knows_its_model_before_any_pick() {
-        let native = Arc::new(RebindingNative {
-            fresh_id: "s-model",
-        });
+        let native = rebinding_native("s-model");
         let (host, dir) = fresh_host_with_native(native);
 
         let agent_id = host.spawn(ATLAS_AGENT_ID).await.expect("spawn").agent_id;
@@ -4965,9 +4791,7 @@ mod tests {
     /// sent turn is counted in and out, leaving the time it ended behind.
     #[tokio::test]
     async fn only_a_sent_turn_counts_as_atlas_activity() {
-        let native = Arc::new(RebindingNative {
-            fresh_id: "s-activity",
-        });
+        let native = rebinding_native("s-activity");
         let (host, dir) = fresh_host_with_native(native);
         let agent_id = host.spawn(ATLAS_AGENT_ID).await.expect("spawn").agent_id;
         let init = host
@@ -5018,7 +4842,7 @@ mod tests {
     /// cache) instead of reusing the credentialled one.
     #[tokio::test]
     async fn dropping_the_native_connection_leaves_nothing_running() {
-        let native = Arc::new(RebindingNative { fresh_id: "s-1" });
+        let native = rebinding_native("s-1");
         let (host, dir) = fresh_host_with_native(native);
 
         host.spawn(ATLAS_AGENT_ID)
@@ -5041,76 +4865,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// What a [`CapabilityAgent`] advertises. Everything defaults to "no",
-    /// which is what a connection that says nothing gets from the seam.
-    #[derive(Clone, Default)]
-    struct Advertised {
-        /// Forks into this session id.
-        fork: Option<&'static str>,
-        /// Records every effort level it is handed.
-        effort: Option<Arc<std::sync::Mutex<Vec<Option<String>>>>>,
-        /// What the launcher answers a refresh with — nothing is running.
-        stored_catalogue: Option<ScriptedCatalogue>,
-        /// What the connection answers a refresh with.
-        live_catalogue: Option<ScriptedCatalogue>,
-        /// Parks every prompt until notified, so a turn stays running.
-        hold_turns: Option<Arc<tokio::sync::Notify>>,
-        /// Parks every `session/new` and `session/load` until notified, so a
-        /// bind stays in flight.
-        hold_opens: Option<Arc<tokio::sync::Notify>>,
-        /// Reopens stored sessions (`session/load`), under the id asked for.
-        load: bool,
-        /// Advertises `session/close`, and records every id it is asked to
-        /// close.
-        closes: Option<Arc<std::sync::Mutex<Vec<String>>>>,
-    }
-
-    /// An agent that is whatever it advertises and nothing else: its id is a
-    /// parameter, so a test can show the host reading capabilities off the
-    /// connection rather than off which agent it is (ADR-0002).
-    struct CapabilityAgent {
-        id: &'static str,
-        session_id: &'static str,
-        advertised: Advertised,
-        /// Where its threads report, once connected: the host's own sink, so
-        /// a session it opens is projected like a real connection's.
-        events: Option<atlas_agent_servers::ThreadEventSink>,
-    }
-
-    impl CapabilityAgent {
-        fn new(id: &'static str, session_id: &'static str, advertised: Advertised) -> Arc<Self> {
-            Arc::new(Self {
-                id,
-                session_id,
-                advertised,
-                events: None,
-            })
-        }
-
-        fn open(
-            self: Arc<Self>,
-            session_id: acp::SessionId,
-            work_dirs: Vec<PathBuf>,
-        ) -> BoxFuture<'static, anyhow::Result<AcpThreadHandle>> {
-            let hold = self.advertised.hold_opens.clone();
-            async move {
-                if let Some(hold) = hold {
-                    hold.notified().await;
-                }
-                let sink = match &self.events {
-                    Some(events) => events(&session_id),
-                    None => atlas_acp_thread::event_channel().0,
-                };
-                Ok(Arc::new(std::sync::Mutex::new(AcpThread::new(
-                    session_id,
-                    self.clone() as Arc<dyn AgentConnection>,
-                    work_dirs,
-                    None,
-                    sink,
-                ))) as AcpThreadHandle)
-            }
-            .boxed()
-        }
+    /// The script of an agent that is whatever it advertises and nothing
+    /// else: its id is a parameter, so a test can show the host reading
+    /// capabilities off the connection rather than off which agent it is
+    /// (ADR-0002). Served through a [`ScriptedServer`], its threads report to
+    /// the host's own sink, so a session it opens is projected like a real
+    /// connection's.
+    fn agent_script(id: &str, session_id: &str) -> FakeConnectionBuilder {
+        FakeConnection::builder().agent(id).session_id(session_id)
     }
 
     /// A refresh that answers what the test scripted, and counts the asks.
@@ -5180,156 +4942,12 @@ mod tests {
         }
     }
 
-    struct ScriptedFork(&'static str);
-
-    impl atlas_acp_thread::AgentSessionFork for ScriptedFork {
-        fn run(&self) -> BoxFuture<'static, anyhow::Result<acp::SessionId>> {
-            let forked = acp::SessionId::new(self.0);
-            async move { Ok(forked) }.boxed()
-        }
-    }
-
-    struct RecordedEffort(Arc<std::sync::Mutex<Vec<Option<String>>>>);
-
-    impl atlas_acp_thread::AgentSessionEffort for RecordedEffort {
-        fn set_effort(&self, level: Option<String>) -> anyhow::Result<()> {
-            self.0.lock().unwrap().push(level);
-            Ok(())
-        }
-    }
-
-    impl AgentConnection for CapabilityAgent {
-        fn agent_id(&self) -> atlas_acp_thread::AgentId {
-            atlas_acp_thread::AgentId::new(self.id)
-        }
-
-        fn telemetry_id(&self) -> Arc<str> {
-            self.id.into()
-        }
-
-        fn new_session(
-            self: Arc<Self>,
-            work_dirs: Vec<PathBuf>,
-        ) -> BoxFuture<'static, anyhow::Result<AcpThreadHandle>> {
-            let session_id = acp::SessionId::new(self.session_id);
-            self.open(session_id, work_dirs)
-        }
-
-        fn supports_load_session(&self) -> bool {
-            self.advertised.load
-        }
-
-        fn load_session(
-            self: Arc<Self>,
-            session_id: acp::SessionId,
-            work_dirs: Vec<PathBuf>,
-            _title: Option<Arc<str>>,
-        ) -> BoxFuture<'static, anyhow::Result<AcpThreadHandle>> {
-            self.open(session_id, work_dirs)
-        }
-
-        fn supports_close_session(&self) -> bool {
-            self.advertised.closes.is_some()
-        }
-
-        fn close_session(
-            self: Arc<Self>,
-            session_id: acp::SessionId,
-        ) -> BoxFuture<'static, anyhow::Result<()>> {
-            if let Some(closes) = &self.advertised.closes {
-                closes.lock().unwrap().push(session_id.to_string());
-            }
-            async { Ok(()) }.boxed()
-        }
-
-        fn auth_methods(&self) -> &[acp::AuthMethod] {
-            &[]
-        }
-
-        fn authenticate(
-            &self,
-            _method: acp::AuthMethodId,
-        ) -> BoxFuture<'static, anyhow::Result<()>> {
-            async { Ok(()) }.boxed()
-        }
-
-        fn prompt(
-            &self,
-            _params: acp::PromptRequest,
-        ) -> BoxFuture<'static, anyhow::Result<acp::PromptResponse>> {
-            let hold = self.advertised.hold_turns.clone();
-            async move {
-                if let Some(hold) = hold {
-                    hold.notified().await;
-                }
-                Ok(acp::PromptResponse::new(acp::StopReason::EndTurn))
-            }
-            .boxed()
-        }
-
-        fn cancel(&self, _session_id: &acp::SessionId) {}
-
-        fn supports_fork(&self) -> bool {
-            self.advertised.fork.is_some()
-        }
-
-        fn fork(
-            &self,
-            _session_id: &acp::SessionId,
-        ) -> Option<Arc<dyn atlas_acp_thread::AgentSessionFork>> {
-            let forked = self.advertised.fork?;
-            Some(Arc::new(ScriptedFork(forked)))
-        }
-
-        fn session_effort(
-            &self,
-            _session_id: &acp::SessionId,
-        ) -> Option<Arc<dyn atlas_acp_thread::AgentSessionEffort>> {
-            let levels = self.advertised.effort.clone()?;
-            Some(Arc::new(RecordedEffort(levels)))
-        }
-
-        fn model_catalogue(&self) -> Option<Arc<dyn atlas_acp_thread::AgentModelCatalogue>> {
-            let catalogue = self.advertised.live_catalogue.clone()?;
-            Some(Arc::new(catalogue))
-        }
-    }
-
-    impl AgentServer for CapabilityAgent {
-        fn agent_id(&self) -> atlas_acp_thread::AgentId {
-            atlas_acp_thread::AgentId::new(self.id)
-        }
-
-        fn connect(
-            &self,
-            _delegate: AgentServerDelegate,
-            options: ConnectOptions,
-        ) -> BoxFuture<'static, anyhow::Result<Arc<dyn AgentConnection>>> {
-            let connection = Arc::new(CapabilityAgent {
-                id: self.id,
-                session_id: self.session_id,
-                advertised: self.advertised.clone(),
-                events: Some(options.thread_events),
-            });
-            async move { Ok(connection as Arc<dyn AgentConnection>) }.boxed()
-        }
-
-        fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
-            self
-        }
-
-        fn model_catalogue(&self) -> Option<Arc<dyn atlas_acp_thread::AgentModelCatalogue>> {
-            let catalogue = self.advertised.stored_catalogue.clone()?;
-            Some(Arc::new(catalogue))
-        }
-    }
-
     /// Install `agent` as an EXTERNAL agent and connect it: one installed-map
     /// entry, as the Marketplace writes it, and a connection the manager
     /// holds under the agent's own key. The host then meets it exactly as it
     /// meets any ACP agent.
-    async fn connect_external(host: &Arc<AgentHost>, agent: Arc<CapabilityAgent>) -> AgentId {
-        let plugin_id = agent.id;
+    async fn connect_external(host: &Arc<AgentHost>, agent: Arc<ScriptedServer>) -> AgentId {
+        let plugin_id = agent.fake.agent_id();
         let mut settings = atlas_agent_store::AllAgentServersSettings::default();
         settings.0.insert(
             plugin_id.to_string(),
@@ -5337,14 +4955,17 @@ mod tests {
         );
         host.store().set_settings(settings).await;
         let key = Agent::Custom {
-            id: atlas_acp_thread::AgentId::new(plugin_id),
+            id: plugin_id.clone(),
         };
         let entry = host.manager().request_connection(key, agent);
         let connecting = lock(&entry).wait_for_connection();
         if let Err(err) = connecting.await {
             panic!("the scripted agent connects: {err}");
         }
-        host.spawn(plugin_id).await.expect("spawn").agent_id
+        host.spawn(plugin_id.as_str())
+            .await
+            .expect("spawn")
+            .agent_id
     }
 
     /// ADR-0002, at the three places the host used to ask "is this the native
@@ -5353,17 +4974,13 @@ mod tests {
     #[tokio::test]
     async fn an_external_agent_that_advertises_fork_and_effort_gets_both() {
         let (host, dir) = fresh_host();
-        let levels: Arc<std::sync::Mutex<Vec<Option<String>>>> = Arc::default();
-        let agent = CapabilityAgent::new(
-            "some-agent",
-            "s-capable",
-            Advertised {
-                fork: Some("s-branch"),
-                effort: Some(levels.clone()),
-                ..Advertised::default()
-            },
+        let agent = ScriptedServer::new(
+            agent_script("some-agent", "s-capable")
+                .supports_fork("s-branch")
+                .supports_effort()
+                .handle(),
         );
-        let agent_id = connect_external(&host, agent).await;
+        let agent_id = connect_external(&host, agent.clone()).await;
         tokio::task::yield_now().await;
 
         assert!(
@@ -5378,7 +4995,7 @@ mod tests {
 
         host.set_effort(&init.key, "high".to_string())
             .expect("an agent that offers the knob takes a level");
-        assert_eq!(*levels.lock().unwrap(), [Some("high".to_string())]);
+        assert_eq!(agent.fake.efforts(), [Some("high".to_string())]);
 
         let forked = host.fork_session(&init.key).await.expect("fork");
         assert_eq!(forked.as_deref(), Some("s-branch"));
@@ -5400,7 +5017,7 @@ mod tests {
     /// forkable and has no effort control.
     #[tokio::test]
     async fn the_native_slot_without_the_capabilities_gets_neither() {
-        let native = CapabilityAgent::new(ATLAS_AGENT_ID, "s-plain", Advertised::default());
+        let native = ScriptedServer::new(agent_script(ATLAS_AGENT_ID, "s-plain").handle());
         let (host, dir) = fresh_host_with_native(native);
         let agent_id = host.spawn(ATLAS_AGENT_ID).await.expect("spawn").agent_id;
         tokio::task::yield_now().await;
@@ -5445,14 +5062,11 @@ mod tests {
         let live = ScriptedCatalogue::answering(
             atlas_acp_thread::ModelCatalogueOutcome::ReconnectRequired,
         );
-        let native = CapabilityAgent::new(
-            ATLAS_AGENT_ID,
-            "s-1",
-            Advertised {
-                stored_catalogue: Some(stored.clone()),
-                live_catalogue: Some(live.clone()),
-                ..Advertised::default()
-            },
+        let native = ScriptedServer::with_stored_catalogue(
+            agent_script(ATLAS_AGENT_ID, "s-1")
+                .model_catalogue(Arc::new(live.clone()))
+                .handle(),
+            Arc::new(stored.clone()),
         );
         let (host, dir) = fresh_host_with_native(native);
 
@@ -5485,13 +5099,10 @@ mod tests {
         let live = ScriptedCatalogue::answering(atlas_acp_thread::ModelCatalogueOutcome::Applied {
             changed: false,
         });
-        let native = CapabilityAgent::new(
-            ATLAS_AGENT_ID,
-            "s-applied",
-            Advertised {
-                live_catalogue: Some(live.clone()),
-                ..Advertised::default()
-            },
+        let native = ScriptedServer::new(
+            agent_script(ATLAS_AGENT_ID, "s-applied")
+                .model_catalogue(Arc::new(live.clone()))
+                .handle(),
         );
         let (host, dir) = fresh_host_with_native(native);
         let agent_id = host.spawn(ATLAS_AGENT_ID).await.expect("spawn").agent_id;
@@ -5522,17 +5133,13 @@ mod tests {
         let live = ScriptedCatalogue::answering(
             atlas_acp_thread::ModelCatalogueOutcome::ReconnectRequired,
         );
-        let hold = Arc::new(tokio::sync::Notify::new());
-        let native = CapabilityAgent::new(
-            ATLAS_AGENT_ID,
-            "s-reconnect",
-            Advertised {
-                live_catalogue: Some(live.clone()),
-                hold_turns: Some(hold.clone()),
-                ..Advertised::default()
-            },
+        let native = ScriptedServer::new(
+            agent_script(ATLAS_AGENT_ID, "s-reconnect")
+                .model_catalogue(Arc::new(live.clone()))
+                .hold_prompts()
+                .handle(),
         );
-        let (host, dir) = fresh_host_with_native(native);
+        let (host, dir) = fresh_host_with_native(native.clone());
         let agent_id = host.spawn(ATLAS_AGENT_ID).await.expect("spawn").agent_id;
         tokio::task::yield_now().await;
         let init = host
@@ -5566,7 +5173,7 @@ mod tests {
             "and the connection it runs on is left alone",
         );
 
-        hold.notify_one();
+        native.fake.release_prompt();
         while host.agent_turn_running(ATLAS_AGENT_ID) {
             assert!(std::time::Instant::now() < deadline, "the turn never ended");
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -5598,13 +5205,9 @@ mod tests {
     #[tokio::test]
     async fn a_refused_refresh_is_classified_for_the_frontend() {
         let refused = |failure| {
-            let native = CapabilityAgent::new(
-                ATLAS_AGENT_ID,
-                "s-1",
-                Advertised {
-                    stored_catalogue: Some(ScriptedCatalogue::failing(failure)),
-                    ..Advertised::default()
-                },
+            let native = ScriptedServer::with_stored_catalogue(
+                agent_script(ATLAS_AGENT_ID, "s-1").handle(),
+                Arc::new(ScriptedCatalogue::failing(failure)),
             );
             fresh_host_with_native(native)
         };
@@ -5624,7 +5227,7 @@ mod tests {
         assert!(nothing.message.contains("no models"), "{}", nothing.message);
         let _ = std::fs::remove_dir_all(&dir);
 
-        let silent = CapabilityAgent::new(ATLAS_AGENT_ID, "s-1", Advertised::default());
+        let silent = ScriptedServer::new(agent_script(ATLAS_AGENT_ID, "s-1").handle());
         let (host, dir) = fresh_host_with_native(silent);
         let Err(unsupported) = host.refresh_models(ATLAS_AGENT_ID).await else {
             panic!("no catalogue was advertised");
@@ -5647,9 +5250,7 @@ mod tests {
     /// orphaned on the dead id.
     #[tokio::test]
     async fn a_resume_that_comes_back_under_a_new_id_rebinds_the_row() {
-        let native = Arc::new(RebindingNative {
-            fresh_id: "engine-fresh-id",
-        });
+        let native = rebinding_native("engine-fresh-id");
         let (host, dir) = fresh_host_with_native(native);
         let history = host.history().expect("a fresh host has history");
 
@@ -6143,8 +5744,8 @@ mod tests {
     /// memory Atlas prepends. The name is the user's first line.
     #[test]
     fn an_untitled_thread_is_named_after_the_user_not_the_injected_memory() {
-        let connection = Arc::new(RebindingNative { fresh_id: "s" });
-        let thread = connection.thread(acp::SessionId::new("s"), Vec::new());
+        let (connection, _fake) = FakeConnection::builder().agent(ATLAS_AGENT_ID).build();
+        let thread = connection.open_thread(acp::SessionId::new("s"), Vec::new());
         lock_thread(&thread).push_user_content_block(
             None,
             acp::ContentBlock::Text(acp::TextContent::new(MEMORY_PREFIXED)),
@@ -6458,6 +6059,83 @@ mod tests {
 #[cfg(test)]
 pub(crate) mod test_support {
     use super::*;
+    use atlas_acp_thread::test_support::FakeHandle;
+    use atlas_acp_thread::{AgentConnection, AgentModelCatalogue};
+    use atlas_agent_servers::AgentServerDelegate;
+    use futures::future::BoxFuture;
+    use futures::FutureExt;
+
+    /// An agent server over the shared scripted connection: every connect
+    /// hands out a connection on `fake`'s script, so what the test scripted
+    /// and what it reads back outlive a reconnect. It serves under the id the
+    /// script names, the native agent's or any other.
+    pub(crate) struct ScriptedServer {
+        pub(crate) fake: FakeHandle,
+        /// Whether its threads report to the sink the host hands over at
+        /// connect, as a real connection's do.
+        reports_to_host: bool,
+        /// What the launcher answers a model refresh with while nothing runs.
+        stored_catalogue: Option<Arc<dyn AgentModelCatalogue>>,
+    }
+
+    impl ScriptedServer {
+        /// Its sessions are projected by the host like a real connection's.
+        pub(crate) fn new(fake: FakeHandle) -> Arc<Self> {
+            Arc::new(Self {
+                fake,
+                reports_to_host: true,
+                stored_catalogue: None,
+            })
+        }
+
+        /// Its threads report nowhere: the host sees only what it is told.
+        pub(crate) fn detached(fake: FakeHandle) -> Arc<Self> {
+            Arc::new(Self {
+                fake,
+                reports_to_host: false,
+                stored_catalogue: None,
+            })
+        }
+
+        /// [`Self::new`], with a catalogue the launcher can refresh with no
+        /// connection open.
+        pub(crate) fn with_stored_catalogue(
+            fake: FakeHandle,
+            catalogue: Arc<dyn AgentModelCatalogue>,
+        ) -> Arc<Self> {
+            Arc::new(Self {
+                fake,
+                reports_to_host: true,
+                stored_catalogue: Some(catalogue),
+            })
+        }
+    }
+
+    impl AgentServer for ScriptedServer {
+        fn agent_id(&self) -> atlas_acp_thread::AgentId {
+            self.fake.agent_id()
+        }
+
+        fn connect(
+            &self,
+            _delegate: AgentServerDelegate,
+            options: ConnectOptions,
+        ) -> BoxFuture<'static, anyhow::Result<Arc<dyn AgentConnection>>> {
+            if self.reports_to_host {
+                self.fake.set_thread_events(options.thread_events);
+            }
+            let connection = self.fake.connection();
+            async move { Ok(connection as Arc<dyn AgentConnection>) }.boxed()
+        }
+
+        fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
+            self
+        }
+
+        fn model_catalogue(&self) -> Option<Arc<dyn AgentModelCatalogue>> {
+            self.stored_catalogue.clone()
+        }
+    }
 
     /// A host with an empty installed map — a fresh install.
     pub(crate) fn fresh_host() -> (Arc<AgentHost>, PathBuf) {

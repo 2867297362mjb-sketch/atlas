@@ -257,6 +257,8 @@ unicode-normalization = "0.1"
 libc = { workspace = true }
 
 [dev-dependencies]
+# The shared scripted `AgentConnection`; the feature is for tests only.
+atlas-acp-thread = { path = "../crates/atlas-acp-thread", features = ["test-support"] }
 # An in-process MCP client for the memory tool server's loopback tests.
 # `transport-streamable-http-client-reqwest` is only the union of two features
 # `atlas-engine-rmcp-client` already turns on (`transport-streamable-http-client`, and
