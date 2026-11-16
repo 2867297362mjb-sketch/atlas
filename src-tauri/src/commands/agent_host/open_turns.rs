@@ -145,7 +145,9 @@ mod tests {
         path: &std::path::Path,
         done: impl Fn(&HashMap<ThreadId, OpenTurn>) -> bool,
     ) -> HashMap<ThreadId, OpenTurn> {
-        for _ in 0..200 {
+        // Each write is a durable replace (two flushes to disk), which a
+        // loaded machine can stretch well past a second.
+        for _ in 0..1500 {
             if let Ok(bytes) = std::fs::read(path) {
                 if let Ok(map) = serde_json::from_slice::<HashMap<ThreadId, OpenTurn>>(&bytes) {
                     if done(&map) {
