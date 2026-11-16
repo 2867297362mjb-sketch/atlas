@@ -195,6 +195,8 @@ src-tauri/src/commands/pull_requests/
 
 Every `gh` process in Atlas, here and elsewhere (`git_avatars`, `project_sources`, `create.rs`, `checkout.rs`), is spawned by the `atlas-gh` crate: one environment, a timeout that kills, one pool of six API permits, and one pause that a rate-limit refusal sets. A call says what it is: reads are refused while the API is paused, what the user did always runs, and a long verb (`gh pr checkout`, `gh repo clone`) or an image fetch holds no API permit.
 
+Every `git` process is likewise spawned by one crate, `atlas-git`, through `GitCommand`: the app's commands, the checkpoint and security crates and the native agent's `/diff` all go through it, and an audit test in that crate fails on a spawn that does not. The pull-request steps that run `git` (`checkout.rs`, `guide.rs`, `create.rs`) add Git Credential Manager's own no-prompt switch and a non-interactive ssh on top of its standard environment.
+
 ### Event channels
 
 Streaming from Rust to the UI runs on Tauri events, `atlas:*` channels, most payload-typed by a `kind` field rather than one channel per message shape.
@@ -344,7 +346,7 @@ All wired in as `path` dependencies from `src-tauri/Cargo.toml`, and all members
 | `atlas-checkpoint` | The agent-session record: local SQLite store (`.atlas/sessions.db`), redact-on-write capture, git commit linkage, transcript import, sync outbox. Tauri-free, so the whole surface is testable against a real database and a real git repo. **Push only** — it drains the outbox to the ingest service and never reads a Session back. |
 | `atlas-artifacts` | The Timeline's cloud **read** half: remote Sessions, comments, and one WebSocket per connected cloud Project. Tauri-free, `TokenSource` as the only host seam, shaped on `atlas-comms`. Split from `atlas-checkpoint` because reads need tokio and tungstenite and that crate is deliberately synchronous. The invariant that makes a merged board possible: `rowId` on the wire **is** the local row id, so local and remote rows share one identity and a comment anchor resolves against a local row with no mapping table. |
 | `atlas-redact` | Single source of truth for secret redaction: layered scrubbing (Shannon entropy, vendored betterleaks rules, provider prefixes, credentialed URIs, connection strings) with JSON-aware traversal. String in, redacted string out — no I/O, no async. |
-| `atlas-git` | Git execution layer: one spawn chokepoint over the real `git` binary (so hooks run), a typed stderr→error taxonomy with friendly messages, porcelain-v2 status parsing, streaming output for long operations. |
+| `atlas-git` | Git for the whole workspace, Tauri-free. `GitCommand` is the single `git` spawn chokepoint over the real binary (so hooks run): one no-prompt environment, a timeout that kills, a raw run for callers that read the exit code or bytes themselves, streaming output for long operations, and a typed stderr→error taxonomy with friendly messages. `tests/spawn_audit.rs` fails on a git process built anywhere else. `Repository` holds the source-control rules (branches, sync, stash, history, commit) as plain functions, with the "repository changed" notification injected; the `git_ops` and `git` commands are adapters over it. Also porcelain-v2 status parsing. |
 | `atlas-gh` | The single `gh` spawn chokepoint (`GhCommand`), Tauri-free: a fixed no-prompt environment, a timeout that kills, a shared pool of API permits, the rate-limit pause, and one failure taxonomy for a run that produced no answer. What an answer means stays with the caller (`pull_requests/gh.rs` reads it as HTTP). |
 | `atlas-gitdiff` | Structured side-by-side diff engine: parses unified diffs, computes word-level intra-line change spans (word-diff vendored from `dandavison/delta`, MIT). |
 | `atlas-terminal` | Wraps `portable-pty`, manages `TerminalSession`s, bridges PTY bytes to Tauri events. |
@@ -447,7 +449,7 @@ atlas/
 │   ├── atlas-checkpoint           session record / Timeline (sessions.db)
 │   ├── atlas-artifacts            Timeline cloud reads + realtime socket
 │   ├── atlas-redact               secret redaction (single source of truth)
-│   ├── atlas-git                  git spawn chokepoint + error taxonomy
+│   ├── atlas-git                  git spawn chokepoint, error taxonomy, source-control rules
 │   ├── atlas-gh                   gh spawn chokepoint: budget, pause, error taxonomy
 │   ├── atlas-gitdiff              structured diff engine
 │   ├── atlas-terminal             PTY (portable-pty)

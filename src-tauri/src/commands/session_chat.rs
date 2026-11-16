@@ -573,15 +573,11 @@ fn git_show_commit(root: &Path, sha: &str) -> Option<String> {
 }
 
 fn run_git(root: &Path, args: &[&str]) -> Option<String> {
-    let out = atlas_process::command("git")
-        .current_dir(root)
-        .args(args)
-        .output()
-        .ok()?;
-    if !out.status.success() {
+    let out = atlas_git::GitCommand::new(root, args).output().ok()?;
+    if !out.success() {
         return None;
     }
-    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let text = out.stdout_text().trim().to_string();
     if text.is_empty() {
         None
     } else {

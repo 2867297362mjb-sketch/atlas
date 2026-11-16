@@ -142,22 +142,19 @@ fn cloned_repo_dir(project_path: &str, repo_name: &str) -> Result<std::path::Pat
 /// `.atlas` folder inside the clone (that used to leave every clone's tree
 /// dirty with an untracked directory).
 fn git_in(repo_dir: &Path, args: &[&str]) -> Result<String, String> {
-    let output = atlas_process::command("git")
-        .current_dir(repo_dir)
-        .args(args)
-        .env("GIT_TERMINAL_PROMPT", "0")
+    let output = atlas_git::GitCommand::new(repo_dir, args)
         .env("GIT_LFS_SKIP_SMUDGE", "1")
         .output()
         .map_err(|e| format!("git failed to start: {e}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !output.success() {
+        let stderr = output.stderr_text().trim().to_string();
         return Err(if stderr.is_empty() {
             format!("git {} failed", args.first().copied().unwrap_or(""))
         } else {
             stderr
         });
     }
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    Ok(output.stdout_text())
 }
 
 /// Best-effort `owner/repo` for a cloned repo. Reads the `origin` remote URL
@@ -389,20 +386,13 @@ pub async fn clone_github_repo(
     let dest_str = dest.to_string_lossy().to_string();
     tokio::task::spawn_blocking(move || {
         let url = format!("https://github.com/{owner}/{repo}.git");
-        let output = atlas_process::command("git")
-            // `--` so nothing after it can ever parse as a flag, and no
-            // terminal prompt — an auth failure fails fast instead of
-            // wedging a hidden child process.
-            .args(["clone", "--depth", "1", "--no-tags", "--"])
-            .arg(&url)
-            .arg(&dest_str)
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .env("GIT_LFS_SKIP_SMUDGE", "1")
-            .output()
+        // No terminal prompt, as on every git run: an auth failure fails
+        // fast instead of wedging a hidden child process.
+        let output = atlas_git::shallow_clone(&url, Path::new(&dest_str))
             .map_err(|e| format!("Git clone failed: {e}"))?;
 
-        if !output.status.success() {
-            return Err(String::from_utf8_lossy(&output.stderr).to_string());
+        if !output.success() {
+            return Err(output.stderr_text());
         }
         // The search result already knew the description, stars and
         // language; keep them so the list never has to ask GitHub again.

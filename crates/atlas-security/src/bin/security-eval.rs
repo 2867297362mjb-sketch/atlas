@@ -27,11 +27,11 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use atlas_process::NoWindow;
+use atlas_git::GitCommand;
 use atlas_security::clef::{
     build_state, parse_answers, request_body, ESCALATE_AT, MAX_STATE_CHARS, WORTH_A_LOOK_AT,
 };
@@ -158,16 +158,14 @@ struct MergeRepo {
 
 impl Repo for MergeRepo {
     fn commit_diff(&self, sha: &str) -> Result<Vec<u8>, RepoError> {
-        let out = Command::new("git")
-            .no_window()
-            .arg("-C")
+        let out = GitCommand::without_repo(&["-C"])
             .arg(&self.git.root)
-            .args(["diff", "-M", "-U3", "--no-color", "--no-ext-diff"])
+            .args(&["diff", "-M", "-U3", "--no-color", "--no-ext-diff"])
             .arg(format!("{sha}^1"))
             .arg(sha)
             .output()
             .map_err(|e| RepoError::Git(e.to_string()))?;
-        if !out.status.success() {
+        if !out.success() {
             return Err(RepoError::MissingCommit(sha.to_string()));
         }
         Ok(out.stdout)
@@ -644,18 +642,16 @@ fn speed(args: &[String]) -> Result<(), String> {
         .and_then(|v| v.parse().ok())
         .unwrap_or(2);
 
-    let out = Command::new("git")
-        .no_window()
-        .arg("-C")
+    let out = GitCommand::without_repo(&["-C"])
         .arg(&root)
-        .args(["rev-list", "--no-merges", "-n", &n.to_string(), rev])
+        .args(&["rev-list", "--no-merges", "-n", &n.to_string(), rev])
         .output()
         .map_err(|e| e.to_string())?;
     let shas: Vec<String> = String::from_utf8_lossy(&out.stdout)
         .lines()
         .map(str::to_string)
         .collect();
-    let git = GitCli { root: root.clone() };
+    let git = GitCli { root };
 
     let clef_env = if with_clef {
         let account = std::env::var("CLOUDFLARE_ACCOUNT_ID")
@@ -679,24 +675,12 @@ fn speed(args: &[String]) -> Result<(), String> {
     for sha in &shas {
         let started = Instant::now();
         // What the worker does before scanning: which lockfile ecosystems?
-        let names = Command::new("git")
-            .no_window()
-            .arg("-C")
-            .arg(&root)
-            .args([
-                "diff-tree",
-                "--no-commit-id",
-                "--name-only",
-                "-r",
-                "--root",
-                sha,
-            ])
-            .output()
-            .map_err(|e| e.to_string())?;
+        let names = git.changed_paths(sha).map_err(|e| e.to_string())?;
         let mut ecos = Vec::new();
-        for eco in String::from_utf8_lossy(&names.stdout)
-            .lines()
-            .filter_map(atlas_security::deps::lockfiles::ecosystem_of)
+        for eco in names
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|p| atlas_security::deps::lockfiles::ecosystem_of(p))
         {
             if !ecos.contains(&eco) {
                 ecos.push(eco);

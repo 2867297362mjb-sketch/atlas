@@ -1,6 +1,7 @@
 //! The editor gutter's line classification, backed by the `atlas-gitdiff`
 //! engine. The diff viewer reads `git_review` instead.
 
+use atlas_git::GitCommand;
 use atlas_gitdiff::{build_file_diff, line_status, LineStatus};
 
 /// Run `git diff` for one file and return the raw unified output. `staged`
@@ -26,14 +27,10 @@ fn run_git_diff(
     // show what it brought into its branch, matching `git_show` — without it a
     // merge prints a combined diff, empty for a clean merge.
     if let Some(sha) = commit {
-        let output = atlas_process::command("git")
-            .args(["show", "--no-color", &ctx])
-            .args(ws)
-            .args(["--format=", "-m", "--first-parent", sha, "--", file])
-            .current_dir(path)
-            .output()
-            .map_err(|e| e.to_string())?;
-        return Ok(String::from_utf8_lossy(&output.stdout).to_string());
+        let mut args = vec!["show", "--no-color", &ctx];
+        args.extend_from_slice(ws);
+        args.extend_from_slice(&["--format=", "-m", "--first-parent", sha, "--", file]);
+        return git_stdout(path, &args);
     }
     let mut args: Vec<&str> = vec!["diff", "--no-color", &ctx];
     args.extend_from_slice(ws);
@@ -43,12 +40,7 @@ fn run_git_diff(
     args.push("--");
     args.push(file);
 
-    let output = atlas_process::command("git")
-        .args(&args)
-        .current_dir(path)
-        .output()
-        .map_err(|e| e.to_string())?;
-    let text = String::from_utf8_lossy(&output.stdout).to_string();
+    let text = git_stdout(path, &args)?;
     if !text.trim().is_empty() {
         return Ok(text);
     }
@@ -70,14 +62,10 @@ fn run_git_diff(
         // uncommitted here", and falling back to the staged diff would make the
         // editor gutter mark lines the user already staged and moved on from.
         if !staged && !exists_in_head(path, file) {
-            let cached = atlas_process::command("git")
-                .args(["diff", "--no-color", &ctx])
-                .args(ws)
-                .args(["--cached", "--", file])
-                .current_dir(path)
-                .output()
-                .map_err(|e| e.to_string())?;
-            let cached = String::from_utf8_lossy(&cached.stdout).to_string();
+            let mut args = vec!["diff", "--no-color", &ctx];
+            args.extend_from_slice(ws);
+            args.extend_from_slice(&["--cached", "--", file]);
+            let cached = git_stdout(path, &args)?;
             if !cached.trim().is_empty() {
                 return Ok(cached);
             }
@@ -88,34 +76,38 @@ fn run_git_diff(
     // Untracked / brand-new file — diff against /dev/null so it shows as fully
     // added. `--no-index` exits non-zero by design, so ignore status; take stdout.
     let nul = devnull();
-    let no_index = atlas_process::command("git")
-        .args(["diff", "--no-color", &ctx, "--no-index", "--", nul, file])
-        .current_dir(path)
+    git_stdout(
+        path,
+        &["diff", "--no-color", &ctx, "--no-index", "--", nul, file],
+    )
+}
+
+/// What git printed, whatever its exit code: every diff here reads stdout
+/// and treats an empty one as "no change".
+fn git_stdout(path: &str, args: &[&str]) -> Result<String, String> {
+    GitCommand::new(path, args)
         .output()
-        .map_err(|e| e.to_string())?;
-    Ok(String::from_utf8_lossy(&no_index.stdout).to_string())
+        .map(|out| out.stdout_text())
+        .map_err(|e| e.to_string())
+}
+
+/// Whether git answered with exit 0; a git that could not run is a "no".
+fn git_ok(path: &str, args: &[&str]) -> bool {
+    GitCommand::new(path, args)
+        .output()
+        .is_ok_and(|out| out.success())
 }
 
 /// Whether `file` is tracked by git (in the index). `git ls-files
 /// --error-unmatch` exits 0 only for tracked paths.
 fn is_tracked(path: &str, file: &str) -> bool {
-    atlas_process::command("git")
-        .args(["ls-files", "--error-unmatch", "--", file])
-        .current_dir(path)
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    git_ok(path, &["ls-files", "--error-unmatch", "--", file])
 }
 
 /// Whether `file` exists in the HEAD commit. Distinguishes "tracked and
 /// unchanged" from "newly created and staged", which `is_tracked` cannot.
 fn exists_in_head(path: &str, file: &str) -> bool {
-    atlas_process::command("git")
-        .args(["cat-file", "-e", &format!("HEAD:{file}")])
-        .current_dir(path)
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    git_ok(path, &["cat-file", "-e", &format!("HEAD:{file}")])
 }
 
 fn devnull() -> &'static str {

@@ -144,6 +144,14 @@ export const EXTRA_INPUTS = [
     testOnly: true,
     why: "tests/spawn_audit.rs",
   })),
+  // Its own tests/spawn_audit.rs walks the first-party Rust sources for a
+  // git process built outside its chokepoint.
+  ...["src-tauri/src/", "crates/"].map((p) => ({
+    path: p,
+    packages: ["atlas-git"],
+    testOnly: true,
+    why: "tests/spawn_audit.rs",
+  })),
 ];
 
 /**

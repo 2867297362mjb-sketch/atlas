@@ -7,9 +7,8 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::process::{Command, Output};
 
-use atlas_process::NoWindow;
+use atlas_git::{GitCommand, GitRawOutput};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RepoError {
@@ -45,22 +44,40 @@ pub struct GitCli {
 }
 
 impl GitCli {
-    fn run(&self, args: &[&str]) -> Result<Output, RepoError> {
-        Command::new("git")
-            .no_window()
-            .arg("-C")
+    /// `git -C <root>` with unquoted paths: whatever it printed, with its
+    /// exit code. `-C` rather than a working directory, so a root that is
+    /// gone is git's own answer and not a failed spawn.
+    fn run(&self, args: &[&str]) -> Result<GitRawOutput, RepoError> {
+        GitCommand::without_repo(&["-C"])
             .arg(&self.root)
-            .args(["-c", "core.quotepath=off"])
+            .args(&["-c", "core.quotepath=off"])
             .args(args)
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .env("LC_ALL", "C")
             .output()
             .map_err(|e| RepoError::Git(e.to_string()))
     }
 
+    /// The paths a commit changes against its first parent (every path, for
+    /// a root commit). `None` when git could not say.
+    pub fn changed_paths(&self, sha: &str) -> Result<Option<Vec<String>>, RepoError> {
+        let out = self.run(&[
+            "diff-tree",
+            "--no-commit-id",
+            "--name-only",
+            "-r",
+            "--root",
+            sha,
+        ])?;
+        if !out.success() {
+            return Ok(None);
+        }
+        Ok(Some(
+            out.stdout_text().lines().map(str::to_string).collect(),
+        ))
+    }
+
     fn commit_exists(&self, sha: &str) -> Result<bool, RepoError> {
         let spec = format!("{sha}^{{commit}}");
-        Ok(self.run(&["cat-file", "-e", &spec])?.status.success())
+        Ok(self.run(&["cat-file", "-e", &spec])?.success())
     }
 
     /// The commits on `head` that `base` does not have (`git rev-list
@@ -69,7 +86,7 @@ impl GitCli {
     pub fn commits_since(&self, base: &str, head: &str) -> Result<Option<Vec<String>>, RepoError> {
         let range = format!("{base}..{head}");
         let out = self.run(&["rev-list", &range, "--"])?;
-        if !out.status.success() {
+        if !out.success() {
             return Ok(None);
         }
         Ok(Some(
@@ -104,7 +121,7 @@ impl Repo for GitCli {
             "--no-ext-diff",
             sha,
         ])?;
-        if !out.status.success() {
+        if !out.success() {
             return Err(RepoError::Git(
                 String::from_utf8_lossy(&out.stderr).trim().to_string(),
             ));
@@ -114,11 +131,11 @@ impl Repo for GitCli {
 
     fn file_at(&self, rev: &str, path: &str) -> Result<Option<Vec<u8>>, RepoError> {
         let spec = format!("{rev}:{path}");
-        if !self.run(&["cat-file", "-e", &spec])?.status.success() {
+        if !self.run(&["cat-file", "-e", &spec])?.success() {
             return Ok(None);
         }
         let out = self.run(&["cat-file", "blob", &spec])?;
-        if !out.status.success() {
+        if !out.success() {
             return Err(RepoError::Git(
                 String::from_utf8_lossy(&out.stderr).trim().to_string(),
             ));
@@ -130,7 +147,7 @@ impl Repo for GitCli {
         self.require_commit(sha)?;
         let spec = format!("{sha}^1");
         let out = self.run(&["rev-parse", "--verify", "--quiet", &spec])?;
-        if !out.status.success() {
+        if !out.success() {
             return Ok(None);
         }
         Ok(Some(

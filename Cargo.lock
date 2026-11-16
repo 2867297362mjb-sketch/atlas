@@ -909,6 +909,7 @@ dependencies = [
 name = "atlas-checkpoint"
 version = "0.1.0"
 dependencies = [
+ "atlas-git",
  "atlas-process",
  "atlas-profile",
  "atlas-redact",
@@ -3268,6 +3269,7 @@ dependencies = [
  "atlas-process",
  "regex",
  "serde",
+ "serde_json",
  "tempfile",
 ]
 
@@ -3361,6 +3363,7 @@ dependencies = [
  "atlas-engine-tools",
  "atlas-engine-utils-json-to-toml",
  "atlas-engine-windows-sandbox",
+ "atlas-git",
  "atlas-process",
  "atlas-thread-metadata",
  "axum",
@@ -3447,7 +3450,7 @@ name = "atlas-security"
 version = "0.1.0"
 dependencies = [
  "atlas-checkpoint",
- "atlas-process",
+ "atlas-git",
  "atlas-profile",
  "atlas-redact",
  "chrono",

@@ -184,16 +184,13 @@ pub async fn project_browse(path: String) -> Result<BrowseListing, String> {
 }
 
 fn git(dir: &Path, args: &[&str]) -> Result<(), String> {
-    let out = atlas_process::command("git")
-        .current_dir(dir)
-        .args(args)
-        .env("GIT_TERMINAL_PROMPT", "0")
+    let out = atlas_git::GitCommand::new(dir, args)
         .output()
         .map_err(|e| format!("git: {e}"))?;
-    if out.status.success() {
+    if out.success() {
         Ok(())
     } else {
-        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+        Err(out.stderr_text().trim().to_string())
     }
 }
 
@@ -350,16 +347,13 @@ pub async fn project_clone(url: String, github: bool) -> Result<String, String> 
         return Ok(dest.to_string_lossy().into_owned());
     }
     tokio::task::spawn_blocking(move || {
-        let out = atlas_process::command("git")
-            .args(["clone", "--"])
+        let out = atlas_git::GitCommand::without_repo(&["clone", "--"])
             .arg(&url)
             .arg(&dest)
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .stdin(std::process::Stdio::null())
             .output()
             .map_err(|e| format!("clone: {e}"))?;
-        if !out.status.success() {
-            return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+        if !out.success() {
+            return Err(out.stderr_text().trim().to_string());
         }
         Ok(dest.to_string_lossy().into_owned())
     })

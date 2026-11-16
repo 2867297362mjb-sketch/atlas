@@ -1,6 +1,6 @@
-use atlas_git::{GitCommand, GitErrorPayload};
+use atlas_git::{GitCommand, GitErrorPayload, GitRawOutput, GitRunError, Repository};
 use serde::{Deserialize, Serialize};
-use std::process::Command;
+use std::path::Path;
 
 /// `git` for a READ-ONLY query — status, log, diff, blame, rev-parse, refs.
 ///
@@ -17,16 +17,21 @@ use std::process::Command;
 ///
 /// `--no-optional-locks` tells git to skip exactly those non-essential index
 /// writes, so a background read can never block a user-initiated mutation. It
-/// is what Desktop and VS Code pass on every status call, and what
-/// `atlas_git::GitCommand::read_only()` already does for the source-control
-/// crate — this module predates that crate and spawns git directly.
+/// is what Desktop and VS Code pass on every status call, and it is what
+/// [`GitCommand::read_only`] adds.
 ///
 /// Only for reads: a command that is SUPPOSED to write the index (`add`,
-/// `commit`, `checkout`) must take the lock, so it uses plain `Command`.
-fn git_read() -> Command {
-    let mut cmd = atlas_process::command("git");
-    cmd.arg("--no-optional-locks");
-    cmd
+/// `commit`, `checkout`) must take the lock, so it is not marked read-only.
+/// Returns whatever git printed with its exit code; each caller decides what
+/// a non-zero exit means.
+fn git_read<S: AsRef<std::ffi::OsStr>>(
+    path: impl AsRef<Path>,
+    args: &[S],
+) -> Result<GitRawOutput, GitRunError> {
+    GitCommand::new(path.as_ref(), &[])
+        .args(args)
+        .read_only()
+        .output()
 }
 
 #[derive(Debug, Serialize)]
@@ -85,11 +90,7 @@ pub(crate) fn git_log_compute(
     if all {
         args.push("--all".into());
     }
-    let output = git_read()
-        .args(&args)
-        .current_dir(path)
-        .output()
-        .map_err(|e| e.to_string())?;
+    let output = git_read(path, &args).map_err(|e| e.to_string())?;
 
     let log_str = String::from_utf8_lossy(&output.stdout);
     let entries = log_str
@@ -136,12 +137,8 @@ pub(crate) fn git_log_compute(
 /// repo, unborn HEAD); callers fall back to the rows they loaded.
 pub(crate) fn git_commit_count(path: &str, all: bool) -> Option<usize> {
     let scope = if all { "--all" } else { "HEAD" };
-    let output = git_read()
-        .args(["rev-list", "--count", scope])
-        .current_dir(path)
-        .output()
-        .ok()?;
-    if !output.status.success() {
+    let output = git_read(path, &["rev-list", "--count", scope]).ok()?;
+    if !output.success() {
         return None;
     }
     String::from_utf8_lossy(&output.stdout).trim().parse().ok()
@@ -168,42 +165,34 @@ pub async fn git_log(
 }
 
 pub(crate) fn git_refs_compute(path: &str) -> Result<GitRefs, String> {
-    let head_sha = git_read()
-        .args(["rev-parse", "HEAD"])
-        .current_dir(path)
-        .output()
+    let head_sha = git_read(path, &["rev-parse", "HEAD"]).ok().and_then(|o| {
+        if o.success() {
+            Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+        } else {
+            None
+        }
+    });
+    let head_ref = git_read(path, &["symbolic-ref", "--quiet", "--short", "HEAD"])
         .ok()
         .and_then(|o| {
-            if o.status.success() {
-                Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
-            } else {
-                None
-            }
-        });
-    let head_ref = git_read()
-        .args(["symbolic-ref", "--quiet", "--short", "HEAD"])
-        .current_dir(path)
-        .output()
-        .ok()
-        .and_then(|o| {
-            if o.status.success() {
+            if o.success() {
                 Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
             } else {
                 None
             }
         });
 
-    let out = git_read()
-        .args([
+    let out = git_read(
+        path,
+        &[
             "for-each-ref",
             "--format=%(refname:short)\x1f%(objectname)\x1f%(refname)",
             "refs/heads",
             "refs/remotes",
             "refs/tags",
-        ])
-        .current_dir(path)
-        .output()
-        .map_err(|e| e.to_string())?;
+        ],
+    )
+    .map_err(|e| e.to_string())?;
     let txt = String::from_utf8_lossy(&out.stdout);
     let mut refs: Vec<GitRef> = Vec::new();
     for line in txt.lines() {
@@ -240,17 +229,14 @@ pub(crate) fn git_refs_compute(path: &str) -> Result<GitRefs, String> {
 #[tauri::command]
 pub async fn git_graph_signature(path: String) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
-        let head = git_read()
-            .args(["rev-parse", "HEAD"])
-            .current_dir(&path)
-            .output()
+        let head = git_read(&path, &["rev-parse", "HEAD"])
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
             .unwrap_or_default();
-        let refs_out = git_read()
-            .args(["for-each-ref", "--format=%(refname) %(objectname)"])
-            .current_dir(&path)
-            .output()
-            .map_err(|e| e.to_string())?;
+        let refs_out = git_read(
+            &path,
+            &["for-each-ref", "--format=%(refname) %(objectname)"],
+        )
+        .map_err(|e| e.to_string())?;
         let refs_text = String::from_utf8_lossy(&refs_out.stdout).to_string();
         let mut lines: Vec<String> = refs_text
             .lines()
@@ -288,8 +274,8 @@ pub struct GitProjectSummary {
 pub async fn git_workspace_summary(path: String) -> Result<GitProjectSummary, String> {
     tokio::task::spawn_blocking(move || {
         let git = |args: &[&str]| -> Option<String> {
-            let out = git_read().args(args).current_dir(&path).output().ok()?;
-            if !out.status.success() {
+            let out = git_read(&path, args).ok()?;
+            if !out.success() {
                 return None;
             }
             Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
@@ -386,8 +372,8 @@ fn strip_remote(remote_ref: &str) -> &str {
 pub async fn git_branch_compare(path: String) -> Result<GitBranchCompare, String> {
     tokio::task::spawn_blocking(move || {
         let git = |args: &[&str]| -> Option<String> {
-            let out = git_read().args(args).current_dir(&path).output().ok()?;
-            if !out.status.success() {
+            let out = git_read(&path, args).ok()?;
+            if !out.success() {
                 return None;
             }
             Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
@@ -470,11 +456,7 @@ pub async fn git_branch_compare(path: String) -> Result<GitBranchCompare, String
 #[tauri::command]
 pub async fn git_diff_file(path: String, file: String) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
-        let output = git_read()
-            .args(["diff", "HEAD", "--", &file])
-            .current_dir(&path)
-            .output()
-            .map_err(|e| e.to_string())?;
+        let output = git_read(&path, &["diff", "HEAD", "--", &file]).map_err(|e| e.to_string())?;
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     })
     .await
@@ -486,41 +468,32 @@ fn join_err(e: tokio::task::JoinError) -> GitErrorPayload {
     GitErrorPayload::internal(e.to_string())
 }
 
+/// Run `op` against the repository at `path` on a blocking thread. The
+/// rules themselves are `atlas_git::Repository`'s. None of these tells the
+/// change notifier: the watcher sees the index and the files move.
+async fn in_repo(
+    path: String,
+    op: impl FnOnce(&Repository<'_>) -> Result<(), GitErrorPayload> + Send + 'static,
+) -> Result<(), GitErrorPayload> {
+    tokio::task::spawn_blocking(move || op(&Repository::new(&path, &())))
+        .await
+        .map_err(join_err)?
+}
+
 #[tauri::command]
 pub async fn git_stage(path: String, files: Vec<String>) -> Result<(), GitErrorPayload> {
-    tokio::task::spawn_blocking(move || {
-        if files.is_empty() {
-            return Ok(());
-        }
-        GitCommand::new(&path, &["add"]).pathspecs(&files).run()?;
-        Ok(())
-    })
-    .await
-    .map_err(join_err)?
+    in_repo(path, move |repo| repo.stage(&files)).await
 }
 
 #[tauri::command]
 pub async fn git_unstage(path: String, files: Vec<String>) -> Result<(), GitErrorPayload> {
-    tokio::task::spawn_blocking(move || {
-        if files.is_empty() {
-            return Ok(());
-        }
-        GitCommand::new(&path, &["restore", "--staged"])
-            .pathspecs(&files)
-            .run()?;
-        Ok(())
-    })
-    .await
-    .map_err(join_err)?
+    in_repo(path, move |repo| repo.unstage(&files)).await
 }
 
 #[tauri::command]
 pub async fn git_list_branches(path: String) -> Result<Vec<GitBranch>, String> {
     tokio::task::spawn_blocking(move || {
-        let output = git_read()
-            .args(["branch", "--format=%(refname:short)\x1f%(HEAD)"])
-            .current_dir(&path)
-            .output()
+        let output = git_read(&path, &["branch", "--format=%(refname:short)\x1f%(HEAD)"])
             .map_err(|e| e.to_string())?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -541,72 +514,23 @@ pub async fn git_list_branches(path: String) -> Result<Vec<GitBranch>, String> {
     .map_err(|e| e.to_string())?
 }
 
-/// Refuse a branch name git would read as an option. `git check-ref-format`
-/// refuses one too, but only after git has already parsed it as a flag.
-fn branch_arg(branch: &str) -> Result<&str, GitErrorPayload> {
-    if branch.is_empty() || branch.starts_with('-') {
-        return Err(GitErrorPayload::internal(format!(
-            "'{branch}' is not a branch name."
-        )));
-    }
-    Ok(branch)
-}
-
-/// `git checkout <branch> --`: the trailing `--` pins `branch` as a revision,
-/// so a name that is also a file is never read as a path to restore.
-fn checkout(path: &str, branch: &str) -> Result<(), GitErrorPayload> {
-    GitCommand::new(path, &["checkout", branch_arg(branch)?, "--"]).run()?;
-    Ok(())
-}
-
 #[tauri::command]
 pub async fn git_checkout(path: String, branch: String) -> Result<(), GitErrorPayload> {
-    tokio::task::spawn_blocking(move || checkout(&path, &branch))
-        .await
-        .map_err(join_err)?
+    in_repo(path, move |repo| repo.checkout(&branch)).await
 }
 
 /// Switch `path` to `branch` only if its working tree is clean (untracked
-/// files count): the check and the switch run back to back in one blocking
-/// task, so nothing the UI read earlier can have gone stale in between. A
-/// dirty tree is refused with `uncommitted-changes` and left alone. For
-/// starting a session on another session's branch, where the checkout may be
-/// shared with an agent Atlas does not run.
+/// files count); a dirty tree is refused with `uncommitted-changes` and left
+/// alone. For starting a session on another session's branch, where the
+/// checkout may be shared with an agent Atlas does not run.
 #[tauri::command]
 pub async fn git_switch_if_clean(path: String, branch: String) -> Result<(), GitErrorPayload> {
-    tokio::task::spawn_blocking(move || switch_if_clean(&path, &branch))
-        .await
-        .map_err(join_err)?
-}
-
-fn switch_if_clean(path: &str, branch: &str) -> Result<(), GitErrorPayload> {
-    let branch = branch_arg(branch)?;
-    let status = GitCommand::new(path, &["status", "--porcelain", "--untracked-files=normal"])
-        .read_only()
-        .run()?;
-    if !status.stdout.trim().is_empty() {
-        let code = atlas_git::GitErrorCode::UncommittedChanges;
-        return Err(GitErrorPayload {
-            code,
-            message: atlas_git::error::friendly_message(code, &[], None),
-            raw_stderr: String::new(),
-            command: "git status --porcelain".into(),
-            exit_code: None,
-            files: Vec::new(),
-            hint: None,
-        });
-    }
-    checkout(path, branch)
+    in_repo(path, move |repo| repo.switch_if_clean(&branch)).await
 }
 
 #[tauri::command]
 pub async fn git_create_branch(path: String, name: String) -> Result<(), GitErrorPayload> {
-    tokio::task::spawn_blocking(move || {
-        GitCommand::new(&path, &["checkout", "-b", branch_arg(&name)?]).run()?;
-        Ok(())
-    })
-    .await
-    .map_err(join_err)?
+    in_repo(path, move |repo| repo.create_branch(&name)).await
 }
 
 /// One line of blame output, in final-file order (`line` is 1-based).
@@ -630,12 +554,9 @@ pub struct BlameLine {
 #[tauri::command]
 pub async fn git_blame_file(path: String, file: String) -> Result<Vec<BlameLine>, String> {
     tokio::task::spawn_blocking(move || {
-        let output = git_read()
-            .args(["blame", "-w", "--line-porcelain", "--", &file])
-            .current_dir(&path)
-            .output()
+        let output = git_read(&path, &["blame", "-w", "--line-porcelain", "--", &file])
             .map_err(|e| e.to_string())?;
-        if !output.status.success() {
+        if !output.success() {
             return Ok(Vec::new());
         }
         Ok(parse_line_porcelain(&String::from_utf8_lossy(
@@ -724,15 +645,6 @@ mod tests {
         assert!(status.success(), "git {args:?} failed");
     }
 
-    fn head(repo: &Path) -> String {
-        let out = atlas_process::command("git")
-            .args(["rev-parse", "--abbrev-ref", "HEAD"])
-            .current_dir(repo)
-            .output()
-            .unwrap();
-        String::from_utf8_lossy(&out.stdout).trim().to_owned()
-    }
-
     #[test]
     fn numstat_sums_lines_and_skips_binaries() {
         assert_eq!(
@@ -774,43 +686,6 @@ mod tests {
         assert_eq!(feature.ahead_of_default, Some(1));
         // a → b c d: one removed, three added, the last uncommitted.
         assert_eq!((feature.additions, feature.deletions), (3, 1));
-    }
-
-    /// Starting a session on another session's branch: the switch happens
-    /// only on a clean tree, untracked files included, and a name that is
-    /// also a file, or that looks like an option, is never misread.
-    #[test]
-    fn switch_if_clean_refuses_a_dirty_tree_and_reads_the_branch_safely() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        git(root, &["init", "-q", "-b", "main"]);
-        fs::write(root.join("f"), "a").unwrap();
-        // A file named like the branch: plain `git checkout feature` with
-        // a pathspec reading would restore it rather than switch.
-        fs::write(root.join("feature"), "a file").unwrap();
-        git(root, &["add", "-A"]);
-        git(root, &["commit", "-qm", "init"]);
-        git(root, &["branch", "feature"]);
-        let path = root.to_string_lossy().into_owned();
-
-        fs::write(root.join("untracked"), "x").unwrap();
-        let err = switch_if_clean(&path, "feature").unwrap_err();
-        assert_eq!(err.code, atlas_git::GitErrorCode::UncommittedChanges);
-        assert_eq!(head(root), "main", "left alone");
-        fs::remove_file(root.join("untracked")).unwrap();
-
-        fs::write(root.join("f"), "edited").unwrap();
-        assert!(switch_if_clean(&path, "feature").is_err());
-        assert_eq!(head(root), "main");
-        git(root, &["checkout", "-q", "--", "f"]);
-
-        for bad in ["-f", "--orphan=x", ""] {
-            assert!(switch_if_clean(&path, bad).is_err(), "{bad:?} refused");
-            assert_eq!(head(root), "main");
-        }
-
-        switch_if_clean(&path, "feature").unwrap();
-        assert_eq!(head(root), "feature");
     }
 
     /// `git_log` is branch-scoped unless a caller opts in. The Source-Control

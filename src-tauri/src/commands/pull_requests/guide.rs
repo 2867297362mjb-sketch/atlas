@@ -312,7 +312,6 @@ async fn remotes(root: &Path) -> Vec<String> {
 async fn fetch(root: &Path, remote: &str, refspec: &str, timeout: Duration) -> Result<(), String> {
     run_networked(
         root,
-        "git",
         &["fetch", "--quiet", "--no-tags", "--", remote, refspec],
         timeout,
     )
@@ -495,8 +494,8 @@ async fn prepare(
         .chain(["--unified=0", "--no-color", "--no-ext-diff", range.as_str()])
         .collect();
     let (names, patch) = tokio::join!(
-        run(&checkout, "git", &names_args, GIT_TIMEOUT),
-        run(&checkout, "git", &patch_args, GIT_TIMEOUT),
+        run(&checkout, &names_args, GIT_TIMEOUT),
+        run(&checkout, &patch_args, GIT_TIMEOUT),
     );
     let change = match (names, patch) {
         (Ok(names), Ok(patch)) => parse_change(&names, &patch),

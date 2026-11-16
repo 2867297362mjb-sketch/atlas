@@ -2822,27 +2822,20 @@ fn now_unix_secs() -> u64 {
 /// HEAD commit SHA. Never prompts — auth failures fail fast.
 fn git_clone_shallow(owner: &str, repo: &str, dest: &Path) -> Result<String, String> {
     let url = format!("https://github.com/{owner}/{repo}.git");
-    let out = atlas_process::command("git")
-        .args(["clone", "--depth", "1", "--no-tags", "--"])
-        .arg(&url)
-        .arg(dest)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_LFS_SKIP_SMUDGE", "1")
-        .output()
+    let out = atlas_git::shallow_clone(&url, dest)
         .map_err(|e| format!("failed to run `git` (is it installed?): {e}"))?;
-    if !out.status.success() {
+    if !out.success() {
         return Err(format!(
             "git clone of {owner}/{repo} failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
+            out.stderr_text().trim()
         ));
     }
-    let rev = atlas_process::command("git")
-        .arg("-C")
+    let rev = atlas_git::GitCommand::without_repo(&["-C"])
         .arg(dest)
-        .args(["rev-parse", "HEAD"])
+        .args(&["rev-parse", "HEAD"])
         .output()
         .map_err(|e| format!("failed to read HEAD: {e}"))?;
-    Ok(String::from_utf8_lossy(&rev.stdout).trim().to_string())
+    Ok(rev.stdout_text().trim().to_string())
 }
 
 /// Resolve the remote default-branch HEAD SHA WITHOUT fetching content
@@ -2850,21 +2843,17 @@ fn git_clone_shallow(owner: &str, repo: &str, dest: &Path) -> Result<String, Str
 /// prompts. Used to detect whether an installed pack is behind its source.
 fn git_ls_remote_head(owner: &str, repo: &str) -> Result<String, String> {
     let url = format!("https://github.com/{owner}/{repo}.git");
-    let out = atlas_process::command("git")
-        .args(["ls-remote", "--quiet"])
-        .arg(&url)
-        .arg("HEAD")
-        .env("GIT_TERMINAL_PROMPT", "0")
+    let out = atlas_git::GitCommand::without_repo(&["ls-remote", "--quiet", &url, "HEAD"])
         .output()
         .map_err(|e| format!("failed to run `git` (is it installed?): {e}"))?;
-    if !out.status.success() {
+    if !out.success() {
         return Err(format!(
             "git ls-remote of {owner}/{repo} failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
+            out.stderr_text().trim()
         ));
     }
     // Output is `<sha>\tHEAD` — take the first whitespace-delimited token.
-    String::from_utf8_lossy(&out.stdout)
+    out.stdout_text()
         .split_whitespace()
         .next()
         .filter(|s| !s.is_empty())
