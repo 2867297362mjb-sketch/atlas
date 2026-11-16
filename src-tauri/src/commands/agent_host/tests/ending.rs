@@ -377,6 +377,19 @@ async fn closing_during_a_running_turn_ends_it_and_the_late_turn_brings_nothing_
     })
     .await;
     assert!(s.residue().turn_control);
+    // The row stops being a draft when the thread's own event reaches the
+    // recorder. Nothing orders that against the turn being seen running, so
+    // wait for it too.
+    let acp_id = acp::SessionId::new(SESSION);
+    until("the send never reached the history row", || {
+        s.host.history().is_some_and(|history| {
+            history
+                .store()
+                .thread_for_session(&acp_id)
+                .is_some_and(|row| !row.is_draft())
+        })
+    })
+    .await;
 
     // The session was sent to, so its history row outlives it; nothing else
     // does.

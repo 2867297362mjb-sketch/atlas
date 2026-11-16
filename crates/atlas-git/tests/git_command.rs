@@ -60,12 +60,20 @@ fn arguments_arrive_in_order_and_a_read_takes_no_optional_locks() {
     let out = git(&script, &["log", "-n", "two words"]).run().unwrap();
     assert_eq!(out.stdout, "log,-n,two words,");
 
-    // A read: the flag goes before everything, which here is before the
-    // script path, so `sh` rejects it as its own option. That the run fails
-    // on the flag is the proof of where it sits.
-    let err = git(&script, &["status"]).read_only().output().unwrap();
-    assert!(!err.success());
-    assert!(err.stderr_text().contains("no-optional-locks"), "{err:?}");
+    // A read: the flag goes before every argument. `echo` stands in for git
+    // here because it parses no options and prints its arguments back in
+    // order. A script run by `sh` cannot show this: `sh` takes the flag as
+    // its own option, and bash and dash word that refusal differently.
+    let read = GitCommand::new(std::env::temp_dir(), &["status", "--short"])
+        .program("/bin/echo")
+        .read_only()
+        .output()
+        .unwrap();
+    assert!(read.success(), "{read:?}");
+    assert_eq!(
+        read.stdout_text().trim_end(),
+        "--no-optional-locks status --short"
+    );
 }
 
 #[test]
