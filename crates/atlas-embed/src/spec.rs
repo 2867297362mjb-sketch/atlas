@@ -49,7 +49,7 @@ impl ModelSpec {
 
     pub fn write(&self, model_dir: &Path) -> std::io::Result<()> {
         let json = serde_json::to_vec_pretty(self).map_err(std::io::Error::other)?;
-        std::fs::write(model_dir.join(SPEC_FILE), json)
+        atlas_fs::replace_file(model_dir.join(SPEC_FILE), json)
     }
 }
 

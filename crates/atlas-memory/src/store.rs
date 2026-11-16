@@ -58,18 +58,15 @@ impl HnswStore {
         Ok(Self { index, dim })
     }
 
-    /// Persist the index to `path` (caller handles atomic temp+rename of the
-    /// pair {hnsw, manifest}). Ensures the parent dir exists.
+    /// Persist the index to `path`, replacing the file whole. Ensures the
+    /// parent dir exists.
     pub fn save(&self, path: &Path) -> Result<()> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
         // Written here for the same reason as `load`.
         let mut bytes = vec![0; self.index.serialized_length()];
         self.index
             .save_to_buffer(&mut bytes)
             .map_err(|e| anyhow!("usearch save: {e}"))?;
-        std::fs::write(path, &bytes)?;
+        atlas_fs::replace_file(path, &bytes)?;
         Ok(())
     }
 

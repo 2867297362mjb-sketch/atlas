@@ -74,17 +74,11 @@ impl Manifest {
         Ok(m)
     }
 
-    /// Atomically persist to JSON at `path`: write `*.tmp`, then `rename` over
-    /// the target so a reader never observes a partial file.
+    /// Atomically persist to JSON at `path`, so a reader never observes a
+    /// partial file.
     pub fn save(&self, path: &Path) -> Result<()> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
         let json = serde_json::to_vec_pretty(self).map_err(|e| anyhow!("serialize: {e}"))?;
-        let tmp = tmp_sibling(path);
-        std::fs::write(&tmp, &json).map_err(|e| anyhow!("write tmp: {e}"))?;
-        std::fs::rename(&tmp, path).map_err(|e| anyhow!("rename: {e}"))?;
-        Ok(())
+        atlas_fs::replace_file(path, json).map_err(|e| anyhow!("write manifest: {e}"))
     }
 
     fn rebuild_index(&mut self) {
@@ -194,13 +188,6 @@ impl Manifest {
     }
 }
 
-/// `<path>.tmp` sibling for atomic writes.
-fn tmp_sibling(path: &Path) -> std::path::PathBuf {
-    let mut s = path.as_os_str().to_owned();
-    s.push(".tmp");
-    std::path::PathBuf::from(s)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -274,8 +261,16 @@ mod tests {
         m.upsert("a", "h", "c", 1);
         m.save(&path).unwrap();
 
-        assert!(path.exists());
-        let tmp = tmp_sibling(&path);
-        assert!(!tmp.exists(), "stray .tmp left behind: {}", tmp.display());
+        m.save(&path).unwrap();
+
+        let names: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(
+            names,
+            ["manifest.json"],
+            "a stray temp file was left behind"
+        );
     }
 }

@@ -328,7 +328,7 @@ fn save_resume_state(store: &Store, key: &str, state: Option<&ResumeState>) {
         }
     }
     if let Ok(json) = serde_json::to_string(&map) {
-        let _ = std::fs::write(&path, json);
+        let _ = atlas_fs::replace_file(&path, json);
     }
 }
 

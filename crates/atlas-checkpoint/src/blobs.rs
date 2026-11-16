@@ -47,31 +47,14 @@ impl BlobStore {
             return Ok(key);
         }
 
-        let parent = path.parent().expect("blob path always has a parent");
-        fs::create_dir_all(parent)
-            .map_err(|e| Error::Blob(format!("{}: {e}", parent.display())))?;
-
-        // Write to a temp name, fsync, and rename, so a reader never observes a
-        // half-written blob under a key that claims to be complete. The fsync is
-        // load-bearing: on power loss a rename can be durable while the data
+        // Replaced whole (temp name, fsync, rename), so a reader never observes
+        // a half-written blob under a key that claims to be complete. The fsync
+        // is load-bearing: on power loss a rename can be durable while the data
         // blocks are not, leaving a truncated file under the final key — and
         // because `put` short-circuits on `exists()`, a corrupt blob under a
         // content-addressed key would never be repaired.
-        let temp = path.with_extension("tmp");
-        {
-            use std::io::Write;
-            let mut file = fs::File::create(&temp)
-                .map_err(|e| Error::Blob(format!("{}: {e}", temp.display())))?;
-            file.write_all(bytes)
-                .map_err(|e| Error::Blob(format!("{}: {e}", temp.display())))?;
-            file.sync_all()
-                .map_err(|e| Error::Blob(format!("{}: {e}", temp.display())))?;
-        }
-        fs::rename(&temp, &path).map_err(|e| Error::Blob(format!("{}: {e}", path.display())))?;
-        // Best-effort directory fsync so the rename itself survives power loss.
-        if let Ok(dir) = fs::File::open(parent) {
-            let _ = dir.sync_all();
-        }
+        atlas_fs::replace_file(&path, bytes)
+            .map_err(|e| Error::Blob(format!("{}: {e}", path.display())))?;
         Ok(key)
     }
 
