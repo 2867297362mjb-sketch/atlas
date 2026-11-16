@@ -243,6 +243,10 @@ pub struct TestServer {
     /// Every session's event stream, kept so a test can read what the thread
     /// announced rather than inferring it from the thread's final state.
     events: Arc<Mutex<HashMap<acp::SessionId, EventStream<AcpThreadEvent>>>>,
+    /// `None` until [`TestServer::advertise_close`]: its connections then
+    /// advertise `session/close`, and every id they are asked to close lands
+    /// here.
+    closes: Arc<Mutex<Option<Vec<String>>>>,
 }
 
 impl TestServer {
@@ -266,6 +270,7 @@ impl TestServer {
             prompts: Arc::new(Mutex::new(Default::default())),
             fixed_session_id: None,
             events: Arc::new(Mutex::new(HashMap::new())),
+            closes: Arc::default(),
         })
     }
 
@@ -283,7 +288,19 @@ impl TestServer {
             prompts: Arc::new(Mutex::new(Default::default())),
             fixed_session_id: Some(session_id.to_string()),
             events: Arc::new(Mutex::new(HashMap::new())),
+            closes: Arc::default(),
         })
+    }
+
+    /// Advertise `session/close` on this server's connections, live ones
+    /// included.
+    pub fn advertise_close(&self) {
+        self.closes.lock().unwrap().get_or_insert_with(Vec::new);
+    }
+
+    /// Every session id a connection was asked to close, in order.
+    pub fn closes(&self) -> Vec<String> {
+        self.closes.lock().unwrap().clone().unwrap_or_default()
     }
 
     pub fn set_behaviour(&self, behaviour: ConnectBehaviour) {
@@ -353,6 +370,7 @@ impl AgentServer for TestServer {
         let prompts = self.prompts.clone();
         let fixed_session_id = self.fixed_session_id.clone();
         let events = self.events.clone();
+        let closes = self.closes.clone();
 
         async move {
             // Dropped-before-resolved is the signal ATL-228 turns on, so the
@@ -380,6 +398,7 @@ impl AgentServer for TestServer {
                 prompts,
                 fixed_session_id,
                 events,
+                closes,
             }) as Arc<dyn AgentConnection>)
         }
         .boxed()
@@ -398,6 +417,7 @@ pub struct TestConnection {
     prompts: Arc<Mutex<std::collections::VecDeque<oneshot::Receiver<Result<acp::StopReason>>>>>,
     fixed_session_id: Option<String>,
     events: Arc<Mutex<HashMap<acp::SessionId, EventStream<AcpThreadEvent>>>>,
+    closes: Arc<Mutex<Option<Vec<String>>>>,
 }
 
 impl Drop for TestConnection {
@@ -477,6 +497,20 @@ impl AgentConnection for TestConnection {
     }
 
     fn cancel(&self, _session_id: &acp::SessionId) {}
+
+    fn supports_close_session(&self) -> bool {
+        self.closes.lock().unwrap().is_some()
+    }
+
+    fn close_session(
+        self: Arc<Self>,
+        session_id: acp::SessionId,
+    ) -> BoxFuture<'static, Result<()>> {
+        if let Some(closes) = self.closes.lock().unwrap().as_mut() {
+            closes.push(session_id.to_string());
+        }
+        async { Ok(()) }.boxed()
+    }
 }
 
 // ------------------------------------------------------------------- harness

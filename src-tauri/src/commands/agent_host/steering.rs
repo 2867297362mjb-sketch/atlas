@@ -66,6 +66,7 @@
 use std::collections::VecDeque;
 
 use atlas_acp_thread::prompt::{self, ImageAttachment, PastedText, ResourceLinkSpec};
+use atlas_agent_manager::{EndKind, Released, SessionExtra};
 use atlas_agent_wire::{Origin, QueuedPrompt};
 
 use super::*;
@@ -219,8 +220,60 @@ pub(super) struct TurnControl {
 }
 
 impl TurnControl {
-    pub(super) fn has_queue(&self) -> bool {
+    fn has_queue(&self) -> bool {
         !self.queue.is_empty()
+    }
+}
+
+/// What the steering entry keeps for a session, beside its record in the
+/// session registry: the turn controller and the remote-control seat. One
+/// value under the registry's one lock, so a queue is pruned by the seat
+/// that was just set and drained by the seat that is there.
+#[derive(Debug, Default)]
+pub(in crate::commands::agent_host) struct Steering {
+    control: TurnControl,
+    seat: Option<Seat>,
+}
+
+impl SessionExtra for Steering {
+    fn survives(&mut self, end: EndKind) -> bool {
+        match end {
+            // The session is over: the queue was typed for it and the seat
+            // was a seat in it. Nothing is left to steer.
+            EndKind::Closed | EndKind::Quit => false,
+            // The process went, the session did not: the tab's rebind brings
+            // it back under the same id. A queue with prompts still parked
+            // waits for that, and so does the seat, because the room that
+            // set it is still open and names its driver only on a change. An
+            // empty controller has nothing to carry over.
+            EndKind::AgentGone => {
+                if !self.control.has_queue() {
+                    self.control = TurnControl::default();
+                }
+                self.control.has_queue() || self.seat.is_some()
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+impl Steering {
+    /// Whether a turn this host dispatched has not come back yet.
+    pub(in crate::commands::agent_host) fn turn_running(&self) -> bool {
+        self.control.running.is_some()
+    }
+
+    /// Whether anything of a turn controller is kept: a queue, a running
+    /// turn, a closed gate.
+    pub(in crate::commands::agent_host) fn has_control(&self) -> bool {
+        self.control.has_queue()
+            || self.control.running.is_some()
+            || self.control.paused
+            || self.control.force_next
+    }
+
+    pub(in crate::commands::agent_host) fn has_seat(&self) -> bool {
+        self.seat.is_some()
     }
 }
 
@@ -388,23 +441,19 @@ impl AgentHost {
             driver,
             held,
         };
-        {
-            let mut seats = lock(&self.seats);
-            if seats.get(session_id) == Some(&seat) {
-                return;
+        let pruned = self.sessions.with_extra(session_id, |steering| {
+            if steering.seat.as_ref() == Some(&seat) {
+                return None;
             }
-            seats.insert(session_id.to_owned(), seat.clone());
-        }
-        let pruned = {
-            let mut turns = lock(&self.turns);
-            match turns.get_mut(session_id) {
-                Some(control) => {
-                    let before = control.queue.len();
-                    control.queue.retain(|item| seat.keeps(&item.origin));
-                    control.queue.len() != before
-                }
-                None => false,
-            }
+            let queue = &mut steering.control.queue;
+            let before = queue.len();
+            queue.retain(|item| seat.keeps(&item.origin));
+            let pruned = queue.len() != before;
+            steering.seat = Some(seat);
+            Some(pruned)
+        });
+        let Some(pruned) = pruned else {
+            return;
         };
         if pruned {
             tracing::info!(target: "atlas::steering", session = session_id, "a former driver's queued prompts were discarded");
@@ -415,13 +464,9 @@ impl AgentHost {
 
     /// Who drives the session remotely, if not this desktop's account.
     pub fn remote_driver(&self, session_id: &str) -> Option<RemoteDriver> {
-        lock(&self.seats)
-            .get(session_id)
-            .and_then(|seat| seat.driver.clone())
-    }
-
-    fn seat_of(&self, session_id: &str) -> Option<Seat> {
-        lock(&self.seats).get(session_id).cloned()
+        self.sessions.extra_mut(session_id, |steering| {
+            steering?.seat.as_ref()?.driver.clone()
+        })
     }
 
     /// Refuse local steering while someone else holds the seat. Remote
@@ -489,15 +534,15 @@ impl AgentHost {
     pub fn remove_queued(&self, key: &SessionKey, item_id: &str, origin: Origin) -> Result<bool> {
         note_steer("remove_queued", &key.session_id, &origin);
         self.known_session(&key.session_id)?;
-        let removed = {
-            let mut turns = lock(&self.turns);
-            let Some(control) = turns.get_mut(&key.session_id) else {
-                return Ok(false);
+        let removed = self.sessions.extra_mut(&key.session_id, |steering| {
+            let Some(steering) = steering else {
+                return false;
             };
-            let before = control.queue.len();
-            control.queue.retain(|item| item.id != item_id);
-            control.queue.len() != before
-        };
+            let queue = &mut steering.control.queue;
+            let before = queue.len();
+            queue.retain(|item| item.id != item_id);
+            queue.len() != before
+        });
         if removed {
             self.announce_queue(&key.session_id);
         }
@@ -516,10 +561,8 @@ impl AgentHost {
     /// head now if the session is idle.
     pub fn set_queue_paused(self: &Arc<Self>, key: &SessionKey, paused: bool) -> Result<()> {
         self.known_session(&key.session_id)?;
-        lock(&self.turns)
-            .entry(key.session_id.clone())
-            .or_default()
-            .paused = paused;
+        self.sessions
+            .with_extra(&key.session_id, |steering| steering.control.paused = paused);
         if !paused {
             self.maybe_drain(&key.session_id);
         }
@@ -547,19 +590,19 @@ impl AgentHost {
         note_steer("send_now", &key.session_id, &origin);
         self.seat(&key.session_id, &origin)?;
         self.known_session(&key.session_id)?;
-        let busy = {
-            let mut turns = lock(&self.turns);
-            let control = turns.entry(key.session_id.clone()).or_default();
-            let Some(at) = control.queue.iter().position(|item| item.id == item_id) else {
-                return Err(HostError::new(
-                    "that prompt is no longer queued",
-                    ErrorClass::Fatal,
-                ));
-            };
+        let busy = self.sessions.with_extra(&key.session_id, |steering| {
+            let control = &mut steering.control;
+            let at = control.queue.iter().position(|item| item.id == item_id)?;
             let item = control.queue.remove(at).expect("position is in range");
             control.queue.push_front(item);
             control.force_next = true;
-            control.running.is_some()
+            Some(control.running.is_some())
+        });
+        let Some(busy) = busy else {
+            return Err(HostError::new(
+                "that prompt is no longer queued",
+                ErrorClass::Fatal,
+            ));
         };
         self.announce_queue(&key.session_id);
         if busy {
@@ -579,10 +622,18 @@ impl AgentHost {
 
     /// The session's queue, as the wire shows it.
     pub fn queue_of(&self, session_id: &str) -> Vec<QueuedPrompt> {
-        lock(&self.turns)
-            .get(session_id)
-            .map(|control| control.queue.iter().map(QueuedItem::wire).collect())
-            .unwrap_or_default()
+        self.sessions.extra_mut(session_id, |steering| {
+            steering
+                .map(|steering| {
+                    steering
+                        .control
+                        .queue
+                        .iter()
+                        .map(QueuedItem::wire)
+                        .collect()
+                })
+                .unwrap_or_default()
+        })
     }
 
     /// Stop the session: discard its queue and cancel the running turn. Safe
@@ -627,18 +678,16 @@ impl AgentHost {
     }
 
     fn discard_queue(&self, session_id: &str) {
-        let had = {
-            let mut turns = lock(&self.turns);
-            match turns.get_mut(session_id) {
-                Some(control) => {
-                    control.force_next = false;
-                    let had = !control.queue.is_empty();
-                    control.queue.clear();
-                    had
-                }
-                None => false,
-            }
-        };
+        let had = self.sessions.extra_mut(session_id, |steering| {
+            let Some(steering) = steering else {
+                return false;
+            };
+            let control = &mut steering.control;
+            control.force_next = false;
+            let had = !control.queue.is_empty();
+            control.queue.clear();
+            had
+        });
         if had {
             self.announce_queue(session_id);
         }
@@ -647,20 +696,24 @@ impl AgentHost {
     fn park(&self, session_id: &str, prompt: Prompt, origin: Origin) -> Result<String> {
         self.known_session(session_id)?;
         let id = format!("q-{}", Uuid::new_v4().simple());
-        {
-            let mut turns = lock(&self.turns);
-            let control = turns.entry(session_id.to_owned()).or_default();
-            if control.queue.len() >= QUEUE_MAX {
-                return Err(HostError::new(
-                    format!("the queue is full ({QUEUE_MAX} prompts); wait for a turn to finish"),
-                    ErrorClass::Fatal,
-                ));
+        let item = QueuedItem {
+            id: id.clone(),
+            prompt,
+            origin,
+        };
+        let parked = self.sessions.with_extra(session_id, |steering| {
+            let queue = &mut steering.control.queue;
+            if queue.len() >= QUEUE_MAX {
+                return false;
             }
-            control.queue.push_back(QueuedItem {
-                id: id.clone(),
-                prompt,
-                origin,
-            });
+            queue.push_back(item);
+            true
+        });
+        if !parked {
+            return Err(HostError::new(
+                format!("the queue is full ({QUEUE_MAX} prompts); wait for a turn to finish"),
+                ErrorClass::Fatal,
+            ));
         }
         self.announce_queue(session_id);
         Ok(id)
@@ -671,13 +724,9 @@ impl AgentHost {
     /// driver's parked prompts would otherwise wait for a tab that never
     /// comes back.
     pub(super) fn unpause_queue(self: &Arc<Self>, session_id: &str) {
-        let was_paused = {
-            let mut turns = lock(&self.turns);
-            match turns.get_mut(session_id) {
-                Some(control) => std::mem::replace(&mut control.paused, false),
-                None => false,
-            }
-        };
+        let was_paused = self.sessions.extra_mut(session_id, |steering| {
+            steering.is_some_and(|steering| std::mem::replace(&mut steering.control.paused, false))
+        });
         if was_paused {
             tracing::info!(target: "atlas::steering", session = session_id, "held session's queue released with its tab");
         }
@@ -691,7 +740,7 @@ impl AgentHost {
     }
 
     fn known_session(&self, session_id: &str) -> Result<()> {
-        if lock(&self.sessions).contains_key(session_id) {
+        if self.sessions.contains(session_id) {
             Ok(())
         } else {
             Err(HostError::unknown_session())
@@ -702,12 +751,8 @@ impl AgentHost {
     /// is running and the queue may drain; the rest stay parked. Answers the
     /// item started and its turn.
     fn maybe_drain(self: &Arc<Self>, session_id: &str) -> Option<(String, u64)> {
-        // Read before the turns lock: the seat is written under its own lock
-        // and never with the turns held.
-        let seat = self.seat_of(session_id);
-        let (item, at) = {
-            let mut turns = lock(&self.turns);
-            let control = turns.get_mut(session_id)?;
+        let (item, at) = self.sessions.extra_mut(session_id, |steering| {
+            let Steering { control, seat } = steering?;
             if control.running.is_some() || (control.paused && !control.force_next) {
                 return None;
             }
@@ -718,8 +763,8 @@ impl AgentHost {
             let item = control.queue.remove(at).expect("position is in range");
             control.force_next = false;
             control.running = Some(RESERVED);
-            (item, at)
-        };
+            Some((item, at))
+        })?;
         self.announce_queue(session_id);
         match self.dispatch(session_id, item.prompt.clone(), item.origin.clone()) {
             Ok(turn_seq) => Some((item.id, turn_seq)),
@@ -728,15 +773,14 @@ impl AgentHost {
                 // agent went away) is still what the user asked for, and the
                 // window's rebind drains it.
                 tracing::warn!(target: "atlas::steering", session = session_id, "queued prompt did not start: {e}");
-                {
-                    let mut turns = lock(&self.turns);
-                    let control = turns.entry(session_id.to_owned()).or_default();
+                self.sessions.with_extra(session_id, |steering| {
+                    let control = &mut steering.control;
                     if control.running == Some(RESERVED) {
                         control.running = None;
                     }
                     let at = at.min(control.queue.len());
                     control.queue.insert(at, item);
-                }
+                });
                 self.announce_queue(session_id);
                 None
             }
@@ -746,37 +790,34 @@ impl AgentHost {
     /// A turn this host dispatched came back. If it is still the one the
     /// controller is waiting on, the queue may move.
     fn turn_returned(self: &Arc<Self>, session_id: &str, turn_seq: u64) {
-        {
-            let mut turns = lock(&self.turns);
-            let Some(control) = turns.get_mut(session_id) else {
-                return;
+        let ours = self.sessions.extra_mut(session_id, |steering| {
+            let Some(steering) = steering else {
+                return false;
             };
-            if control.running != Some(turn_seq) {
+            if steering.control.running != Some(turn_seq) {
                 // Superseded by a newer dispatch: that one's return drains.
-                return;
+                return false;
             }
-            control.running = None;
+            steering.control.running = None;
+            true
+        });
+        if ours {
+            self.maybe_drain(session_id);
         }
-        self.maybe_drain(session_id);
     }
 
     /// What the send path records a prompt against: the session's plugin, its
     /// directory, and the model it runs on (the user's pick, else the agent's
     /// own default — the picker's value).
     fn send_meta(&self, session_id: &str) -> Result<(String, String, Option<String>)> {
-        let (plugin_id, cwd, picked) = {
-            let sessions = lock(&self.sessions);
-            let record = sessions
-                .get(session_id)
-                .ok_or_else(HostError::unknown_session)?;
-            (
-                record.plugin_id.clone(),
-                record.cwd.clone(),
-                record.current_model.clone(),
-            )
-        };
-        let model = picked.or_else(|| self.default_model(session_id));
-        Ok((plugin_id, cwd, model))
+        let info = self
+            .sessions
+            .info(session_id)
+            .ok_or_else(HostError::unknown_session)?;
+        let model = info
+            .current_model
+            .or_else(|| self.default_model(session_id));
+        Ok((info.plugin_id, info.cwd, model))
     }
 
     /// Start a turn: the side effects, the turn's identity, the stamp that
@@ -789,14 +830,10 @@ impl AgentHost {
         // its next attempt would record the same prompt twice.
         let embedded_context =
             !prompt.pastes.is_empty() && self.prompt_embedded_context(session_id)?;
-        let turn_seq = {
-            let mut sessions = lock(&self.sessions);
-            let record = sessions
-                .get_mut(session_id)
-                .ok_or_else(HostError::unknown_session)?;
-            record.turn_seq = record.turn_seq.wrapping_add(1);
-            record.turn_seq
-        };
+        let turn_seq = self
+            .sessions
+            .next_turn_seq(session_id)
+            .ok_or_else(HostError::unknown_session)?;
 
         // The side effects, before the turn opens — capture binds the turn to
         // its prompt at `note_prompt`, and a delta-only recorder would see a
@@ -851,10 +888,9 @@ impl AgentHost {
         // Before the agent can write a byte of this turn to its transcript, so
         // the session watcher never mistakes that write for another process.
         self.begin_atlas_turn(session_id);
-        lock(&self.turns)
-            .entry(session_id.to_owned())
-            .or_default()
-            .running = Some(turn_seq);
+        self.sessions.with_extra(session_id, |steering| {
+            steering.control.running = Some(turn_seq);
+        });
 
         let this = self.clone();
         let session_key = session_id.to_owned();
@@ -866,9 +902,10 @@ impl AgentHost {
             // A superseded turn's end must not write out the turn that
             // replaced it. A session closed meanwhile ended its turn with it.
             if let Some(thread) = thread {
-                let superseded = lock(&this.sessions)
-                    .get(&session_key)
-                    .is_some_and(|record| record.turn_seq != turn_seq);
+                let superseded = this
+                    .sessions
+                    .info(&session_key)
+                    .is_some_and(|info| info.turn_seq != turn_seq);
                 if !superseded {
                     this.open_turns.end(thread);
                 }
@@ -1091,9 +1128,8 @@ impl AgentHost {
             .select_model(AgentModelId::new(model_id.clone()))
             .await
             .map_err(HostError::from)?;
-        if let Some(record) = lock(&self.sessions).get_mut(&key.session_id) {
-            record.current_model = Some(model_id.clone());
-        }
+        self.sessions
+            .set_current_model(&key.session_id, model_id.clone());
         // The thread has no event for this, so the host announces it — with
         // who picked it, so the window's pill and a remote viewer can say so.
         self.projector
@@ -1198,15 +1234,10 @@ impl AgentHost {
     /// holds it (an RC session id, `"dev"`), so two holders release
     /// independently. Announced as `hold_changed` on the first hold.
     pub fn hold_session(&self, session_id: &str, holder: &str) -> Result<()> {
-        let first = {
-            let mut sessions = lock(&self.sessions);
-            let record = sessions
-                .get_mut(session_id)
-                .ok_or_else(HostError::unknown_session)?;
-            let first = record.holds.is_empty();
-            record.holds.insert(holder.to_owned());
-            first
-        };
+        let first = self
+            .sessions
+            .hold(session_id, holder)
+            .ok_or_else(HostError::unknown_session)?;
         if first {
             tracing::info!(target: "atlas::steering", session = session_id, holder, "session held");
             self.projector
@@ -1221,51 +1252,37 @@ impl AgentHost {
     /// Releasing a hold that is not taken, or on a session already gone, is a
     /// no-op.
     pub async fn release_session(&self, session_id: &str, holder: &str) -> Result<()> {
-        let (last, window_gone) = {
-            let mut sessions = lock(&self.sessions);
-            let Some(record) = sessions.get_mut(session_id) else {
-                return Ok(());
-            };
-            if !record.holds.remove(holder) {
-                return Ok(());
-            }
-            (record.holds.is_empty(), record.released_by_window)
+        let ended = match self.sessions.release(session_id, holder) {
+            Released::NotHeld | Released::StillHeld => return Ok(()),
+            Released::Last => None,
+            Released::LastAndEnded(ended) => Some(ended),
         };
-        if !last {
-            return Ok(());
-        }
+        let window_gone = ended.is_some();
         tracing::info!(target: "atlas::steering", session = session_id, holder, window_gone, "session hold released");
         self.projector
             .note_hold_changed(&acp::SessionId::new(session_id), false);
-        if window_gone {
-            self.teardown_session(session_id).await?;
+        match ended {
+            Some(ended) => self.finish_close(ended).await,
+            None => Ok(()),
         }
-        Ok(())
     }
 
     /// Whether any hold is keeping the session open.
     pub fn is_held(&self, session_id: &str) -> bool {
-        lock(&self.sessions)
-            .get(session_id)
-            .is_some_and(|record| !record.holds.is_empty())
+        self.sessions.is_held(session_id)
     }
 
     /// Held sessions with a turn this host dispatched in flight — what the
     /// sidebar shows as "working" for a held thread with no tab.
     pub(super) fn held_working_sessions(&self) -> std::collections::HashSet<String> {
-        // Sessions first, then turns — the order every other reader takes.
-        let sessions = lock(&self.sessions);
-        let turns = lock(&self.turns);
-        sessions
-            .iter()
-            .filter(|(_, record)| !record.holds.is_empty())
-            .map(|(id, _)| id)
+        self.sessions
+            .held_sessions()
+            .into_iter()
             .filter(|id| {
-                turns
-                    .get(*id)
-                    .is_some_and(|control| control.running.is_some())
+                self.sessions.extra_mut(id, |steering| {
+                    steering.is_some_and(|steering| steering.control.running.is_some())
+                })
             })
-            .cloned()
             .collect()
     }
 }
@@ -1488,9 +1505,8 @@ mod tests {
         let session_id = f.key.session_id.clone();
         let host = f.host.clone();
         until("the turn returned", move || {
-            lock(&host.turns)
-                .get(&session_id)
-                .is_some_and(|c| c.running.is_none())
+            host.sessions
+                .extra_mut(&session_id, |s| s.is_some_and(|s| !s.turn_running()))
         })
         .await;
     }
@@ -1824,9 +1840,9 @@ mod tests {
         );
         assert!(!f.host.is_held(&f.key.session_id));
         assert!(
-            lock(&f.host.turns)
-                .get(&f.key.session_id)
-                .is_some_and(|c| c.running.is_some()),
+            f.host
+                .sessions
+                .extra_mut(&f.key.session_id, |s| s.is_some_and(|s| s.turn_running())),
             "the turn was not cancelled"
         );
         assert_eq!(f.host.remote_driver(&f.key.session_id), None);
@@ -2063,9 +2079,9 @@ mod tests {
         assert_eq!(f.recorder.last_queue(), Some(Vec::new()));
         assert!(f.host.snapshot_meta(&f.key).unwrap().queue.is_empty());
         until("the cancelled turn returned", || {
-            lock(&f.host.turns)
-                .get("s-stop")
-                .is_some_and(|c| c.running.is_none())
+            f.host
+                .sessions
+                .extra_mut("s-stop", |s| s.is_some_and(|s| !s.turn_running()))
         })
         .await;
         assert_eq!(f.native.prompts().len(), 1, "nothing drained after Stop");
