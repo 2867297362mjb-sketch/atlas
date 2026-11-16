@@ -422,12 +422,38 @@ pub async fn memory_graph_layout_save(
     project_path: String,
     layout: GraphLayout,
 ) -> Result<(), String> {
-    let path = layout_path(&project_path);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("create .atlas: {e}"))?;
-    }
     let json = serde_json::to_string(&layout).map_err(|e| e.to_string())?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, json).map_err(|e| format!("write layout: {e}"))?;
-    std::fs::rename(&tmp, &path).map_err(|e| format!("finalize layout: {e}"))
+    atlas_fs::replace_file(layout_path(&project_path), json)
+        .map_err(|e| format!("write layout: {e}"))
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_saved_layout_loads_back_and_leaves_only_its_file() {
+        let project = tempfile::tempdir().unwrap();
+        let root = project.path().to_string_lossy().to_string();
+        let layout = |x: f64| GraphLayout {
+            positions: std::collections::HashMap::from([("entry".to_string(), Pos { x, y: 2.0 })]),
+        };
+
+        // The first save is also the one that creates the profile directory.
+        memory_graph_layout_save(root.clone(), layout(1.0))
+            .await
+            .unwrap();
+        memory_graph_layout_save(root.clone(), layout(7.5))
+            .await
+            .unwrap();
+
+        let loaded = memory_graph_layout_load(root).await.unwrap();
+        assert_eq!(loaded.positions.len(), 1);
+        assert_eq!(loaded.positions["entry"].x, 7.5);
+        assert_eq!(loaded.positions["entry"].y, 2.0);
+        assert_eq!(
+            crate::commands::file_names_in(&atlas_profile::dir_in(project.path())),
+            ["memory-graph-layout.json"]
+        );
+    }
 }

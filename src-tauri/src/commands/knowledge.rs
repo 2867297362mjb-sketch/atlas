@@ -145,10 +145,7 @@ pub async fn save_knowledge_note(
     tokio::task::spawn_blocking(move || {
         let kb_dir = atlas_profile::dir_in(Path::new(&project_path)).join("knowledge");
         let filepath = kb_dir.join(format!("{id}.md"));
-        if let Some(parent) = filepath.parent() {
-            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        fs::write(&filepath, &content).map_err(|e| e.to_string())?;
+        atlas_fs::replace_file(&filepath, &content).map_err(|e| e.to_string())?;
         Ok(filepath.to_string_lossy().to_string())
     })
     .await
@@ -411,11 +408,8 @@ pub async fn log_interaction(
 #[tauri::command]
 pub async fn save_editor_state(project_path: String, state_json: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
-        let atlas_dir = atlas_profile::dir_in(Path::new(&project_path));
-        fs::create_dir_all(&atlas_dir).map_err(|e| e.to_string())?;
-        let state_path = atlas_dir.join("editor-state.json");
-        fs::write(&state_path, &state_json).map_err(|e| e.to_string())?;
-        Ok(())
+        let state_path = atlas_profile::dir_in(Path::new(&project_path)).join("editor-state.json");
+        atlas_fs::replace_file(&state_path, &state_json).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?

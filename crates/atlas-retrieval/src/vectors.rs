@@ -132,19 +132,11 @@ impl VectorFile {
     }
 
     fn write(&self) -> Result<(), RetrievalError> {
-        if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
         let mut bytes = vec![0; self.index.serialized_length()];
         self.index
             .save_to_buffer(&mut bytes)
             .map_err(|e| RetrievalError::Index(e.to_string()))?;
-        let tmp = self.path.with_extension("usearch.tmp");
-        let written = std::fs::write(&tmp, &bytes).and_then(|()| std::fs::rename(&tmp, &self.path));
-        if written.is_err() {
-            let _ = std::fs::remove_file(&tmp);
-        }
-        written.map_err(RetrievalError::from)
+        atlas_fs::replace_file(&self.path, &bytes).map_err(RetrievalError::from)
     }
 
     pub fn len(&self) -> usize {

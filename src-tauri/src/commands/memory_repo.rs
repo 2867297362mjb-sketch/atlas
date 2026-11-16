@@ -230,9 +230,7 @@ fn refresh_locked(home: &Path, store: &RecordStore) -> Result<bool, String> {
         if std::fs::read_to_string(&path).ok().as_deref() == Some(text.as_str()) {
             continue;
         }
-        let tmp = dir.join(format!(".{file}.tmp"));
-        std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
-        std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+        atlas_fs::replace_file(&path, text).map_err(|e| e.to_string())?;
     }
     let mut add = vec!["add", "--"];
     add.extend(MIRROR_FILES);

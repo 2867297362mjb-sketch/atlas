@@ -71,12 +71,8 @@ fn read_cache(app: &AppHandle) -> PricingCache {
 }
 
 fn write_cache(app: &AppHandle, c: &PricingCache) -> Result<(), String> {
-    let p = cache_path(app);
-    if let Some(parent) = p.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
     let json = serde_json::to_string(c).map_err(|e| e.to_string())?;
-    std::fs::write(&p, json).map_err(|e| e.to_string())
+    atlas_fs::replace_file(cache_path(app), json).map_err(|e| e.to_string())
 }
 
 /// Parse models.dev `api.json` (`{ "<provider>": { "models": { "<model>": {

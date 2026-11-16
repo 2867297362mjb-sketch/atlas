@@ -1175,12 +1175,12 @@ async fn read_wanted_spec(install_dir: &std::path::Path) -> Option<String> {
 }
 
 async fn write_wanted_spec(install_dir: &std::path::Path, package_spec: &str) {
-    if let Err(error) = tokio::fs::write(
-        install_dir.join(WANTED_SPEC_FILE),
-        format!("{package_spec}\n"),
-    )
-    .await
-    {
+    let path = install_dir.join(WANTED_SPEC_FILE);
+    let contents = format!("{package_spec}\n");
+    let written = tokio::task::spawn_blocking(move || atlas_fs::replace_file(path, contents))
+        .await
+        .unwrap_or_else(|join| Err(std::io::Error::other(join)));
+    if let Err(error) = written {
         tracing::warn!(
             path = %install_dir.join(WANTED_SPEC_FILE).display(),
             %error,

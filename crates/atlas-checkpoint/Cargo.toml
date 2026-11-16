@@ -8,6 +8,8 @@ description = "Atlas's agent-session record: local SQLite store, redact-on-write
 name = "atlas_checkpoint"
 
 [dependencies]
+# `replace_file`: the crash-safe write behind blobs and the import resume cache.
+atlas-fs = { path = "../atlas-fs" }
 # `.atlas` vs `.atlas-dev`: whose data this process owns (see that crate).
 atlas-profile = { path = "../atlas-profile" }
 # Every git run goes through its `GitCommand`.

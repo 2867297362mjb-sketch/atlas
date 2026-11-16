@@ -192,17 +192,10 @@ fn load_from_disk(project_path: &str) -> KnowledgeMetaFile {
 }
 
 fn write_to_disk(project_path: &str, file: &KnowledgeMetaFile) -> Result<(), String> {
-    let path = meta_path(project_path);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
     let body = serde_json::to_string_pretty(file).map_err(|e| e.to_string())?;
-    // Atomic write: tmp + rename so a crash mid-write doesn't truncate
-    // the existing _meta.json.
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, body.as_bytes()).map_err(|e| e.to_string())?;
-    fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
-    Ok(())
+    // Replaced whole, so a crash mid-write doesn't truncate the existing
+    // _meta.json.
+    atlas_fs::replace_file(meta_path(project_path), body).map_err(|e| e.to_string())
 }
 
 const DEBOUNCE: Duration = Duration::from_millis(300);

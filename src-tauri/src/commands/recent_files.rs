@@ -84,23 +84,15 @@ fn load_from_disk(project_root: &Path) -> Vec<RecentFile> {
     serde_json::from_str(&raw).unwrap_or_default()
 }
 
-/// Atomic write — `recent-files.json.tmp` + rename so a crash
-/// mid-write doesn't leave a torn JSON file.
+/// Replaced whole, so a crash mid-write doesn't leave a torn JSON file.
 fn save_to_disk(project_root: &Path, items: &[RecentFile]) -> Result<(), String> {
-    let path = store_path(project_root);
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| format!("mkdir failed: {e}"))?;
-    }
-    let tmp = path.with_extension("json.tmp");
     let raw = serde_json::to_string_pretty(items).map_err(|e| format!("serialize failed: {e}"))?;
-    std::fs::write(&tmp, raw).map_err(|e| format!("write tmp failed: {e}"))?;
-    std::fs::rename(&tmp, &path).map_err(|e| format!("rename failed: {e}"))
+    atlas_fs::replace_file(store_path(project_root), raw).map_err(|e| format!("write failed: {e}"))
 }
 
 /// Saves run on the blocking pool, so pushes in quick succession (the burst
-/// at startup in #372) can save at the same time. They share the one `.tmp`
-/// path, so unserialized saves can rename each other's temp file away and
-/// fail with ENOENT, and an older list can be the last one written.
+/// at startup in #372) can save at the same time. Each lands a whole file,
+/// but unserialized an older list can be the last one written.
 static SAVE_LOCK: Mutex<()> = Mutex::new(());
 
 /// Write the project's current list. The list is read under the save lock,

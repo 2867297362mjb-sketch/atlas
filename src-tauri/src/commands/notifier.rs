@@ -115,13 +115,8 @@ pub async fn notifier_icon_store(
     let path = icon_path(&app, &key)?;
     tauri::async_runtime::spawn_blocking(move || {
         if !path.is_file() {
-            if let Some(dir) = path.parent() {
-                std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
-            }
-            // Write beside, then rename: a banner never reads a half-written file.
-            let tmp = path.with_extension("png.tmp");
-            std::fs::write(&tmp, &png).map_err(|error| error.to_string())?;
-            std::fs::rename(&tmp, &path).map_err(|error| error.to_string())?;
+            // Replaced whole: a banner never reads a half-written file.
+            atlas_fs::replace_file(&path, &png).map_err(|error| error.to_string())?;
         }
         Ok(path.to_string_lossy().into_owned())
     })

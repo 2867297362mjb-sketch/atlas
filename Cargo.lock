@@ -841,6 +841,7 @@ dependencies = [
  "anyhow",
  "atlas-acp-thread",
  "atlas-agent-servers",
+ "atlas-fs",
  "atlas-process",
  "bzip2 0.4.4",
  "flate2",
@@ -911,6 +912,7 @@ dependencies = [
 name = "atlas-checkpoint"
 version = "0.1.0"
 dependencies = [
+ "atlas-fs",
  "atlas-git",
  "atlas-process",
  "atlas-profile",
@@ -949,6 +951,7 @@ name = "atlas-embed"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "atlas-fs",
  "candle-core",
  "candle-nn",
  "candle-transformers",
@@ -3365,6 +3368,7 @@ dependencies = [
  "atlas-engine-tools",
  "atlas-engine-utils-json-to-toml",
  "atlas-engine-windows-sandbox",
+ "atlas-fs",
  "atlas-git",
  "atlas-process",
  "atlas-thread-metadata",
@@ -3425,6 +3429,7 @@ dependencies = [
 name = "atlas-retrieval"
 version = "0.1.0"
 dependencies = [
+ "atlas-fs",
  "blake3",
  "half",
  "tempfile",
@@ -3500,6 +3505,7 @@ dependencies = [
 name = "atlas-theme"
 version = "0.1.0"
 dependencies = [
+ "atlas-fs",
  "atlas-profile",
  "dirs",
  "notify",

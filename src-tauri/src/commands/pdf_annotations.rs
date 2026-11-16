@@ -35,14 +35,8 @@ fn read_all(project_path: &str) -> PdfAnnotationsFile {
 }
 
 fn write_all(project_path: &str, file: &PdfAnnotationsFile) -> Result<(), String> {
-    let dir = atlas_profile::dir_in(Path::new(project_path));
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let final_path = dir.join("pdf-annotations.json");
-    let tmp_path = dir.join("pdf-annotations.json.tmp");
     let payload = serde_json::to_string(file).map_err(|e| e.to_string())?;
-    fs::write(&tmp_path, &payload).map_err(|e| e.to_string())?;
-    fs::rename(&tmp_path, &final_path).map_err(|e| e.to_string())?;
-    Ok(())
+    atlas_fs::replace_file(annotations_path(project_path), payload).map_err(|e| e.to_string())
 }
 
 /// All annotations for one PDF (empty if none saved yet).
@@ -80,4 +74,34 @@ pub async fn pdf_annotations_save(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn saved_annotations_load_back_and_leave_only_their_file() {
+        let project = tempfile::tempdir().unwrap();
+        let root = project.path().to_string_lossy().to_string();
+        let pdf = "/papers/a.pdf".to_string();
+        let note = |text: &str| vec![serde_json::json!({ "kind": "note", "text": text })];
+
+        // The first save is also the one that creates the profile directory.
+        pdf_annotations_save(root.clone(), pdf.clone(), note("first"))
+            .await
+            .unwrap();
+        pdf_annotations_save(root.clone(), pdf.clone(), note("second"))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            pdf_annotations_load(root, pdf).await.unwrap(),
+            note("second")
+        );
+        assert_eq!(
+            crate::commands::file_names_in(&atlas_profile::dir_in(project.path())),
+            ["pdf-annotations.json"]
+        );
+    }
 }

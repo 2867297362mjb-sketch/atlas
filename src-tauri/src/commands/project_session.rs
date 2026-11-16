@@ -22,11 +22,8 @@ pub async fn save_project_session(
     session_data: String,
 ) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
-        let atlas_dir = atlas_profile::dir_in(Path::new(&project_path));
-        fs::create_dir_all(&atlas_dir).map_err(|e| e.to_string())?;
-        let session_path = atlas_dir.join("session.json");
-        fs::write(&session_path, &session_data).map_err(|e| e.to_string())?;
-        Ok(())
+        let session_path = atlas_profile::dir_in(Path::new(&project_path)).join("session.json");
+        atlas_fs::replace_file(&session_path, &session_data).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?

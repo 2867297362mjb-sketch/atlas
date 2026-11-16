@@ -52,14 +52,8 @@ fn read_plans(project_path: &str) -> PlansFile {
 }
 
 fn write_plans(project_path: &str, file: &PlansFile) -> Result<(), String> {
-    let dir = atlas_profile::dir_in(Path::new(project_path));
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let final_path = dir.join("plans.json");
-    let tmp_path = dir.join("plans.json.tmp");
     let payload = serde_json::to_string_pretty(file).map_err(|e| e.to_string())?;
-    fs::write(&tmp_path, &payload).map_err(|e| e.to_string())?;
-    fs::rename(&tmp_path, &final_path).map_err(|e| e.to_string())?;
-    Ok(())
+    atlas_fs::replace_file(plans_path(project_path), payload).map_err(|e| e.to_string())
 }
 
 /// Return every saved plan for the project, newest first.
@@ -99,4 +93,42 @@ pub async fn plans_append(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(id: &str) -> PlanRecord {
+        PlanRecord {
+            id: id.to_string(),
+            session_id: Some("session".to_string()),
+            session_title: None,
+            user_message: "do it".to_string(),
+            plan: format!("# plan {id}"),
+            timestamp: "2026-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn appended_plans_load_back_and_leave_only_their_file() {
+        let project = tempfile::tempdir().unwrap();
+        let root = project.path().to_string_lossy().to_string();
+
+        // The first append is also the one that creates the profile directory.
+        plans_append(root.clone(), record("a")).await.unwrap();
+        plans_append(root.clone(), record("b")).await.unwrap();
+
+        let ids: Vec<String> = plans_load(root)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|p| p.id)
+            .collect();
+        assert_eq!(ids, ["b", "a"], "newest first");
+        assert_eq!(
+            crate::commands::file_names_in(&atlas_profile::dir_in(project.path())),
+            ["plans.json"]
+        );
+    }
 }

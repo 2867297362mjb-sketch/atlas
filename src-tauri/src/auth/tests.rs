@@ -470,6 +470,57 @@ async fn the_credential_file_is_owner_only() {
     );
 }
 
+/// The store on its own: what it saves it loads, into a directory that does
+/// not exist yet, leaving nothing beside the file.
+#[test]
+fn a_saved_session_loads_back_and_leaves_only_its_file() {
+    let dir = TempDir::new();
+    let nested = dir.path().join("not-yet").join("made");
+    let session = |token: &str| store::StoredSession {
+        session_token: token.to_string(),
+        saved_at: "2026-01-01T00:00:00Z".to_string(),
+        identity: None,
+        pinned_org: None,
+    };
+
+    store::save(&nested, &session("first")).unwrap();
+    store::save(&nested, &session("second")).unwrap();
+
+    assert_eq!(store::load(&nested), Some(session("second")));
+    let names: Vec<_> = std::fs::read_dir(&nested)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(names, ["atlas-session.json"]);
+}
+
+/// A credential file left wider by an older build, or by hand, is narrowed by
+/// the next save: the mode belongs to the file that replaces it.
+#[cfg(unix)]
+#[test]
+fn saving_over_a_wider_credential_file_narrows_it() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new();
+    let path = store::session_path(dir.path());
+    std::fs::write(&path, "{}").unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    store::save(
+        dir.path(),
+        &store::StoredSession {
+            session_token: "tok".to_string(),
+            saved_at: "2026-01-01T00:00:00Z".to_string(),
+            identity: None,
+            pinned_org: None,
+        },
+    )
+    .unwrap();
+
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o600);
+}
+
 #[tokio::test]
 async fn clearing_is_idempotent_and_returns_to_signed_out() {
     let stub = Stub::start().await;

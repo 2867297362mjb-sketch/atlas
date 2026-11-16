@@ -61,10 +61,9 @@ pub fn load_native_prefs(config_dir: &Path) -> NativeAgentPrefs {
 }
 
 fn save_native_prefs(config_dir: &Path, prefs: &NativeAgentPrefs) -> std::io::Result<()> {
-    std::fs::create_dir_all(config_dir)?;
     let json = serde_json::to_string_pretty(prefs)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    std::fs::write(native_prefs_path(config_dir), json)
+    atlas_fs::replace_file(native_prefs_path(config_dir), json)
 }
 
 /// How an external agent launches, as the catalog reports it.

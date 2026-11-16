@@ -5,6 +5,8 @@ edition = "2021"
 description = "The retrieval core memory and the code index share: content-keyed embedding cache codec, per-model usearch vector files that heal, RRF fusion, the Embedder trait."
 
 [dependencies]
+# `replace_file`: the crash-safe write of the vector file.
+atlas-fs = { path = "../atlas-fs" }
 # Without its default `numkong` SIMD backend here; it's turned back on for every
 # target but Windows below. numkong 7.x does not build with MSVC on Windows
 # ARM64, and Cargo unifies features: a default-features usearch here would turn

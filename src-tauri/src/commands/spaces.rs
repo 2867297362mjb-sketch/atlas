@@ -248,9 +248,7 @@ pub async fn spaces_media_fetch(
     if actual != content_hash {
         return Err("media bytes did not match their content hash".to_string());
     }
-    let tmp = dir.join(format!(".{content_hash}.part"));
-    std::fs::write(&tmp, &bytes).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+    atlas_fs::replace_file(&path, &bytes).map_err(|e| e.to_string())?;
     Ok(path.to_string_lossy().into_owned())
 }
 

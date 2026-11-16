@@ -21,6 +21,8 @@ name = "engine_gateway_turn"
 path = "tests/engine_gateway_turn.rs"
 
 [dependencies]
+# `replace_file`: the crash-safe write of the model catalogue and its cache.
+atlas-fs = { path = "../atlas-fs" }
 atlas-process = { path = "../atlas-process" }
 # `/diff` runs git through the one spawn chokepoint.
 atlas-git = { path = "../atlas-git" }

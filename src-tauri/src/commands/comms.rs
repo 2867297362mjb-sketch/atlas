@@ -1018,9 +1018,7 @@ pub async fn comms_fetch_recording(
         .download_recording(&url, &track_id)
         .await
         .map_err(map_err)?;
-    let tmp = dir.join(format!(".{track_id}.part"));
-    std::fs::write(&tmp, &bytes).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+    atlas_fs::replace_file(&path, &bytes).map_err(|e| e.to_string())?;
     Ok(path.to_string_lossy().into_owned())
 }
 
@@ -1081,10 +1079,8 @@ async fn cache_attachment(
             .await
             .map_err(map_err)?,
     };
-    // Write-then-rename, so a crash mid-download never leaves a plausible file.
-    let tmp = dir.join(format!(".{file_id}.part"));
-    std::fs::write(&tmp, &bytes).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+    // Replaced whole, so a crash mid-download never leaves a plausible file.
+    atlas_fs::replace_file(&path, &bytes).map_err(|e| e.to_string())?;
     Ok(path)
 }
 

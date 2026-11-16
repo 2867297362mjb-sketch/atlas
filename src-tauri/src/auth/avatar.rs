@@ -180,9 +180,8 @@ async fn fetch(http: &reqwest::Client, dir: &Path, url: &str) -> Option<String> 
         return None;
     }
 
-    std::fs::create_dir_all(dir).ok()?;
     let path = cache_path(dir, url, ext);
-    std::fs::write(&path, &bytes).ok()?;
+    atlas_fs::replace_file(&path, &bytes).ok()?;
     Some(path.to_string_lossy().into_owned())
 }
 

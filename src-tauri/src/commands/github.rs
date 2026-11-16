@@ -51,19 +51,15 @@ fn read_meta(project_path: &str) -> BTreeMap<String, RepoMeta> {
 fn write_meta(project_path: &str, repo_name: &str, meta: &RepoMeta) -> Result<(), String> {
     let mut all = read_meta(project_path);
     all.insert(repo_name.to_string(), meta.clone());
-    let path = meta_path(project_path);
-    if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
     let json = serde_json::to_string_pretty(&all).map_err(|e| e.to_string())?;
-    fs::write(&path, json).map_err(|e| e.to_string())
+    atlas_fs::replace_file(meta_path(project_path), json).map_err(|e| e.to_string())
 }
 
 fn forget_meta(project_path: &str, repo_name: &str) {
     let mut all = read_meta(project_path);
     if all.remove(repo_name).is_some() {
         if let Ok(json) = serde_json::to_string_pretty(&all) {
-            let _ = fs::write(meta_path(project_path), json);
+            let _ = atlas_fs::replace_file(meta_path(project_path), json);
         }
     }
 }
@@ -750,5 +746,35 @@ mod clone_guard_tests {
         assert!(!safe_segment("a/b"));
         assert!(!safe_segment("-rf"));
         assert!(!safe_segment(""));
+    }
+}
+
+#[cfg(test)]
+mod repo_meta_tests {
+    use super::*;
+
+    #[test]
+    fn repo_meta_loads_back_and_leaves_only_its_file() {
+        let project = tempfile::tempdir().unwrap();
+        let root = project.path().to_string_lossy().to_string();
+        let meta = |stars| RepoMeta {
+            description: "a repo".to_string(),
+            stars,
+            ..RepoMeta::default()
+        };
+
+        // The first write is also the one that creates the profile directory.
+        write_meta(&root, "one", &meta(1)).unwrap();
+        write_meta(&root, "two", &meta(2)).unwrap();
+        forget_meta(&root, "one");
+
+        let all = read_meta(&root);
+        assert_eq!(all.keys().collect::<Vec<_>>(), ["two"]);
+        assert_eq!(all["two"].stars, 2);
+        assert_eq!(all["two"].description, "a repo");
+        assert_eq!(
+            crate::commands::file_names_in(&atlas_profile::dir_in(project.path())),
+            ["repo-meta.json"]
+        );
     }
 }

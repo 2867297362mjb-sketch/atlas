@@ -103,16 +103,10 @@ impl ExtractState {
             .unwrap_or_default()
     }
 
-    /// Persist the state for `session_id` (atomic temp + rename).
+    /// Persist the state for `session_id`, replacing the file whole.
     pub fn save(&self, memory_dir: &Path, session_id: &str) -> Result<()> {
-        let path = state_path(memory_dir, session_id);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
         let json = serde_json::to_string_pretty(self)?;
-        let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, json.as_bytes())?;
-        std::fs::rename(&tmp, &path)?;
+        atlas_fs::replace_file(state_path(memory_dir, session_id), json)?;
         Ok(())
     }
 
