@@ -375,11 +375,12 @@ pub fn redact_message(msg: &str, max_chars: usize) -> String {
 impl TelemetryClient {
     /// Construct the client (resolving key/host) and, unless inert, the
     /// background flush channel receiver the caller must hand to a spawned
-    /// `run_flush_loop`. `enabled` is the persisted opt-in setting.
+    /// `run_flush_loop`. The consent gate starts closed: `settings_effects`
+    /// opens it from the persisted `shareTelemetry` setting, with
+    /// [`Self::init_enabled`] at boot and [`Self::set_enabled`] afterwards.
     pub(crate) fn new(
         app: &AppHandle,
         device_id: String,
-        enabled: bool,
     ) -> (Arc<Self>, Option<mpsc::Receiver<QueuedEvent>>) {
         let resolved = resolve_keys(app);
         let inert = resolved.is_none();
@@ -394,7 +395,7 @@ impl TelemetryClient {
             None => (None, DEFAULT_HOST.to_string(), false),
         };
         let client = Arc::new(Self {
-            enabled: AtomicBool::new(enabled && !inert),
+            enabled: AtomicBool::new(false),
             inert,
             api_key,
             host,
@@ -485,6 +486,13 @@ impl TelemetryClient {
             return None;
         }
         Some(RemoteUpdateConfig { version, uri })
+    }
+
+    /// The opt-in gate as Atlas starts. Unlike [`Self::set_enabled`] it records
+    /// no `telemetry_opt_in`/`telemetry_opt_out`: the user made that choice in
+    /// an earlier run, and a launch is not a change of mind.
+    pub fn init_enabled(&self, on: bool) {
+        self.enabled.store(on && !self.inert, Ordering::Relaxed);
     }
 
     /// Flip the live opt-in gate. Records a single `telemetry_opt_in` on enable
@@ -1029,6 +1037,23 @@ mod tests {
         assert!(!cfg.enabled);
         assert!(cfg.key.is_none());
         assert!(cfg.account_id.is_none());
+    }
+
+    /// The gate as Atlas starts: opened from the setting without recording an
+    /// opt-in, and never opened on a client with no key.
+    #[test]
+    fn init_enabled_opens_the_gate_without_an_opt_in_event() {
+        let (c, mut rx) = client(false, false);
+        c.init_enabled(true);
+        assert!(c.is_enabled());
+        assert!(rx.try_recv().is_err(), "a launch is not an opt-in");
+        c.init_enabled(false);
+        assert!(!c.is_enabled());
+        assert!(rx.try_recv().is_err(), "nor an opt-out");
+
+        let (inert, _rx) = client(false, true);
+        inert.init_enabled(true);
+        assert!(!inert.is_enabled());
     }
 
     #[test]

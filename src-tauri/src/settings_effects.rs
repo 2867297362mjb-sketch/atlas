@@ -5,8 +5,35 @@
 //! window's colour. Those have to be applied when Atlas starts and again
 //! whenever the settings change, and this module says which settings they are.
 //!
+//! This is the only place that says so: [`WIRING`] lists each one once, and
+//! [`apply`] walks that list on both paths. A setting added to the list is
+//! applied at boot and on every change; there is no second site to forget.
+//!
 //! [`effects`] is the pure half: what a settings snapshot asks for on each
-//! path. It needs no app, so the tests below read it directly.
+//! path. It needs no app, so the tests below read it directly. `perform` is
+//! the half that reaches into the app.
+//!
+//! # Where boot differs from a change
+//!
+//! - **Nothing is listening at boot.** `atlas:config-changed` is emitted on a
+//!   change only: the webview has not loaded, and it reads the settings it
+//!   starts with from `bootstrap_app_state`.
+//! - **The targets must be managed first.** `setup` manages the telemetry
+//!   client and the keep-awake manager, both switched off, immediately before
+//!   it calls [`apply`]; neither takes the setting as a constructor argument
+//!   any more, so this module is the only thing that switches them on.
+//! - **The telemetry gate is set silently at boot.** On a change it goes
+//!   through `set_enabled`, which records `telemetry_opt_in` or
+//!   `telemetry_opt_out`. A launch is not a change of mind, so boot uses
+//!   `init_enabled`, which records nothing.
+//! - **Before the first agent connect.** The engine reads the plugin sync
+//!   gate from the environment on its first connect. That happens after
+//!   `setup` returns, so applying at boot from inside `setup` is early enough.
+//! - **Effects listed for one path only** carry their reason in [`WIRING`].
+
+use std::sync::Arc;
+
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::state::atlas_config::ThemeMode;
 use crate::state::AppSettings;
@@ -48,34 +75,184 @@ pub enum Effect {
     KeepAwake(bool),
 }
 
+/// Which paths an effect is applied on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Paths {
+    /// At boot and on every change: what an effect is unless it has a reason.
+    Both,
+    /// At boot only, and why a change does not need it.
+    BootOnly(&'static str),
+    /// On a change only, and why boot does not need it.
+    ChangeOnly(&'static str),
+}
+
+/// One row of [`WIRING`]: the effect a settings snapshot asks for, and the
+/// paths it is applied on.
+struct Wiring {
+    decide: fn(&AppSettings) -> Effect,
+    paths: Paths,
+}
+
+/// Every setting with a live side effect. Add a row here and nowhere else.
+const WIRING: &[Wiring] = &[
+    Wiring {
+        decide: |s| Effect::TelemetryGate(s.share_telemetry),
+        paths: Paths::Both,
+    },
+    Wiring {
+        decide: |s| Effect::TelemetryIdentity {
+            link_to_account: s.link_telemetry_to_account,
+        },
+        paths: Paths::ChangeOnly(
+            "every auth transition, the launch restore included, reads the setting itself \
+             (`commands::auth::broadcast`), so only a change with no transition needs this",
+        ),
+    },
+    Wiring {
+        decide: |s| Effect::CuratedPluginSync(s.curated_plugin_sync),
+        paths: Paths::Both,
+    },
+    Wiring {
+        decide: |s| Effect::WindowBackground {
+            light: s.theme_light.clone(),
+            dark: s.theme_dark.clone(),
+            mode: s.theme_mode,
+        },
+        paths: Paths::BootOnly("as found"),
+    },
+    Wiring {
+        decide: |s| Effect::AppIcon(s.app_icon.clone()),
+        paths: Paths::Both,
+    },
+    Wiring {
+        decide: |s| Effect::InstructionSync(s.instruction_sync),
+        paths: Paths::Both,
+    },
+    Wiring {
+        decide: |s| Effect::AtlasOnlyMemory(s.atlas_only_memory),
+        paths: Paths::Both,
+    },
+    Wiring {
+        decide: |s| Effect::KeepAwake(s.keep_awake_while_running),
+        paths: Paths::Both,
+    },
+];
+
 /// What `settings` asks for at `when`.
 pub fn effects(settings: &AppSettings, when: When) -> Vec<Effect> {
-    match when {
-        When::Boot => vec![
-            Effect::TelemetryGate(settings.share_telemetry),
-            Effect::CuratedPluginSync(settings.curated_plugin_sync),
-            Effect::WindowBackground {
-                light: settings.theme_light.clone(),
-                dark: settings.theme_dark.clone(),
-                mode: settings.theme_mode,
-            },
-            Effect::AppIcon(settings.app_icon.clone()),
-            Effect::InstructionSync(settings.instruction_sync),
-            Effect::AtlasOnlyMemory(settings.atlas_only_memory),
-            Effect::KeepAwake(settings.keep_awake_while_running),
-        ],
-        When::Changed { .. } => vec![
-            Effect::TelemetryGate(settings.share_telemetry),
-            Effect::TelemetryIdentity {
-                link_to_account: settings.link_telemetry_to_account,
-            },
-            Effect::CuratedPluginSync(settings.curated_plugin_sync),
-            Effect::AppIcon(settings.app_icon.clone()),
-            Effect::InstructionSync(settings.instruction_sync),
-            Effect::AtlasOnlyMemory(settings.atlas_only_memory),
-            Effect::KeepAwake(settings.keep_awake_while_running),
-        ],
+    WIRING
+        .iter()
+        .filter(|wiring| match (wiring.paths, when) {
+            (Paths::Both, _)
+            | (Paths::BootOnly(_), When::Boot)
+            | (Paths::ChangeOnly(_), When::Changed { .. }) => true,
+            (Paths::BootOnly(_), When::Changed { .. }) | (Paths::ChangeOnly(_), When::Boot) => {
+                false
+            }
+        })
+        .map(|wiring| (wiring.decide)(settings))
+        .collect()
+}
+
+/// Apply every settings effect for `settings`.
+///
+/// Called once from `setup` with [`When::Boot`], and by every committer of a
+/// new settings snapshot with [`When::Changed`] — whichever path produced it
+/// (a UI patch, `reset`, a hot reload, or a Rust-side write from
+/// `commands::models`/`commands::updater` via `state::atlas_config::update`).
+///
+/// On a change it first tells the frontend (`atlas:config-changed`), so its
+/// mirrored `settings`/`configGeneration` never goes stale: a stale generation
+/// there is exactly what turns its next legitimate edit into a spurious
+/// `Conflict`.
+pub fn apply(app: &AppHandle, settings: &AppSettings, when: When) {
+    if let When::Changed { generation } = when {
+        let _ = app.emit(
+            "atlas:config-changed",
+            serde_json::json!({ "settings": settings, "generation": generation }),
+        );
     }
+    for effect in effects(settings, when) {
+        perform(app, effect, when);
+    }
+}
+
+fn perform(app: &AppHandle, effect: Effect, when: When) {
+    if effect.apply_process_wide() {
+        return;
+    }
+    match effect {
+        // `TelemetryClient::enabled` is a cached flag, not read fresh from
+        // settings per event; without this, a `shareTelemetry` change that
+        // didn't come from the Settings UI's own toggle handler (an external
+        // edit, the self-configure skill, "Recreate defaults") would leave
+        // telemetry emitting — or silently gated off — out of sync with what
+        // the file says until restart.
+        Effect::TelemetryGate(on) => {
+            if let Some(client) = target::<Arc<crate::telemetry::TelemetryClient>>(app) {
+                match when {
+                    When::Boot => client.init_enabled(on),
+                    When::Changed { .. } => client.set_enabled(on),
+                }
+            }
+        }
+        // Without this, turning account linkage off while signed in left
+        // PostHog attributing events to the account until the next sign-out,
+        // which is the opposite of what the toggle says.
+        Effect::TelemetryIdentity { link_to_account } => {
+            crate::commands::auth::resync_telemetry_identity(app, link_to_account);
+        }
+        // Fills the gap between window-shown and first paint with the theme's
+        // own background; see `window_background`.
+        Effect::WindowBackground { light, dark, mode } => {
+            if let Some(window) = app.get_webview_window("main") {
+                let system_is_light = matches!(window.theme(), Ok(tauri::Theme::Light));
+                let color = crate::window_background::window_background(
+                    &light,
+                    &dark,
+                    mode,
+                    system_is_light,
+                );
+                let _ = window.set_background_color(Some(color));
+            }
+        }
+        // At boot, before the window shows; on a change, so an external edit
+        // of `appIcon` takes effect live like the Settings picker does. A
+        // no-op unless it changed.
+        Effect::AppIcon(id) => crate::app_icon::apply(app, &id),
+        // Switched on, sync and watch each window's active project; switched
+        // off, stop watching and take the mirrored block back out. A no-op
+        // unless it changed, and at boot there is no active project yet.
+        Effect::InstructionSync(on) => {
+            if let Some(state) =
+                target::<crate::commands::instruction_sync::InstructionSyncState>(app)
+            {
+                state.apply_setting(app, on);
+            }
+        }
+        Effect::KeepAwake(on) => {
+            if let Some(keep_awake) = target::<Arc<crate::keep_awake::KeepAwakeManager>>(app) {
+                keep_awake.set_enabled(on);
+            }
+        }
+        // Process-wide: applied above.
+        Effect::CuratedPluginSync(_) | Effect::AtlasOnlyMemory(_) => {}
+    }
+}
+
+/// The managed state an effect acts on. A missing one means the effect was
+/// skipped, which nothing else would report: `setup` has to manage every
+/// target before it calls [`apply`].
+fn target<T: Send + Sync + 'static>(app: &AppHandle) -> Option<tauri::State<'_, T>> {
+    let state = app.try_state::<T>();
+    if state.is_none() {
+        tracing::error!(
+            target: "atlas::config",
+            "settings effect skipped: {} is not managed",
+            std::any::type_name::<T>()
+        );
+    }
+    state
 }
 
 impl Effect {

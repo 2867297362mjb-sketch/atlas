@@ -153,19 +153,14 @@ impl InstructionSyncState {
         Self::default()
     }
 
-    /// The setting as Atlas starts, before any switch: with it already on,
-    /// switching it off must still take the blocks back out.
-    pub fn init(&self, on: bool) {
-        let _gate = self.gate.lock();
-        self.enabled.store(on, Ordering::SeqCst);
-    }
-
     fn is_enabled(&self) -> bool {
         self.enabled.load(Ordering::SeqCst)
     }
 
-    /// Follow the `instructionSync` setting. Called on every settings change;
-    /// only a switch does anything. On: sync and watch each window's active
+    /// Follow the `instructionSync` setting. Called as Atlas starts and on
+    /// every settings change; only a switch does anything. At start no window
+    /// has an active project yet, so "on" only records the setting: with it
+    /// already on, switching it off must still take the blocks back out. On: sync and watch each window's active
     /// project, and nothing else. Off: stop every watcher and take the block
     /// back out of every project a sync wrote it into.
     pub fn apply_setting(&self, app: &AppHandle, on: bool) {
