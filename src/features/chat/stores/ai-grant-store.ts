@@ -202,7 +202,7 @@ export function useActiveGatewayOrgId(): string | null {
  * moment the turn ends, which is the first point a send could be refused.
  *
  * Called with `turnRunning: false` it is also the hold on the tab's send
- * queue (`drain-gate.ts`): a message queued during that deferred turn waits
+ * queue (`send-gate.ts`): a message queued during that deferred turn waits
  * with the lock instead of draining into the refusal at the turn's end.
  */
 export function grantLocksComposer(
@@ -220,7 +220,15 @@ export function grantLocksComposer(
  * leave the composer alone. Offline is not a refusal.
  */
 export function useNoAiGrant(): boolean {
-  return useAiGrantStore(
-    (s) => s.entitlement?.state === "noGrant" || s.entitlement?.state === "localOrg",
-  );
+  return useAiGrantStore(noAiGrant);
+}
+
+/** The same answer outside React, for the send path's action boundary
+ *  (`session-send.ts`). */
+export function hasNoAiGrant(): boolean {
+  return noAiGrant(useAiGrantStore.getState());
+}
+
+function noAiGrant(s: { entitlement: Entitlement | null }): boolean {
+  return s.entitlement?.state === "noGrant" || s.entitlement?.state === "localOrg";
 }

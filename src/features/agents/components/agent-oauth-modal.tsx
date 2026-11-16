@@ -38,7 +38,6 @@ import {
   type AuthMethodWire,
 } from "@/features/chat/lib/agents-api";
 import {
-  AGENT_SIGNIN_EVENT,
   authenticateAfterCliLogin,
   errInfo,
   runSignInMethod,
@@ -62,18 +61,14 @@ import {
   type SignInPhase,
 } from "../lib/sign-in-methods";
 import { AgentSignInView } from "./views/agent-sign-in-view";
+import { useWindowEvent } from "@/lib/window-events";
 
 export function AgentOAuthModalHost() {
   const [request, setRequest] = useState<AgentSignInRequest | null>(null);
 
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent<AgentSignInRequest>).detail;
-      if (detail?.agentType) setRequest(detail);
-    };
-    window.addEventListener(AGENT_SIGNIN_EVENT, handler);
-    return () => window.removeEventListener(AGENT_SIGNIN_EVENT, handler);
-  }, []);
+  useWindowEvent("atlas:agent-signin", (detail) => {
+    if (detail?.agentType) setRequest(detail);
+  });
 
   if (!request) return null;
   return (

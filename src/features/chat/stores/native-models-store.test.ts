@@ -6,12 +6,11 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const invoke = vi.fn();
-vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async () => () => {}),
-  emit: vi.fn(async () => {}),
-}));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
+import { tauri } from "@/test/tauri-fake";
+
+const invoke = tauri.invoke;
 const toastError = vi.fn();
 const toastInfo = vi.fn();
 vi.mock("sonner", () => ({

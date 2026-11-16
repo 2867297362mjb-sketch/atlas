@@ -110,3 +110,6 @@ src-tauri/binaries/
 
 # `bun run test:coverage` report
 /coverage/
+
+# Vitest's transformed-module cache (vitest.config.ts keeps it per checkout).
+/.vitest-cache/

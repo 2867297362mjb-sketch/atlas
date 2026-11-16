@@ -3,7 +3,6 @@
 //! This is where the reliability mechanics live. Each one exists because of a
 //! specific failure, and the reason is recorded at the code rather than here.
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::future::Future;
 use std::path::PathBuf;
@@ -1466,10 +1465,6 @@ impl AgentConnection for AcpConnection {
             session_id: session_id.clone(),
             options,
         }))
-    }
-
-    fn into_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
-        self
     }
 }
 

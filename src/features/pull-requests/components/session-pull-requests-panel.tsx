@@ -1,7 +1,7 @@
 // One session's linked pull requests, as a surface tab beside it
 // (`session-pull-requests:<threadId>`): a row per pull request (state, number
 // and title, whether it is watched, its checks and review, its line counts,
-// its branches), chains derived from base branches drawn indented under their
+// its branches), stacks derived from base branches drawn indented under their
 // base, and a footer that counts them and says when the host was last read.
 //
 // A row opens its pull request in a tab in a checkout of its own repository
@@ -38,7 +38,7 @@ import {
   latestSyncedAt,
   sessionPullRequestRows,
   type SessionPullRequestLine,
-} from "../lib/session-pull-request-chains";
+} from "../lib/session-pull-request-stacks";
 import { LINK_SOURCE_LABEL, linkKey, linkState } from "../lib/session-pull-request-links";
 import { openSessionLink, wantsHost } from "../lib/session-pull-request-actions";
 import { syncSessionPullRequests } from "../lib/session-pull-requests-api";
@@ -220,7 +220,7 @@ function SessionPullRequestRowImpl({
   counts: LineCounts | undefined;
   onOpen: (link: PullRequestLink, external: boolean) => void;
 }) {
-  const { link, depth, chain } = line;
+  const { link, depth, stack } = line;
   const snapshot = link.snapshot;
   const state = STATE_PRESENTATION[linkState(link)];
   const open = !snapshot || snapshot.state === "open";
@@ -291,13 +291,13 @@ function SessionPullRequestRowImpl({
           </span>
         </span>
         <span className="mt-0.5 flex min-w-0 items-center gap-1.5 overflow-hidden text-2xs text-muted-foreground">
-          {chain ? (
+          {stack ? (
             <span
-              title={`${chain.size} pull requests chained by base branch`}
+              title={`${stack.size} pull requests stacked by base branch`}
               className="inline-flex shrink-0 items-center gap-0.5 text-secondary-foreground"
             >
               <Layers aria-hidden className="size-2.5" />
-              <span className="tabular-nums">{chain.size}</span>
+              <span className="tabular-nums">{stack.size}</span>
             </span>
           ) : null}
           <span title={link.repository} className="max-w-32 shrink-0 truncate font-mono">

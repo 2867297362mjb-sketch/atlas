@@ -8,8 +8,8 @@ import { describe, expect, it, vi } from "vitest";
 
 // Importing the store pulls in the app's store graph, which subscribes to Tauri
 // at import time. `sameFiles` is pure; these keep that graph inert.
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => null) }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
 import { produce } from "immer";
 import { sameFiles, type GitFileStatus } from "./git-store";
 

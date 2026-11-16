@@ -6,8 +6,8 @@
 // does get chips, which this pins beside it so the negative means something.
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => undefined) }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}), emit: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
 
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { useAppStore } from "@/features/app/stores/app-store";

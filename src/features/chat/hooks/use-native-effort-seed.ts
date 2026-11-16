@@ -1,9 +1,9 @@
 import { useEffect } from "react";
-import { useChatStore } from "../stores/chat-store";
+import { sessionConfiguration, useChatStore } from "../stores/chat-store";
+import { KNOBS } from "../lib/session-configuration";
 import { loadNativeEffort } from "../lib/native-model-pref";
 
 export function useNativeEffortSeed(tabId: string, agentType: string): void {
-  const { setNativeEffort } = useChatStore.use.actions();
   // Seed the reasoning-effort from the saved preference once per native session,
   // then re-push it whenever the session is bound (mirrors the model re-push).
   const nativeEffort = useChatStore((s) => s.sessions[tabId]?.nativeEffort);
@@ -17,7 +17,11 @@ export function useNativeEffortSeed(tabId: string, agentType: string): void {
     if (agentType !== "atlas-agent") return;
     // Undefined = never set for this session → seed from the global pref.
     const eff = nativeEffort ?? loadNativeEffort();
-    if (nativeBound || nativeEffort === undefined) setNativeEffort(tabId, eff);
+    // A re-apply, not a pick: the user chose nothing just now, so there is
+    // nothing to remember and a refusal is not theirs to hear about.
+    if (nativeBound || nativeEffort === undefined) {
+      void sessionConfiguration.reapply(tabId, KNOBS.effort, eff);
+    }
     // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [tabId, agentType, nativeBound]);
 }

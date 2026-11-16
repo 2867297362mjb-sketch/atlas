@@ -26,6 +26,7 @@ import {
   type MessageGroup as MessageGroupData,
 } from "../lib/derive";
 import type { ChatCall, ChatConversation } from "../types";
+import { useWindowEvent } from "@/lib/window-events";
 
 type Item =
   | {
@@ -189,14 +190,9 @@ export const CommsConversation = memo(function CommsConversation({
 
   // A jump asked for from outside (the organisation agent opening a message
   // it cited): only the conversation it names takes it.
-  useEffect(() => {
-    const onJump = (e: Event) => {
-      const detail = (e as CustomEvent<{ convId?: string; messageId?: string }>).detail;
-      if (detail?.convId === conv.id && detail.messageId) void jumpToMessage(detail.messageId);
-    };
-    window.addEventListener("atlas:comms-jump-to-message", onJump);
-    return () => window.removeEventListener("atlas:comms-jump-to-message", onJump);
-  }, [conv.id, jumpToMessage]);
+  useWindowEvent("atlas:comms-jump-to-message", (detail) => {
+    if (detail?.convId === conv.id && detail.messageId) void jumpToMessage(detail.messageId);
+  });
 
   // Tell the server we are caught up on a conversation switch. The badge
   // itself comes back from the server, never from here. (The transcript lands

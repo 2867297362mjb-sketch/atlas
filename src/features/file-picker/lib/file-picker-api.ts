@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { activeProjectId } from "@/features/projects/lib/active-project";
 
 export interface FileMatch {
@@ -172,4 +173,14 @@ export function getCachedFileList(projectPath: string): FileMatch[] {
   } catch {
     return [];
   }
+}
+
+/** A project's file index finished (re)building. `workspaceId` is the project
+ *  it belongs to, which is not always the one on screen. */
+export function onFileIndexUpdated(
+  handler: (payload: { workspaceId?: string; count?: number }) => void,
+): Promise<UnlistenFn> {
+  return listen<{ workspaceId?: string; count?: number }>("atlas:fileindex:updated", (event) =>
+    handler(event.payload),
+  );
 }

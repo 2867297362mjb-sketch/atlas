@@ -135,12 +135,14 @@ pub fn classify(status: u16, body: &str) -> Entitlement {
 /// The picker's Refresh. Rewrites the on-disk catalogue cache and, if the
 /// set of models the engine loaded has changed, restarts the native
 /// connection so it picks the new rows up; see
-/// `AgentHost::refresh_native_models_with` for the three outcomes.
+/// `AgentHost::refresh_models` for the three outcomes. The command names the
+/// native agent because the picker's Refresh is its affordance; the host
+/// path it calls asks the agent for the capability and assumes nothing.
 #[tauri::command]
 pub async fn native_agent_refresh_models(
     host: tauri::State<'_, std::sync::Arc<crate::commands::agent_host::AgentHost>>,
 ) -> Result<crate::commands::agent_host::NativeModelsRefresh, crate::commands::agents::CmdError> {
-    host.refresh_native_models()
+    host.refresh_models(atlas_native_agent::ATLAS_AGENT_ID)
         .await
         .map_err(crate::commands::agents::CmdError::from)
 }

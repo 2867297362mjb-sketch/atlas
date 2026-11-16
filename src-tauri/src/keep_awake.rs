@@ -187,8 +187,10 @@ pub struct KeepAwakeManager {
 }
 
 impl KeepAwakeManager {
-    pub fn new(enabled: bool) -> Self {
-        Self::with_acquire(enabled, platform_acquire(), RETRY_INITIAL)
+    /// Off until `settings_effects` applies `keepAwakeWhileRunning`, which it
+    /// does at boot and on every settings change.
+    pub fn new() -> Self {
+        Self::with_acquire(false, platform_acquire(), RETRY_INITIAL)
     }
 
     fn with_acquire(enabled: bool, acquire: Acquire, retry_initial: Duration) -> Self {

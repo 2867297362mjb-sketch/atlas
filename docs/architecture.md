@@ -90,7 +90,7 @@ Reference: `docs/reference/design-system.md` and `docs/reference/theme-keys.md`.
 ### State management
 
 - **Stores are Zustand + Immer**, wrapped in `createSelectors` (`src/lib/create-selectors.ts`), which auto-generates `useStore.use.x()` selectors.
-- **Stores never call other stores directly.** Cross-feature coordination happens by reading another feature's state via `getState()` at an action boundary, or by firing `window.dispatchEvent(new CustomEvent("atlas:..."))` for looser coupling. Importing one feature's store into another feature's store module violates this.
+- **Stores never call other stores directly.** Cross-feature coordination happens by reading another feature's state via `getState()` at an action boundary, or by firing a window event for looser coupling: `emitWindowEvent("atlas:...", detail)` from `src/lib/window-events.ts`, whose map declares every such event and its payload (`tests/window-event-contract.test.ts`). Importing one feature's store into another feature's store module violates this.
 - **Tailwind classes compose through `cn()`** (`src/lib/utils.ts`), never concatenated ad hoc.
 
 ### The authoritative-state boundary
@@ -137,7 +137,7 @@ Other stores: `project/stores/project-store.ts` (current project, recents), `git
 - **Up to 3 columns** (`groupOrder`, capped at 3). Each tab carries a `groupId` naming its column.
 - A maintained `activeTabId` mirrors the focused column's active tab, so most readers don't need to know splits exist.
 
-`src/lib/constants.ts` holds `TAB_TYPES` (the tab-type registry); `src/features/layout/components/tab-panels.tsx` holds the lazy-import map and render switch keyed off it (`center-panel.tsx` lays out the split columns that host them). New panel type = placement in `TAB_PLACEMENT` (ADR-0024) + entry in `TAB_TYPES` + lazy import and render branch in `tab-panels.tsx` + entry in `SURFACES` (`src/features/layout/lib/surfaces.ts`) if ⌘T should offer it + entry in `PERSISTENT_TYPES_LIST` if it stays mounted across tab switches.
+`src/lib/tab-registry.ts` holds `TAB_REGISTRY`: one entry per tab type, stating its placement (ADR-0024), scope, mount policy, multiplicity, whether it shows a file, its ⌘T row and the shape of its `data`. `TabType` is that object's keys, and every list the app reads (`TAB_TYPES`, the projectless, window and org-scoped sets, the persistent types, the launcher's `SURFACES`) is derived from it. It holds no React, so the layout store can import it: a type's icon is in `tabIcons` (`src/features/layout/components/pane-tab.tsx`) and its lazy import and render branch in `src/features/layout/components/tab-panels.tsx`, both keyed by `TabType` and checked exhaustive (`center-panel.tsx` lays out the split columns that host them). New panel type = one registry entry + its icon + its lazy import and render branch.
 
 **Persistent module types — editor, terminal, browser, knowledge-graph, pdf — stay mounted across tab switches** via `display: contents` / `display: none` instead of unmounting. Remounting would rebuild the file view and drop its unsaved edits, kill the PTY's rendered scrollback, or tear down the native embedded webview.
 
@@ -148,9 +148,9 @@ One Rust module per IPC domain under `src-tauri/src/commands/`. `commands/mod.rs
 | Domain group | Modules |
 |---|---|
 | Agents (ported ACP stack) | agents, agent_host, agent_transcript, agent_analytics, agent_memory, catalog, registry, capture, artifacts_cloud |
-| Agent tool servers | memory_server (ADR-0010), memory_bridge (ADR-0019, ADR-0020), ui_server (ADR-0012), org_server (ADR-0014), code_server (ADR-0015) |
+| Agent tool servers | tool_servers (the host: listener, token, offer), memory_server (ADR-0010), memory_bridge (ADR-0019, ADR-0020), ui_server (ADR-0012), org_server (ADR-0014), code_server (ADR-0015) |
 | Terminal / browser / fs | terminal, browser, fs |
-| Git | git, git_graph, git_watcher, git_autofetch, gitdiff, git_ops, git_conflicts, git_snapshot, git_stage_ops, git_pr (a branch's PR badge, via `gh pr list`), git_avatars (author avatars, via `gh api`) |
+| Git | git, git_graph, git_watcher, git_autofetch, gitdiff, git_ops, git_conflicts, git_snapshot, git_stage_ops, git_avatars (author avatars, via `gh api`) |
 | GitHub | github (search and clone reference repositories), pull_requests (the pull-request surface, via `gh api`; see below) |
 | Knowledge | knowledge, knowledge_meta, knowledge_links, knowledge_export, knowledge_graph_layout |
 | Memory | memory_* — graph, pack, policy, sharing, summarize, timeline, delta, inject, compile, indexer, retrieve, capture (the session recorder, read-only), dream, repo (the Agent Memory Repo mirror); plus shared_memory, instruction_sync |
@@ -169,6 +169,8 @@ Miss any of the three and the command either fails to compile or silently 404s f
 
 **Every blocking operation must run inside `tokio::task::spawn_blocking`** — `Command::output`/`Command::spawn`, file I/O over large trees, git subprocess calls, anything not already `async`. The Tauri command runtime is shared with the UI's IPC channel; a blocking call there stalls every other in-flight command and freezes the UI.
 
+**A command can be tested the way the window calls it.** `src-tauri/src/command_seam/` builds an app on Tauri's mock runtime over a temp directory, sends a command by name with a JSON payload and returns the JSON answer and the events emitted. Use it when the behaviour is in the command itself: its argument names, the shape of its error, an event, a write that has to survive a restart. Its module doc says which commands it can reach and how to bring in one that takes `AppHandle`.
+
 ### Pull requests
 
 Every GitHub read and write goes through the user's own `gh` login; Atlas never holds or reads a token. The path, top to bottom:
@@ -183,8 +185,8 @@ src-tauri/src/commands/pull_requests/
   github.rs    the GitHub driver: which requests an operation takes
   parse.rs     GitHub's JSON → the provider-neutral types in model.rs
   queries.rs   the GraphQL documents
-  gh.rs        one `gh api -i` process per request: timeout, permit pool,
-               rate-limit pause, ETag revalidation
+  gh.rs        one `gh api -i` run per request, read as HTTP: quota
+               accounting, ETag revalidation (the process is atlas-gh's)
   images.rs    image proxy for bodies/comments (GitHub image hosts only)
 ```
 
@@ -193,7 +195,9 @@ src-tauri/src/commands/pull_requests/
 - **Images.** CSP `img-src` stays closed: `pr_image` fetches an allowlisted GitHub image with the `gh` credential, caches it, and the page shows it as a `blob:` URL (`pr-image.ts`).
 - **Freshness.** Stale times per read (list 30s, detail 60s / merged 10min, checks 15s, files viewed 15s), a five-minute poll while on screen, a refetch on focus, and an invalidation when an agent's turn ends. REST reads revalidate with an ETag, and GitHub does not charge a 304.
 
-The sidebar's PR badge (`git_pr`) is older and separate: one `gh pr list` per repository, shared by every card.
+Every `gh` process in Atlas, here and elsewhere (`git_avatars`, `project_sources`, `create.rs`, `checkout.rs`), is spawned by the `atlas-gh` crate: one environment, a timeout that kills, one pool of six API permits, and one pause that a rate-limit refusal sets. A call says what it is: reads are refused while the API is paused, what the user did always runs, and a long verb (`gh pr checkout`, `gh repo clone`) or an image fetch holds no API permit.
+
+Every `git` process is likewise spawned by one crate, `atlas-git`, through `GitCommand`: the app's commands, the checkpoint and security crates and the native agent's `/diff` all go through it, and an audit test in that crate fails on a spawn that does not. The pull-request steps that run `git` (`checkout.rs`, `guide.rs`, `create.rs`) add Git Credential Manager's own no-prompt switch and a non-interactive ssh on top of its standard environment.
 
 ### Event channels
 
@@ -239,7 +243,9 @@ Two kinds of agent run behind one seam: the **native agent** — Atlas's own eng
 | external ACP agent | `atlas-agent-servers` | a subprocess over JSON-RPC/stdio |
 | native agent | `atlas-native-agent` | the `atlas-engine`, in-process |
 
-Beyond `prompt` / `cancel` / `authenticate`, **every optional behaviour is capability-gated** — either a `supports_*` predicate (`supports_load_session`, `supports_resume_session`, `supports_close_session`, `supports_logout`, `supports_http_mcp`) or an `Option<Arc<dyn …>>` sub-trait the connection returns only when the agent advertised it (`model_selector`, `session_modes`, `session_config_options`, `session_list`, `truncate`, `retry`, `set_title`, `telemetry`). A caller asks the connection what it can do; it never asks who it is.
+Beyond `prompt` / `cancel` / `authenticate`, **every optional behaviour is capability-gated** — either a `supports_*` predicate (`supports_load_session`, `supports_resume_session`, `supports_close_session`, `supports_logout`, `supports_http_mcp`, `supports_rewind`, `supports_fork`) or an `Option<Arc<dyn …>>` sub-trait the connection returns only when the agent advertised it (`model_selector`, `model_catalogue`, `session_modes`, `session_config_options`, `session_effort`, `session_list`, `truncate`, `retry`, `rewind`, `fork`, `set_title`, `telemetry`). A caller asks the connection what it can do; it never asks who it is, and it cannot reach the concrete type behind the trait: there is no downcast on `AgentConnection`.
+
+Fork, reasoning effort and the model-catalogue refresh are things only the native agent does today, and they cross the seam the same way. The host's `fork_session`, `set_effort` and `refresh_models` call `fork`, `session_effort` and `model_catalogue`; an ACP agent that grew one of them would need no host change. The catalogue refresh (ADR-0007) keeps its whole policy in `crates/atlas-native-agent/src/engine/catalogue_refresh.rs`, behind `AgentModelCatalogue::refresh`: it fetches, rewrites the cache, and answers one of three outcomes — stored (no engine running), applied (the live connection took the new labels), or reconnect required. Only the last needs the host, which knows what is open and whether a turn is running, and drops the connection. Because the first outcome has no connection to ask, the launcher (`AgentServer::model_catalogue`) advertises the same sub-trait for an agent that is not running.
 
 **Branching on agent identity is forbidden.** Capabilities come from what the agent advertised at `initialize`. An `if agent_id == "claude"` is a bug, not a shortcut — it is what made the pre-port stack impossible to extend to an agent nobody had hand-written support for.
 
@@ -248,7 +254,8 @@ Beyond `prompt` / `cancel` / `authenticate`, **every optional behaviour is capab
 Three layers sit between the connection and the IPC surface:
 
 - **`AgentManager`** (`crates/atlas-agent-manager`) owns who is connected and which sessions are open on them. Three behaviours worth knowing: a second connect request while the first is still connecting *joins* it rather than starting a second process; a failed connection does not stick (the entry records the error for waiters, then goes, so the next request retries instead of replaying the failure forever); and a version bump drops the connection, because the running process is on the old binary. Every eviction path also forgets that agent's sessions and cancels any connect still in flight — a session pins the connection `Arc`, so one left behind keeps a child alive that nothing, including the shutdown sweep, can reach.
-- **`AgentHost`** (`src-tauri/src/commands/agent_host.rs`) is what `commands/agents.rs` talks to. It holds the three things the ported stack deliberately does not do: the **identity map** between the frontend's per-spawn `AgentId`/`SessionKey` and the manager's own keys, the **history** row kept current in the thread-metadata store, and cheap **session metadata** (`snapshot_meta`) on the send path.
+- **`SessionRegistry`** (`crates/atlas-agent-manager/src/sessions.rs`) is the one owner of a session's lifecycle, on top of the manager's session table. It holds each open session's record, its holds, and the state the host attaches to it (the turn controller and the remote-control seat). Ending a session is one function, whichever way it ends (the window lets go, the last hold goes, the agent is stopped or exits, sign-out, quit): it removes everything in one stated order and returns the **follow-ups** the caller still owes outside the lock, in order. A session being opened takes a bind ticket first, so an end that lands while the agent is still answering refuses the bind instead of bringing the session back. The module's docs state the lock order; none of it is on the per-chunk streaming path.
+- **`AgentHost`** (`src-tauri/src/commands/agent_host.rs`) is what `commands/agents.rs` talks to. It holds the three things the ported stack deliberately does not do: the **identity map** between the frontend's per-spawn `AgentId`/`SessionKey` and the manager's own keys, the **history** row kept current in the thread-metadata store, and cheap **session metadata** (`snapshot_meta`) on the send path. It does not keep sessions itself: it binds and ends them through the `SessionRegistry` and carries out the follow-ups an end hands back (the notice to the tab, the wire projection, the history binding, `session/close` on the agent).
 - **`DeltaProjector`** (`crates/atlas-agent-delta`) turns thread events into the wire the rest of Atlas consumes.
 
 ### The session-delta wire
@@ -261,11 +268,32 @@ The `SessionDelta` shapes those consumers pattern-match live in **`crates/atlas-
 
 ### Atlas's tool servers
 
-Atlas hands agents four in-process MCP services on one loopback listener, behind one bearer token per session: the **memory tool server** (`memory_server/`, `/mcp`, ADR-0010), offered to every agent — over HTTP to the in-process native agent, and to every ACP agent, whatever it advertises, as a stdio server: the Atlas binary run as `atlas mcp-bridge <url> <token file>`, the token in a private file and never in the entry, which an adapter may put on its command line (ADR-0019, ADR-0020) — the **UI tool server** (`ui_server/`, `/ui`, ADR-0012), offered only to a connection that carries **UI control** — today the in-process native connection — the **organisation tool server** (below) and the **code tool server** (`code_server/`, `/code`, ADR-0015: `grep`, `find_files` and `request_project_access`, see Attached projects). One offer (`MemorySessionOffers`) decides all four, because the token table holds one token per session. A UI tool call crosses to the window as `atlas:ui-action`; the frontend performs it through the app's own openers (`src/features/ui-actions/`) and answers through `ui_action_respond`, so Rust mirrors no layout or focus state. `tests/ui-actions-contract.test.ts` keeps the tool list and the window's dispatcher in step.
+Atlas hands agents four in-process MCP tool servers. One module, the **tool server host** (`tool_servers/`), serves and offers all of them; each server is a **tenant** that supplies only what is its own.
+
+| tenant | module | path, name | offered to | turned on by |
+|---|---|---|---|---|
+| **memory tool server** (ADR-0010) | `memory_server/` | `/mcp`, `atlas_memory` | every agent | shared memory for the project |
+| **UI tool server** (ADR-0012) | `ui_server/` | `/ui`, `atlas_ui` | a connection that carries **UI control** — today the in-process native connection | "Let Atlas Agent navigate the app" |
+| **organisation tool server** (ADR-0014, below) | `org_server/` | `/org`, `atlas_org` | a connection that carries **organisation access** | its setting, a signed-in account and a Project bound to a Workspace |
+| **code tool server** (ADR-0015) | `code_server/` | `/code`, `atlas_code` | every agent | "Let agents search code with Atlas" (`grep`, `find_files`, and `request_project_access`, see Attached projects) |
+
+A tenant is a `Tenant` value built by its module's `tenant(tools)`: its name and path, its handler (tools and instructions), its `Audience` (everyone, or a connection property — never an agent id), its admission rule (the setting, and for the organisation the account and the binding, which also stamps the session's grant) and, for the organisation, the tools that ask first (`OutwardCalls`).
+
+The host owns everything the tenants share:
+
+- **The listener** (`ToolServer`): one per app, on `127.0.0.1` at a port the OS picks, every tenant mounted at its path behind one token check.
+- **The token** (`SessionTokens`): one bearer token per session, minted when the session is offered its servers and revoked when it ends. The check hands the tool the session's `Grant` (`grant_of`). One token opens every path, so a tenant with a restricted audience checks the grant, not the path.
+- **The session policy**: the host makes each tenant's rmcp session manager, with no idle timeout. A tenant never makes one, so none can differ.
+- **The offer** (`SessionOffers`): on each session request, one loop over the tenants in registration order. Each is decided the same way — a transport must reach the agent, the connection must be in the tenant's audience, the tenant must admit the session, the listener must be running — and logged in one line. The included ones go out on one token: over HTTP to the in-process native agent, and to every ACP agent, whatever it advertises, as stdio servers — the Atlas binary run as `atlas mcp-bridge <url> <token file>` (`memory_bridge.rs`), the token in a private file and never in the entry, which an adapter may put on its command line (ADR-0019, ADR-0020).
+- **The `tools/list` cache rule** (`tools_list`).
+
+Adding a tool server is a handler and one `Tenant::new` line registered in `commands/agents.rs`; `tool_servers/tests.rs` proves that with a fifth, test-only tenant, and holds the offer matrix (transport × connection properties × each tenant's admission).
+
+A UI tool call crosses to the window as `atlas:ui-action`; the frontend performs it through the app's own openers (`src/features/ui-actions/`) and answers through `ui_action_respond`, so Rust mirrors no layout or focus state. `tests/ui-actions-contract.test.ts` keeps the tool list and the window's dispatcher in step.
 
 ### The organisation tool server
 
-The **organisation tool server** (`org_server/`, `/org`, `atlas_org`, ADR-0014) lets Atlas Agent read the organisation a Project belongs to — members, conversations, the inbox, recorded sessions and their comments — and act in it as the signed-in user. It is offered only to a connection that carries **organisation access** (`org_access` on the session request, the same kind of connection property as UI control, never an agent id), while the setting "Let Atlas Agent act in your organisation" is on, someone is signed in, and the session's Project is bound to a Workspace. The offer resolves the Project's binding into an `OrgScope` (organisation + Workspace) stamped on the session's grant; the tools act in that organisation — in that Workspace unless a tool names another of the organisation's, whose server then decides — and nowhere else, so switching the window's active organisation cannot redirect a turn, and the setting, the sign-in and the binding are re-checked on every call. Every remote operation goes through one trait, the **organisation cloud** (`cloud.rs`, `OrganisationCloud`): the production `AppOrganisationCloud` (`adapter.rs`) wraps the artifacts client, the chat (comms) client and `AuthCore`, which already hold the bearer in Rust; the tests run the real listener against an in-memory `FakeOrganisation`. Admins get one more tool (`org_member_activity`), decided per `tools/list` from the token's role and refused at call time for anyone else. **Outward actions** — `org_comment_reply` and `org_send`, the tools that reach another person — ask first: the offer declares them in its ask-first list, the native seam projects each with a per-tool `Prompt`, the engine asks as an MCP elicitation that the seam serves only for a server Atlas offered the thread (`engine/tool_approvals.rs`), and the approval card shows the recipient and the full body from the host's `describe_call` (`OrgTools::describe`, sharing its argument parsing with the post so the card is what is sent). The seam records each approval per exact call in `OutwardConsent`, and the server posts only a call found there — so a call the engine runs unasked, in bypass mode, is refused and nothing is sent. Drawing on a Space page (`org_page_write`) needs the page codec the frontend holds, so it crosses to the window on the UI tool server's bridge as `atlas:org-window-action` and is answered through `ui_action_respond`. Every call, refusals included, is one `OrgActionRecord` emitted as `atlas:org-action` for the Logs panel. Ambiguity is the model's to resolve: names that match several members or conversations come back as candidates, and the model asks the user through the engine's `request_user_input`, which the native connection serves as a question card mid-turn in every mode (ADR-0013); tool servers themselves never elicit. A composer mention of a member, conversation or recorded session reaches the tools as an `atlas-org://` link carrying the id. `org_server/tests.rs` measures the server's fixed-prefix cost (`docs/research/org-tool-server-prefix.md`).
+The **organisation tool server** (`org_server/`, `/org`, `atlas_org`, ADR-0014) lets Atlas Agent read the organisation a Project belongs to — members, conversations, the inbox, recorded sessions and their comments — and act in it as the signed-in user. It is offered only to a connection that carries **organisation access** (`org_access` on the session request, the same kind of connection property as UI control, never an agent id), while the setting "Let Atlas Agent act in your organisation" is on, someone is signed in, and the session's Project is bound to a Workspace. Its admission rule resolves the Project's binding into an `OrgScope` (organisation + Workspace) stamped on the session's grant; the tools act in that organisation — in that Workspace unless a tool names another of the organisation's, whose server then decides — and nowhere else, so switching the window's active organisation cannot redirect a turn, and the setting, the sign-in and the binding are re-checked on every call. Every remote operation goes through one trait, the **organisation cloud** (`cloud.rs`, `OrganisationCloud`): the production `AppOrganisationCloud` (`adapter.rs`) wraps the artifacts client, the chat (comms) client and `AuthCore`, which already hold the bearer in Rust; the tests run the real listener against an in-memory `FakeOrganisation`. Admins get one more tool (`org_member_activity`), decided per `tools/list` from the token's role and refused at call time for anyone else. **Outward actions** — `org_comment_reply` and `org_send`, the tools that reach another person — ask first: the tenant names them (`OutwardCalls`), the host's offer declares them in its ask-first list, the native seam projects each with a per-tool `Prompt`, the engine asks as an MCP elicitation that the seam serves only for a server Atlas offered the thread (`engine/tool_approvals.rs`), and the approval card shows the recipient and the full body from the host's `describe_call`, which the host routes to the tenant the call is for (`OrgTools::describe`, sharing its argument parsing with the post so the card is what is sent). The seam records each approval per exact call in `OutwardConsent`, and the server posts only a call found there — so a call the engine runs unasked, in bypass mode, is refused and nothing is sent. Drawing on a Space page (`org_page_write`) needs the page codec the frontend holds, so it crosses to the window on the UI tool server's bridge as `atlas:org-window-action` and is answered through `ui_action_respond`. Every call, refusals included, is one `OrgActionRecord` emitted as `atlas:org-action` for the Logs panel. Ambiguity is the model's to resolve: names that match several members or conversations come back as candidates, and the model asks the user through the engine's `request_user_input`, which the native connection serves as a question card mid-turn in every mode (ADR-0013); tool servers themselves never elicit. A composer mention of a member, conversation or recorded session reaches the tools as an `atlas-org://` link carrying the id. `org_server/tests.rs` measures the server's fixed-prefix cost (`docs/research/org-tool-server-prefix.md`).
 
 ### Attached projects
 
@@ -312,7 +340,7 @@ All wired in as `path` dependencies from `src-tauri/Cargo.toml`, and all members
 | `atlas-native-agent` | The engine (`vendor/atlas-engine`) on the `AgentConnection` seam — the native agent as just another connection. Its agent id is the literal `"atlas-agent"`: a storage key every thread row resolves through, so renaming it is a data migration (ADR-0011). |
 | `atlas-agent-transcript` | Where an agent keeps its record of a conversation, and how to read Atlas's own text back out of one. The Claude JSONL replay it used to hold is gone. |
 | `atlas-thread-metadata` | The app-owned thread-metadata store (`threads.db`) — Atlas's only source for the sidebar and history. Metadata only, never transcript content. See ADR-0001. |
-| `atlas-bus` | Event broadcaster + middleware pipeline seam: a `tokio::sync::broadcast`-backed fan-out (lagging subscribers drop rather than block the producer), plus `OutboundPipeline`. Generic — no dependency on any agent or ACP type. |
+| `atlas-bus` | The outbound middleware pipeline: `OutboundPipeline`, an ordered chain of `OutboundMiddleware` run on the emit thread, so a stage cannot lag or lose a delta. Generic — no dependency on any agent or ACP type. |
 
 ### Everything else
 
@@ -321,15 +349,18 @@ All wired in as `path` dependencies from `src-tauri/Cargo.toml`, and all members
 | `atlas-checkpoint` | The agent-session record: local SQLite store (`.atlas/sessions.db`), redact-on-write capture, git commit linkage, transcript import, sync outbox. Tauri-free, so the whole surface is testable against a real database and a real git repo. **Push only** — it drains the outbox to the ingest service and never reads a Session back. |
 | `atlas-artifacts` | The Timeline's cloud **read** half: remote Sessions, comments, and one WebSocket per connected cloud Project. Tauri-free, `TokenSource` as the only host seam, shaped on `atlas-comms`. Split from `atlas-checkpoint` because reads need tokio and tungstenite and that crate is deliberately synchronous. The invariant that makes a merged board possible: `rowId` on the wire **is** the local row id, so local and remote rows share one identity and a comment anchor resolves against a local row with no mapping table. |
 | `atlas-redact` | Single source of truth for secret redaction: layered scrubbing (Shannon entropy, vendored betterleaks rules, provider prefixes, credentialed URIs, connection strings) with JSON-aware traversal. String in, redacted string out — no I/O, no async. |
-| `atlas-git` | Git execution layer: one spawn chokepoint over the real `git` binary (so hooks run), a typed stderr→error taxonomy with friendly messages, porcelain-v2 status parsing, streaming output for long operations. |
-| `atlas-gitdiff` | Structured side-by-side diff engine: parses unified diffs, computes word-level intra-line change spans (word-diff vendored from `dandavison/delta`, MIT). |
+| `atlas-git` | Git for the whole workspace, Tauri-free. `GitCommand` is the single `git` spawn chokepoint over the real binary (so hooks run): one no-prompt environment, a timeout that kills, a raw run for callers that read the exit code or bytes themselves, streaming output for long operations, and a typed stderr→error taxonomy with friendly messages. `tests/spawn_audit.rs` fails on a git process built anywhere else. `Repository` holds the source-control rules (branches, sync, stash, history, commit) as plain functions, with the "repository changed" notification injected; the `git_ops` and `git` commands are adapters over it. Also porcelain-v2 status parsing. |
+| `atlas-gh` | The single `gh` spawn chokepoint (`GhCommand`), Tauri-free: a fixed no-prompt environment, a timeout that kills, a shared pool of API permits, the rate-limit pause, and one failure taxonomy for a run that produced no answer. What an answer means stays with the caller (`pull_requests/gh.rs` reads it as HTTP). |
+| `atlas-gitdiff` | The editor gutter's line status: parses a file's unified diff and tells its added lines from its changed ones (line pairing vendored from `dandavison/delta`, MIT). |
 | `atlas-terminal` | Wraps `portable-pty`, manages `TerminalSession`s, bridges PTY bytes to Tauri events. |
 | `atlas-memory` | On-device RAG/memory engine: MiniLM → a healing per-model vector file plus `corpus.sqlite` behind a `MemorySearchFn` seam; the shared-memory record store (`record`: SQLite per repository scope, redact-on-write, immutable hash-chained revisions as the canonical record (ADR-0017), hybrid BM25 + dense search); the reconciler (`health`); code citations checked at read time (`citation`, ADR-0018); consolidation, handoff notes, the dream pass and the Agent Memory Repo format (`consolidate`, `handoff`, `dream`, `amr`); and global promotion of Facts seen in two or more repositories to `~/.atlas/memory` (`global`). Read its `README.md` and `MIGRATION.md` before changing on-disk index formats. |
 | `atlas-instruction-sync` | Mirrors `CLAUDE.md` and `.claude/rules/` into one marked block of a project's `AGENTS.md`, for agents that read only `AGENTS.md`. Plain file I/O, no async, no Tauri; every byte outside the block is kept, and anything it cannot be sure of is skipped and logged. `commands::instruction_sync` decides when it runs. |
 | `atlas-embed` | On-device text embeddings (BERT-family sentence-transformers) and a small vector store, isolated so `candle`'s heavy dependency tree doesn't slow everything else's incremental builds. Embedding only — on-device generation was removed 2026-08-22. |
 | `atlas-search` | In-process code search: grep on ripgrep's crates and glob/fuzzy file finding over a session root, with one compact, byte-budgeted output format for the `atlas_code` tools (ADR-0015). On demand only — nothing is indexed, cached or watched (ADR-0021). |
 | `atlas-retrieval` | Memory's retrieval core: content-keyed embedding cache codec, per-model usearch vector files that heal on open, RRF fusion, the `Embedder` trait. |
+| `atlas-skills` | The skill store, Tauri-free: the canonical `.agents/skills` tree (ADR-0005), its projection into each agent's own skills directory with a ledger, reconcile, freeze and promote, the skills the binary ships, and packs (parse, install from a source, lockfile, per-component projection). `SkillStore` is the whole interface, one method per thing a user does. It is handed the home directory, a `PackSource` (GitHub over `atlas-git` in the app, a directory in a test), a clock and the config file's name, and looks nothing up itself. `commands::skills` is its adapter: it opens the store, hops to a blocking thread, and sends the telemetry event. |
 | `atlas-profile` | Which data this process owns: the default profile or the dev profile `bun run dev:app` runs under. Derived once from the bundle identifier; every `.atlas` and `~/.config/atlas` name goes through it. Names only — no I/O, no dependencies. |
+| `atlas-fs` | Crash-safe file replacement (`replace_file`): unique sibling temp file, fsync, rename, directory fsync, temp removed on failure. The one implementation for stores that rewrite a file in place. No dependencies. |
 | `atlas-kb-server` | Standalone static-server binary produced by the knowledge base's "Export server" action. Embeds the exported HTML/CSS via `include_dir!`, serves on `localhost:4747`. |
 
 ## Persistence
@@ -418,19 +449,22 @@ atlas/
 │   ├── atlas-agent-transcript     an agent's own record of a conversation
 │   ├── atlas-native-agent         the engine on the AgentConnection seam
 │   ├── atlas-thread-metadata      app-owned session history (threads.db)
-│   ├── atlas-bus                  event bus + middleware pipeline
+│   ├── atlas-bus                  outbound middleware pipeline
 │   ├── atlas-checkpoint           session record / Timeline (sessions.db)
 │   ├── atlas-artifacts            Timeline cloud reads + realtime socket
 │   ├── atlas-redact               secret redaction (single source of truth)
-│   ├── atlas-git                  git spawn chokepoint + error taxonomy
-│   ├── atlas-gitdiff              structured diff engine
+│   ├── atlas-git                  git spawn chokepoint, error taxonomy, source-control rules
+│   ├── atlas-gh                   gh spawn chokepoint: budget, pause, error taxonomy
+│   ├── atlas-gitdiff              editor gutter line status
 │   ├── atlas-terminal             PTY (portable-pty)
 │   ├── atlas-memory               on-device RAG/memory engine
 │   ├── atlas-instruction-sync     CLAUDE.md + .claude/rules → AGENTS.md block
 │   ├── atlas-embed                on-device embeddings (candle)
 │   ├── atlas-search               in-process grep / find_files
 │   ├── atlas-retrieval            memory's retrieval core (vectors, RRF)
+│   ├── atlas-skills               the skill store: .agents/skills, projection, bundled skills, packs
 │   ├── atlas-profile              default vs dev data profile (directory names)
+│   ├── atlas-fs                   crash-safe file replacement (replace_file)
 │   └── atlas-kb-server            self-contained KB static-server binary
 │
 ├── docs/                          architecture.md (this file), ADRs, reference

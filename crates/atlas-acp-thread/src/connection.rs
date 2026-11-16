@@ -394,7 +394,31 @@ pub trait AgentConnection: Send + Sync {
         None
     }
 
-    fn into_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync>;
+    /// Whether this agent can branch a session — see [`AgentSessionFork`].
+    ///
+    /// Session-independent, like [`Self::supports_rewind`], and for the same
+    /// reason: the catalogue publishes it per agent. It must agree with
+    /// [`Self::fork`].
+    fn supports_fork(&self) -> bool {
+        false
+    }
+
+    fn fork(&self, _session_id: &acp::SessionId) -> Option<Arc<dyn AgentSessionFork>> {
+        None
+    }
+
+    /// Returns this session's reasoning-effort control, for an agent that has
+    /// one — see [`AgentSessionEffort`].
+    fn session_effort(&self, _session_id: &acp::SessionId) -> Option<Arc<dyn AgentSessionEffort>> {
+        None
+    }
+
+    /// Returns this agent's model catalogue, if it is one the agent can
+    /// re-fetch on demand — see [`AgentModelCatalogue`]. Session-independent:
+    /// the list belongs to the connection, not to any one session.
+    fn model_catalogue(&self) -> Option<Arc<dyn AgentModelCatalogue>> {
+        None
+    }
 }
 
 /// The folders a session may use besides its own working directories: the
@@ -418,12 +442,6 @@ impl SessionRoots {
     /// Every root, read-write first.
     pub fn all(&self) -> impl Iterator<Item = &PathBuf> {
         self.read_write.iter().chain(self.read_only.iter())
-    }
-}
-
-impl dyn AgentConnection {
-    pub fn downcast<T: 'static + AgentConnection + Sized>(self: Arc<Self>) -> Option<Arc<T>> {
-        self.into_any().downcast().ok()
     }
 }
 
@@ -471,6 +489,83 @@ pub trait AgentSessionRetry: Send + Sync {
 /// a caller told "nothing happened" cannot repair a rewind that half-happened.
 pub trait AgentSessionRewind: Send + Sync {
     fn run(&self) -> BoxFuture<'static, Result<Option<String>>>;
+}
+
+/// Branching a session into a new one that starts with the same history.
+///
+/// Only the branch happens here. The new session is not opened: the caller
+/// opens it through the ordinary reopen path, which replays the branched
+/// history the way any reopened session's is replayed.
+pub trait AgentSessionFork: Send + Sync {
+    /// The id of the new session.
+    fn run(&self) -> BoxFuture<'static, Result<acp::SessionId>>;
+}
+
+/// Per-session reasoning effort.
+///
+/// Not part of ACP, so an agent offers it only if its own runtime has the
+/// knob. The level is the agent's vocabulary, passed through as text; an
+/// agent rejects one it does not know rather than defaulting it.
+pub trait AgentSessionEffort: Send + Sync {
+    /// `None` clears the override and uses the model's own default.
+    fn set_effort(&self, level: Option<String>) -> Result<()>;
+}
+
+/// A model catalogue the agent can re-fetch on demand.
+///
+/// Distinct from [`AgentModelSelector`], which lists and picks within the
+/// catalogue a session already has. This replaces the catalogue itself, and
+/// the agent — not the caller — decides what the new one means for a
+/// connection that is already running ([`ModelCatalogueOutcome`]).
+///
+/// Advertised in two places, because one outcome needs no connection at all:
+/// by [`AgentConnection::model_catalogue`] for a running agent, and by the
+/// agent's launcher for one that is not running.
+pub trait AgentModelCatalogue: Send + Sync {
+    /// Fetch the catalogue now. Bounded by the agent: a source that does not
+    /// answer is an `Err`, not a wait. An answer with nothing the user may
+    /// run is a [`ModelCatalogueEmpty`].
+    fn refresh(&self) -> BoxFuture<'static, Result<ModelCatalogueRefresh>>;
+}
+
+/// What a catalogue refresh fetched, and what it did with it.
+#[derive(Debug, Clone)]
+pub struct ModelCatalogueRefresh {
+    /// The list, in the order the picker shows it.
+    pub models: Vec<AgentModelInfo>,
+    /// What a new session runs on before any pick.
+    pub default_model: AgentModelId,
+    pub outcome: ModelCatalogueOutcome,
+}
+
+/// What a catalogue refresh means for the agent that ran it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelCatalogueOutcome {
+    /// Nothing is running on the old list. The new one is stored, and the
+    /// next connect reads it.
+    Stored,
+    /// The running connection took the new list in place. `changed` is
+    /// whether anything the user can see differs.
+    Applied { changed: bool },
+    /// The running connection cannot take the new list. It is stored, and
+    /// the caller must drop the connection for it to apply; the agent has
+    /// changed nothing about the connection itself.
+    ReconnectRequired,
+}
+
+/// The catalogue source answered, and listed nothing the user may run.
+///
+/// A real `std::error::Error` for the reason [`AuthRequired`] is one: the
+/// host tells this apart from a source that could not be reached, and it has
+/// to survive being wrapped to do so.
+#[derive(Debug, Default)]
+pub struct ModelCatalogueEmpty;
+
+impl Error for ModelCatalogueEmpty {}
+impl fmt::Display for ModelCatalogueEmpty {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "the model catalogue lists nothing this account may use")
+    }
 }
 
 pub trait AgentSessionSetTitle: Send + Sync {

@@ -3,7 +3,8 @@
 // GitHub clone, a past session, a large paste.
 
 import { useCallback, useState, type Dispatch, type RefObject, type SetStateAction } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { captureScreenshot, readFileBase64 } from "@/features/editor/lib/editor-fs-api";
+import { cloneGithubRepo } from "@/features/github/lib/github-api";
 import { toast } from "sonner";
 import { useChatStore } from "../stores/chat-store";
 import { useSessionProjectsStore } from "../stores/session-projects-store";
@@ -25,6 +26,7 @@ import { metaFromSearch } from "@/features/github/types";
 import { imageMimeFromPath } from "@/lib/byok/model-capabilities";
 import { scratchPathForFile } from "@/lib/scratch-file";
 import { useAppStore } from "@/features/app/stores/app-store";
+import { emitWindowEvent } from "@/lib/window-events";
 
 export function useComposerAttachments({
   tabId,
@@ -104,7 +106,7 @@ export function useComposerAttachments({
         const mime = imageSupported ? imageMimeFromPath(p) : null;
         if (!mime) continue;
         try {
-          const data = await invoke<string>("read_file_base64", { path: p });
+          const data = await readFileBase64(p);
           // The file's size, from the base64 it came as (the padding makes
           // this at most two bytes over).
           sizes.set(p, Math.floor((data.length * 3) / 4));
@@ -196,10 +198,7 @@ export function useComposerAttachments({
         // in a whole-desktop capture.
         await new Promise((r) => setTimeout(r, 250));
         const proj = useAppStore.getState().currentProject?.path ?? null;
-        const res = await invoke<{ path: string } | null>("capture_screenshot", {
-          mode,
-          projectPath: proj,
-        });
+        const res = await captureScreenshot(mode, proj);
         if (!res) return; // cancelled (Esc during region select)
         await attachPaths([res.path]);
       } catch (err) {
@@ -223,12 +222,12 @@ export function useComposerAttachments({
       }
       setGithubSyncing(repo.full_name);
       try {
-        const dest = await invoke<string>("clone_github_repo", {
-          projectPath: proj,
-          cloneUrl: repo.clone_url,
-          repoName: repo.full_name.replace(/\//g, "-"),
-          meta: metaFromSearch(repo),
-        });
+        const dest = await cloneGithubRepo(
+          proj,
+          repo.clone_url,
+          repo.full_name.replace(/\//g, "-"),
+          metaFromSearch(repo),
+        );
         const folderName = dest.split("/").pop() || repo.full_name.replace(/\//g, "-");
         const mention: MentionRepo = {
           kind: "repo",
@@ -241,7 +240,7 @@ export function useComposerAttachments({
         attachPicked(mention, "clone");
         // Keep the knowledge sidebar's cloned-repos list in sync (same signal the
         // GitHub panel emits).
-        window.dispatchEvent(new Event("atlas:repo-cloned"));
+        emitWindowEvent("atlas:repo-cloned");
         requestAnimationFrame(() => inputRef.current?.focus());
       } catch (err) {
         toast.error(

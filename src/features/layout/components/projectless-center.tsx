@@ -2,7 +2,7 @@ import { useState, Suspense } from "react";
 import { House } from "lucide-react";
 import { PaneHeader } from "@/components/titlebar";
 import { WelcomeScreen } from "@/features/app/components/welcome-screen";
-import { PROJECTLESS_TYPES } from "@/lib/constants";
+import { PROJECTLESS_TYPES } from "@/lib/tab-registry";
 import { columnChrome } from "../lib/shell-edges";
 import { useLayoutStore, type Tab } from "../stores/layout-store";
 import { PaneTab, useTabListFocus } from "./pane-tab";

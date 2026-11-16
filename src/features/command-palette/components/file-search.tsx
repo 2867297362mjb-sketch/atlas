@@ -10,7 +10,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Film, Image as ImageIcon, FileCode, FileX, Music } from "lucide-react";
-import { listen } from "@tauri-apps/api/event";
+import { onFileIndexUpdated } from "@/features/file-picker/lib/file-picker-api";
 import { useAppStore } from "@/features/app/stores/app-store";
 import { useLayoutStore } from "@/features/layout/stores/layout-store";
 import { useRecentFilesStore } from "@/features/chat/stores/recent-files-store";
@@ -95,7 +95,7 @@ export function FileSearch(props: { onClose: () => void; escapeLabel: string }) 
     if (!projectPath) return;
     let unlisten: (() => void) | null = null;
     let cancelled = false;
-    void listen<{ count: number }>("atlas:fileindex:updated", () => {
+    void onFileIndexUpdated(() => {
       if (cancelled) return;
       setIndexing(false);
       void runSearch(queryRef.current);

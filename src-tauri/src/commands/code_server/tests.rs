@@ -1,8 +1,7 @@
 //! The code tool server end to end over loopback with an rmcp client, on the
-//! memory tool server's listener, the offer that hands it out, and the
+//! tool server host, the offer that hands it out, and the
 //! project search overlay's command.
 
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -17,19 +16,8 @@ use serde_json::{json, Value};
 
 use super::tools::{run_bounded, tool_names};
 use super::*;
-use crate::commands::memory_server::{
-    MemoryServer, MemoryServerHost, MemorySessionOffers, SharingGate, Sources,
-};
-use crate::commands::shared_memory::SharedMemoryStore;
-
-fn memory() -> SharedMemoryStore {
-    let t = Arc::new(AtomicI64::new(1_000));
-    SharedMemoryStore::with_clock(Arc::new(move || t.fetch_add(1_000, Ordering::SeqCst)))
-}
-
-fn sharing(on: bool) -> SharingGate {
-    Arc::new(move |_| on)
-}
+use crate::commands::memory_server;
+use crate::commands::tool_servers::{SessionOffers, ToolServerHost};
 
 fn enabled(on: bool) -> CodeToolsGate {
     Arc::new(move |_: &str| on)
@@ -47,33 +35,32 @@ fn project(files: &[(&str, &str)]) -> tempfile::TempDir {
 }
 
 /// A host serving the code tools beside the memory tools, as the app does.
-async fn running_host(gate: CodeToolsGate) -> Arc<MemoryServerHost> {
+async fn running_host(gate: CodeToolsGate) -> Arc<ToolServerHost> {
     running_host_with(CodeTools::new(gate)).await
 }
 
 /// [`running_host`] with the code tools built by the caller.
-async fn running_host_with(tools: CodeTools) -> Arc<MemoryServerHost> {
-    let host = Arc::new(MemoryServerHost::new());
-    let server = MemoryServer::start_with(
-        memory(),
-        host.tokens().clone(),
-        host.clocks().clone(),
-        host.reads().clone(),
-        sharing(true),
-        Sources::default(),
-        vec![router(tools)],
-    )
+async fn running_host_with(tools: CodeTools) -> Arc<ToolServerHost> {
+    ToolServerHost::running(vec![
+        memory_server::test_tenant(Arc::new(|_| true)),
+        tenant(tools),
+    ])
     .await
-    .unwrap();
-    host.adopt(server);
-    host
+}
+
+/// A host with shared memory and the code tools switched as given, and the
+/// offers handing its servers out.
+async fn offering(sharing: bool, code_tools: bool) -> (Arc<ToolServerHost>, SessionOffers) {
+    let host = ToolServerHost::running(vec![
+        memory_server::test_tenant(Arc::new(move |_| sharing)),
+        tenant(CodeTools::new(enabled(code_tools))),
+    ])
+    .await;
+    (host.clone(), SessionOffers::new(host))
 }
 
 /// A client on `/code` for a session launched in `dir`.
-async fn client_in(
-    host: &MemoryServerHost,
-    dir: &std::path::Path,
-) -> RunningService<RoleClient, ()> {
+async fn client_in(host: &ToolServerHost, dir: &std::path::Path) -> RunningService<RoleClient, ()> {
     let token = host
         .tokens()
         .mint("s1", "claude-code", &dir.to_string_lossy());
@@ -560,7 +547,7 @@ fn session_request(http_mcp: bool) -> SessionMcpRequest {
 
 /// Every entry an offer carries, as `(name, url, bearer token)`.
 fn entries(offer: &SessionMcpOffer) -> Vec<(String, String, String)> {
-    crate::commands::memory_server::offers::offered_entries(offer)
+    crate::commands::tool_servers::offers::offered_entries(offer)
 }
 
 fn names(offer: &SessionMcpOffer) -> Vec<String> {
@@ -572,9 +559,7 @@ fn names(offer: &SessionMcpOffer) -> Vec<String> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn an_http_agent_is_offered_the_code_server_on_the_memory_token() {
-    let host = running_host(enabled(true)).await;
-    let offers = MemorySessionOffers::new(host.clone(), sharing(true))
-        .with_code(CodeOffer::new(enabled(true)));
+    let (host, offers) = offering(true, true).await;
     let offer = offers.offer(&session_request(true));
     let got = entries(&offer);
     assert_eq!(names(&offer), ["atlas_memory", CODE_SERVER_NAME]);
@@ -592,9 +577,7 @@ async fn an_http_agent_is_offered_the_code_server_on_the_memory_token() {
 /// ADR-0015: code search stores nothing, so the sharing toggle does not gate it.
 #[tokio::test(flavor = "multi_thread")]
 async fn with_shared_memory_off_the_code_server_is_still_offered() {
-    let host = running_host(enabled(true)).await;
-    let offers =
-        MemorySessionOffers::new(host, sharing(false)).with_code(CodeOffer::new(enabled(true)));
+    let (_host, offers) = offering(false, true).await;
     assert_eq!(
         names(&offers.offer(&session_request(true))),
         [CODE_SERVER_NAME]
@@ -603,9 +586,7 @@ async fn with_shared_memory_off_the_code_server_is_still_offered() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn with_code_tools_off_the_code_server_is_not_offered() {
-    let host = running_host(enabled(true)).await;
-    let offers =
-        MemorySessionOffers::new(host, sharing(true)).with_code(CodeOffer::new(enabled(false)));
+    let (_host, offers) = offering(true, false).await;
     assert_eq!(
         names(&offers.offer(&session_request(true))),
         ["atlas_memory"]
@@ -617,9 +598,7 @@ async fn with_code_tools_off_the_code_server_is_not_offered() {
 /// HTTP MCP.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_acp_agent_gets_the_code_server_through_the_bridge() {
-    let host = running_host(enabled(true)).await;
-    let offers =
-        MemorySessionOffers::new(host, sharing(true)).with_code(CodeOffer::new(enabled(true)));
+    let (_host, offers) = offering(true, true).await;
     for http_mcp in [true, false] {
         let offer = offers.offer(&session_request(http_mcp));
         assert!(
@@ -634,32 +613,6 @@ async fn an_acp_agent_gets_the_code_server_through_the_bridge() {
         assert_eq!(names(&offer), ["atlas_memory", "atlas_code"]);
         assert_eq!(got[0].2, got[1].2, "one token for both");
     }
-}
-
-#[test]
-fn the_decision_says_whether_the_code_server_is_included_and_why_not() {
-    use CodeOfferDecision::*;
-    assert_eq!(CodeOfferDecision::decide(true, true, true), Included);
-    assert_eq!(
-        CodeOfferDecision::decide(false, true, true),
-        Omitted("no transport reaches the agent")
-    );
-    assert_eq!(
-        CodeOfferDecision::decide(true, false, true),
-        Omitted("code tools are off in Settings")
-    );
-    assert_eq!(
-        CodeOfferDecision::decide(true, true, false),
-        Omitted("code tool server is not running")
-    );
-    assert_eq!(
-        Included.log_line("claude-code", true),
-        "code tool server offer: agent=claude-code http_mcp=true code_server=included"
-    );
-    assert_eq!(
-        Omitted("x").log_line("atlas-agent", false),
-        "code tool server offer: agent=atlas-agent http_mcp=false code_server=omitted reason=\"x\""
-    );
 }
 
 // ── The project search overlay ───────────────────────────────────────────────

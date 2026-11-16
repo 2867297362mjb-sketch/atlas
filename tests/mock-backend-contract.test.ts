@@ -1,11 +1,20 @@
 // @vitest-environment happy-dom
 import { describe, expect, it } from "vitest";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { walk } from "./support/walk";
 
 import { baseFixtureMaps, baseHandlers } from "@/dev/mock-backend/scenarios/base";
 import { scenarios } from "@/dev/mock-backend/scenarios";
+import { expectFloor } from "./support/floor";
+import {
+  DYNAMIC_INVOKE_SITES,
+  INVOKE_LITERAL,
+  declaredCommands,
+  registeredCommands,
+  stripTsComments,
+} from "./support/ipc";
 
 /**
  * Guards the dev-only browser mock backend (`src/dev/mock-backend/`) against
@@ -34,8 +43,6 @@ import { scenarios } from "@/dev/mock-backend/scenarios";
  */
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const RUST_SRC = path.join(REPO_ROOT, "src-tauri", "src");
-const LIB_RS = path.join(RUST_SRC, "lib.rs");
 
 /**
  * Commands deliberately answered by more than one base fixture map (or by a
@@ -49,9 +56,9 @@ const ALLOWED_OVERLAPS: Record<string, string> = {};
 /**
  * A vacuous pass is the thing to fear: if the imports below ever resolve to an
  * empty object, every assertion here passes while guarding nothing. Well under
- * the real count (~300 at the time of writing) — a smoke alarm, not a target.
+ * the real count — a smoke alarm, not a target.
  */
-const MIN_MOCKED = 200;
+const MIN_MOCKED = 500;
 
 const TS_SRC = path.join(REPO_ROOT, "src");
 
@@ -72,107 +79,19 @@ const UNMOCKED_ALLOWED: Record<string, string> = {};
  */
 const PLUGIN_PREFIX = "plugin:";
 
-/** Same literal scan as `ipc-contract.test.ts` (kept in step by hand). */
-const TYPE_ARG = (() => {
-  const atom = "(?:=>|[^<>])";
-  let level = `<${atom}*>`;
-  for (let i = 0; i < 3; i++) level = `<(?:${atom}|${level})*>`;
-  return level;
-})();
-const INVOKE_LITERAL = new RegExp(
-  `\\binvoke\\s*(?:${TYPE_ARG})?\\s*\\(\\s*["'\`]([a-zA-Z0-9_]+)["'\`]`,
-  "g",
-);
-
-/** Dynamic `invoke(cmd)` sites whose literals the scan cannot follow; see the
- *  same table in `ipc-contract.test.ts`. */
-const DYNAMIC_COMMANDS = ["git_stage_hunk", "git_unstage_hunk", "git_discard_hunk"];
-
-function walkTs(dir: string): string[] {
-  const out: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...walkTs(full));
-    else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) out.push(full);
-  }
-  return out;
-}
-
 /** Commands the shipping frontend invokes. `src/dev/` forwards names
  *  generically and is the mock itself, so it is not a caller. */
 function invokedCommands(): Set<string> {
-  const found = new Set<string>(DYNAMIC_COMMANDS);
+  // A name handed to `invoke` in a variable is one the literal scan cannot
+  // read; those sites are listed by hand, and still need a fake.
+  const found = new Set<string>(Object.values(DYNAMIC_INVOKE_SITES).flat());
   const devRoot = path.join(TS_SRC, "dev") + path.sep;
-  for (const file of walkTs(TS_SRC)) {
-    if (file.startsWith(devRoot)) continue;
-    const src = readFileSync(file, "utf8")
-      .replace(/\/\*[\s\S]*?\*\//g, " ")
-      .replace(/(^|[^:\\])\/\/.*$/gm, "$1");
+  for (const file of walk(TS_SRC, [".ts", ".tsx"])) {
+    if (file.startsWith(devRoot) || /\.test\.tsx?$/.test(file)) continue;
+    const src = stripTsComments(readFileSync(file, "utf8"));
     for (const match of src.matchAll(INVOKE_LITERAL)) found.add(match[1]);
   }
   return found;
-}
-
-function walk(dir: string): string[] {
-  const out: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name === "target" || entry.name === "node_modules") continue;
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...walk(full));
-    else if (entry.name.endsWith(".rs")) out.push(full);
-  }
-  return out;
-}
-
-/**
- * Every `#[tauri::command]` handler name. Same parse as
- * `ipc-contract.test.ts`: the attribute must start its own line (a module doc
- * comment citing it would otherwise name the next unrelated `fn`), and the
- * name is taken from the next `fn` rather than by fixed lookahead, so stacked
- * attributes do not hide a handler.
- */
-function declaredCommands(): Set<string> {
-  const found = new Set<string>();
-  const attribute = /^[ \t]*#\[tauri::command(\([^)]*\))?\]/gm;
-  for (const file of walk(RUST_SRC)) {
-    const src = readFileSync(file, "utf8");
-    for (const attr of src.matchAll(attribute)) {
-      const match = src.slice(attr.index + attr[0].length).match(/\bfn\s+([a-z_][a-z0-9_]*)/i);
-      if (match) found.add(match[1]);
-    }
-  }
-  return found;
-}
-
-/**
- * Command names in `tauri::generate_handler![...]`. Declaring a
- * `#[tauri::command]` is not enough for the real app to answer it; a fake for
- * a declared-but-unregistered command makes the browser work where the app
- * says "command not found". Same bracket-depth scan as `ipc-contract.test.ts`.
- */
-function registeredCommands(): Set<string> {
-  const src = readFileSync(LIB_RS, "utf8");
-  const start = src.indexOf("generate_handler![");
-  if (start === -1) throw new Error("no generate_handler! block found in lib.rs");
-  const open = src.indexOf("[", start);
-  let depth = 0;
-  let end = -1;
-  for (let i = open; i < src.length; i++) {
-    if (src[i] === "[") depth++;
-    else if (src[i] === "]" && --depth === 0) {
-      end = i;
-      break;
-    }
-  }
-  if (end === -1) throw new Error("unterminated generate_handler! block in lib.rs");
-  return new Set(
-    src
-      .slice(open + 1, end)
-      .split(",")
-      .map((entry) => entry.replace(/\/\/.*$/gm, "").trim())
-      .filter(Boolean)
-      .map((entry) => entry.split("::").pop()!),
-  );
 }
 
 /**
@@ -208,16 +127,16 @@ function mockedCommands(): Map<string, string[]> {
 
 describe("browser mock backend contract", () => {
   const declared = declaredCommands();
-  const registered = registeredCommands();
+  const registered = new Set(registeredCommands());
   const mocked = mockedCommands();
 
   // First, so a broken import reports itself as a broken import rather than as
   // a confusing "0 commands differ" pass.
   it("loads a plausible number of mocked commands", () => {
-    expect(declared.size).toBeGreaterThan(250);
-    expect(registered.size).toBeGreaterThan(250);
-    expect(mocked.size).toBeGreaterThan(MIN_MOCKED);
-    expect(Object.keys(baseFixtureMaps).length).toBeGreaterThan(10);
+    expectFloor("#[tauri::command] handlers in src-tauri/src", declared.size, 500);
+    expectFloor("commands in generate_handler![] in lib.rs", registered.size, 500);
+    expectFloor("commands the mock backend answers", mocked.size, MIN_MOCKED);
+    expectFloor("base fixture maps", Object.keys(baseFixtureMaps).length, 20);
   });
 
   it("answers no command that Rust does not declare", () => {
@@ -268,7 +187,7 @@ describe("browser mock backend contract", () => {
 
   it("answers every command the app invokes, or says why not", () => {
     const invoked = invokedCommands();
-    expect(invoked.size).toBeGreaterThan(200);
+    expectFloor("commands the shipping frontend invokes", invoked.size, 500);
 
     const missing = [...invoked]
       .filter((name) => !mocked.has(name) && !(name in UNMOCKED_ALLOWED))

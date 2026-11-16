@@ -1,8 +1,10 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
-vi.mock("@tauri-apps/api/core", () => ({ invoke }));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+import { tauri } from "@/test/tauri-fake";
+
+const invoke = tauri.invoke;
 
 import {
   IMAGE_CACHE_CAPACITY,

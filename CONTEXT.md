@@ -12,6 +12,7 @@ Glossary of domain terms as this project uses them. Decisions with lasting conse
 - **Pinned** — a session kept in the sidebar's Pinned section, in an order the user sets (a fractional order key per row). Never auto-settled; pinning a settled or snoozed session brings it back.
 - **Snoozed** — a session hidden until a chosen time. It wakes at that time, or early when it raises its hand (a permission request, a question, or a failure); a finished turn does not wake it. A woken session reads **Woke** until the user views it. A session waiting on the user cannot be snoozed, and sending to a snoozed session un-snoozes it.
 - **Attached project** — a folder a session may use besides its own, at an access level: **read-only** (the default) or **read and write**. A property of the session, not of one message: kept on the session's row (`attached_projects`), restored on resume, listed on the row for the sidebar and a project filter. Attached by an `@` project or repo mention, a repo cloned from the composer, or the agent asking (`request_project_access`) and the user approving. Never the filesystem root, the home folder or above it, a system folder, or a home settings folder (`~/Library`, `~/.x`). Distinct from the session's own folder, which is always writable in a writing mode.
+- **Stack** — pull requests that build on one another: one whose base branch is another's head branch, in the same repository, sits on it. Derived from branches, since the host records no stacks; a head branch two pull requests share is ambiguous and stacks nothing. _Avoid: chain._
 - **Unread** — a session whose latest turn finished after the user last viewed it. _Mark unread_ moves the last-viewed time to just before that turn finished.
 - **Live thread feed** — the path that keeps a thread's store row current from the running conversation's own events (`ThreadRecorder`). The only writer besides import and project sync. Distinct from the _capture recorder_ (`atlas-checkpoint`), which records the transcript and the usage.
 - **Import** — the user-initiated (manual) pull of an agent's sessions into the store via ACP `session/list`; metadata only; capability-gated; deduped by session id. Imported rows land settled.
@@ -42,7 +43,7 @@ Glossary of domain terms as this project uses them. Decisions with lasting conse
 - **Surface** — a tool used beside the session, opened as a tab in the **surfaces pane** (the columns right of the session column): the editor, a terminal, the browser, a diff, source control, team chat. Built to work at column width, and declares the minimum width it needs. See ADR-0024.
 - **Destination** — a full-page view that takes the area right of the rail, one at a time, while the session keeps running underneath: Timeline, Usage, Knowledge, the knowledge graph, Memory, Spaces. Esc or the back arrow returns to the session. _Avoid: page, screen, for this concept._ Settings is similar but separate: it takes the whole window and is not a tab type. See ADR-0024.
 - **Peek** — a compact view of a destination, designed for a column, that can sit beside the session. Added for a destination only when someone needs it; none exists yet.
-- **Placement** — which of session, surface or destination a tab type is (`TAB_PLACEMENT`). Every tab type has exactly one, and one of them, `surface-or-destination`, is both: team chat opens as a surface tab or as a destination by how it was opened, and is still one per window. See ADR-0024's 2026-10-24 amendment.
+- **Placement** — which of session, surface or destination a tab type is (its `placement` in the tab registry, `src/lib/tab-registry.ts`). Every tab type has exactly one, and one of them, `surface-or-destination`, is both: team chat opens as a surface tab or as a destination by how it was opened, and is still one per window. See ADR-0024's 2026-10-24 amendment.
 - **First run** — the short dialog a fresh install opens with: what Atlas is, then which editor's shortcuts to use. Shown once; someone upgrading never sees it.
 - **Get started** — the small checklist that leads a new user to their first checkpoint: add a project, run a session with an agent, see the checkpoint. Each item ticks itself when the real thing happens; it goes away when done or dismissed.
 - **Tip** — a one-time card anchored to a feature, shown the first time the user meets it: one to three short steps and a link to the docs. Shown only while the thing it points at is on screen; the user can replay tips. _Avoid: hint (that is link-hint navigation), tour (that is the pull-request guide), coachmark, onboarding._
@@ -116,6 +117,11 @@ The **injected-context envelope** — `<atlas-memory>` … `</atlas-memory>` —
   control, beside the memory tool server (ADR-0010). Its tools are the only way an agent acts on the
   window. Auto-approved because Atlas itself offers it; switched off for everyone by the user's
   "Let Atlas Agent navigate the app" setting.
+- **Tool server host** — the one module that serves and offers Atlas's in-process tool servers
+  (memory, UI, organisation, code). It owns what they share: the loopback listener, the session's
+  one token, the session policy, the transport and the offer. Each server is a **tenant** of it,
+  supplying only its name and path, its tools, the connections it is for and the setting that turns
+  it on.
 - **UI control** — what a _connection_ carries to be offered the UI tool server: that its agent runs
   inside the Atlas process, so Atlas vouches for what its tool calls may do. Today only the native
   connection carries it. Like every other per-agent behaviour it is never decided by agent identity;

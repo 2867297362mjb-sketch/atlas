@@ -516,7 +516,14 @@ export function useTranscriptWindow({
   // no longer unmounts (the panel stays mounted and laid out behind the active
   // tab, keeping `scrollTop` in the DOM); this covers closing the tab or the
   // project and coming back.
-  useEffect(() => {
+  //
+  // A LAYOUT effect's cleanup, because of when each kind runs on an unmount:
+  // React detaches refs and removes the nodes first, and only then runs
+  // passive cleanups. As a passive effect this found `scrollRef.current`
+  // already null and saved nothing, so what a reopen read back was whatever
+  // the last window change had left there. A layout cleanup runs while the
+  // scroller is still attached and still in the document.
+  useLayoutEffect(() => {
     return () => {
       const el = scrollRef.current;
       if (!el) return;

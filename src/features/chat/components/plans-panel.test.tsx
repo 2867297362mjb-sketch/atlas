@@ -5,11 +5,8 @@
 // no call at all.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => undefined) }));
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async () => () => {}),
-  emit: vi.fn(async () => {}),
-}));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
 const loadPlans = vi.fn();
 vi.mock("../lib/plans-api", () => ({ loadPlans: (p: string) => loadPlans(p) }));
 
@@ -18,6 +15,7 @@ import userEvent from "@testing-library/user-event";
 import { useAppStore } from "@/features/app/stores/app-store";
 import type { PlanRecord } from "../lib/plans";
 import { PlansPanel } from "./plans-panel";
+import { emitWindowEvent } from "@/lib/window-events";
 
 const PLAN = (id: string, userMessage: string): PlanRecord =>
   ({
@@ -59,7 +57,7 @@ describe("PlansPanel", () => {
     expect(await screen.findByText("Plan a")).toBeTruthy();
 
     act(() => {
-      window.dispatchEvent(new CustomEvent("atlas:plan-saved"));
+      emitWindowEvent("atlas:plan-saved");
     });
     await waitFor(() => expect(loadPlans).toHaveBeenCalledTimes(2));
   });

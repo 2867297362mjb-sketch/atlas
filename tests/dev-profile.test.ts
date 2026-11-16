@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { walk } from "./support/walk";
+import { expectFloor } from "./support/floor";
 
 /**
  * Guards the dev profile (`crates/atlas-profile`): `bun run dev:app` runs a
@@ -107,15 +109,11 @@ const LITERAL_ALLOWED: Record<string, string> = {
 /** The crate that defines the names, and so may spell them out. */
 const PROFILE_CRATE = "crates/atlas-profile/";
 
+/** Production Rust: no build output, no test trees, no `tests.rs` module. */
 function rustSources(dir: string): string[] {
-  const out: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (["target", "tests", "testdata"].includes(entry.name)) continue;
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...rustSources(full));
-    else if (entry.name.endsWith(".rs") && entry.name !== "tests.rs") out.push(full);
-  }
-  return out;
+  return walk(dir, [".rs"], { skip: ["target", "tests", "testdata"] }).filter(
+    (file) => path.basename(file) !== "tests.rs",
+  );
 }
 
 interface RustLiteral {
@@ -437,7 +435,7 @@ describe("Atlas's on-disk names have one source", () => {
   ];
 
   it("finds the Rust sources (parser health)", () => {
-    expect(files.length).toBeGreaterThan(100);
+    expectFloor("production Rust sources in src-tauri/src and crates/*/src", files.length, 360);
   });
 
   it("no production code spells out `.atlas` or `~/.config/atlas`", () => {

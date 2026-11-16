@@ -9,8 +9,8 @@ import { onModelPickerRequest } from "../lib/model-picker-events";
 import { GROUP_ORDER, type ComposerGroup } from "../lib/composer-modes";
 import { openSettingsSection } from "@/features/settings/lib/open-settings";
 import type { PickerAgent } from "./model-picker";
-import { OPEN_MODE_PICKER_EVENT } from "./mode-restore-bar";
 import { ComposerGroupsPanel } from "./views/composer-groups-panel";
+import { emitWindowEvent, onWindowEvent, useWindowEvent } from "@/lib/window-events";
 
 /**
  * The composer's grouped, animated picker — coding agent / permission mode /
@@ -72,30 +72,25 @@ export function ComposerGroupsMenu({
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setOpenGroup(null);
     };
-    const onOther = (e: Event) => {
-      if ((e as CustomEvent<string>).detail !== "groups") setOpenGroup(null);
-    };
     window.addEventListener("mousedown", onDown);
     window.addEventListener("keydown", onKey);
-    window.addEventListener("atlas:composer-menu-open", onOther);
+    const offComposerMenuOpen = onWindowEvent("atlas:composer-menu-open", (opened) => {
+      if (opened !== "groups") setOpenGroup(null);
+    });
     return () => {
       window.removeEventListener("mousedown", onDown);
       window.removeEventListener("keydown", onKey);
-      window.removeEventListener("atlas:composer-menu-open", onOther);
+      offComposerMenuOpen();
     };
   }, [openGroup]);
 
   // "Choose mode" on the mode-restore bar opens the mode group from outside.
-  useEffect(() => {
-    const onOpen = (e: Event) => {
-      if ((e as CustomEvent<{ tabId?: string }>).detail?.tabId !== tabId) return;
-      setOpenGroup("mode");
-      // Mutual exclusion with the + menu — see atlas:composer-menu-open.
-      window.dispatchEvent(new CustomEvent("atlas:composer-menu-open", { detail: "groups" }));
-    };
-    window.addEventListener(OPEN_MODE_PICKER_EVENT, onOpen);
-    return () => window.removeEventListener(OPEN_MODE_PICKER_EVENT, onOpen);
-  }, [tabId]);
+  useWindowEvent("atlas:composer-open-mode", (detail) => {
+    if (detail?.tabId !== tabId) return;
+    setOpenGroup("mode");
+    // Mutual exclusion with the + menu — see atlas:composer-menu-open.
+    emitWindowEvent("atlas:composer-menu-open", "groups");
+  });
 
   // ⌘⇧M (`chat.toggleModelPicker`, dispatched by the chat panel) toggles the
   // model group, as the reference's model-picker chord does.
@@ -104,7 +99,7 @@ export function ComposerGroupsMenu({
       onModelPickerRequest(tabId, () =>
         setOpenGroup((cur) => {
           if (cur === "model") return null;
-          window.dispatchEvent(new CustomEvent("atlas:composer-menu-open", { detail: "groups" }));
+          emitWindowEvent("atlas:composer-menu-open", "groups");
           return "model";
         }),
       ),
@@ -155,7 +150,7 @@ export function ComposerGroupsMenu({
       if (cur === g) return null;
       if (cur) setDir(GROUP_ORDER.indexOf(g) > GROUP_ORDER.indexOf(cur) ? 1 : -1);
       // Mutual exclusion with the + menu — see atlas:composer-menu-open.
-      window.dispatchEvent(new CustomEvent("atlas:composer-menu-open", { detail: "groups" }));
+      emitWindowEvent("atlas:composer-menu-open", "groups");
       return g;
     });
   };

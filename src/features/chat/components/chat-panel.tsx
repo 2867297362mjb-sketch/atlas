@@ -34,7 +34,6 @@ import { adoptSessionDrawer } from "@/features/terminal/lib/session-drawer";
 import { SessionDockLane } from "./session-dock-lane";
 import { projectPathForTab } from "../lib/tab-project";
 import { MemoryUpdatedCard } from "@/features/memory/components/memory-updated-card";
-import { OPEN_TURN_DIFF_EVENT, type TurnDiffRequest } from "../lib/open-turn-diff";
 import { showTurnDiff } from "../lib/show-turn-diff";
 import { PermissionModal } from "./permission-modal";
 import { ChatCommentsController } from "./chat-comments-controller";
@@ -45,12 +44,12 @@ import { WelcomeGlow } from "./welcome-glow";
 import { usePaneTopInset } from "@/features/layout/lib/pane-top-inset";
 import { useAuthStore } from "@/features/auth/stores/auth-store";
 import { useContextDock } from "@/features/session-context/lib/use-context-dock";
-import { createChatPanelHandlers } from "../lib/chat-panel-handlers";
+import { createChatPanelHandlers, type ChatSendHandler } from "../lib/chat-panel-handlers";
 import { useAgentBind, type BindControl } from "../hooks/use-agent-bind";
 import { useSessionBackfill } from "../hooks/use-session-backfill";
 import { useChatPanelHotkeys } from "../hooks/use-chat-panel-hotkeys";
 import { useAcpPrewarm } from "../hooks/use-acp-prewarm";
-import { useChatPanelEvents, useQueueDrain, type ChatSendHandler } from "../hooks/use-queue-drain";
+import { useChatPanelEvents, useQueueDrain } from "../hooks/use-queue-drain";
 import { ChatPanelLayout } from "./views/chat-panel-layout";
 import { ChatPanelSkeleton } from "./views/transcript-loading";
 import { JumpToBottomPill, LoadingTranscriptState } from "@tryatlas/design/session";
@@ -88,6 +87,7 @@ const ChatSearchPalette = lazy(() =>
 // messages.
 const Transcript = lazy(() => import("./transcript").then((m) => ({ default: m.Transcript })));
 import type { TranscriptHandle } from "./transcript";
+import { emitWindowEvent, useWindowEvent } from "@/lib/window-events";
 // Diffs + tool output live here rather than inline in the thread — see the
 // module header for why that's a perf decision as much as a UX one.
 const DetailPanel = lazy(() => import("./detail-panel").then((m) => ({ default: m.DetailPanel })));
@@ -108,8 +108,7 @@ export const ChatPanel = memo(function ChatPanel({ tabId }: ChatPanelProps) {
   // unchanged sub-paths, so `s.sessions[tabId]` only changes when this tab
   // mutates.
   const session = useChatStore((s) => s.sessions[tabId]);
-  const { createSession, addMessage, updateSessionStatus, setSessionTitle, clearElicitation } =
-    useChatStore.use.actions();
+  const { createSession, clearElicitation } = useChatStore.use.actions();
   // Narrow subscription — an unanswered `elicitation/create` (P3.3).
   const pendingElicitation = useChatStore((s) => s.sessions[tabId]?.pendingElicitation);
   // Answering a question is steering: while someone else drives from remote
@@ -151,14 +150,9 @@ export const ChatPanel = memo(function ChatPanel({ tabId }: ChatPanelProps) {
   // event rather than a prop chain so a row opening it re-renders nothing in
   // the transcript. Every mounted chat hears it; only the one holding the turn
   // finds edits for it, so only that one opens anything.
-  useEffect(() => {
-    const onOpen = (e: Event) => {
-      const detail = (e as CustomEvent<TurnDiffRequest>).detail;
-      if (detail?.turnId) showTurnDiff(tabId, detail);
-    };
-    window.addEventListener(OPEN_TURN_DIFF_EVENT, onOpen);
-    return () => window.removeEventListener(OPEN_TURN_DIFF_EVENT, onOpen);
-  }, [tabId]);
+  useWindowEvent("atlas:open-turn-diff", (detail) => {
+    if (detail?.turnId) showTurnDiff(tabId, detail);
+  });
 
   // Warm the review panel's chunk while the reader is idle, so opening a
   // turn's diff is a paint rather than a fetch. Not its workers: they start
@@ -248,13 +242,12 @@ export const ChatPanel = memo(function ChatPanel({ tabId }: ChatPanelProps) {
   // the drain gate like a pending resume does; "Send anyway" or the other
   // process going quiet is its falling edge. The composer feeds the live set.
   const heldElsewhere = useSendHeldForTerminal(session?.acpSessionId);
-  // The no-AI-grant hold on the queue (`drain-gate.ts`): what the composer
+  // The no-AI-grant hold on the queue (`send-gate.ts`): what the composer
   // lock would be with no turn running.
   const noAiGrant = useNoAiGrant();
   const grantHold = grantLocksComposer(noAiGrant, session?.agentType ?? "", false);
   const handleSendRef = useRef<ChatSendHandler | null>(null);
   const handleStopRef = useRef<(() => void) | null>(null);
-  const releaseQueueRef = useRef<(() => Promise<void>) | null>(null);
   // STABLE wrappers passed to the memoized <ChatComposer> so it doesn't
   // re-render on every ChatPanel render (i.e. every streaming chunk). The real
   // handlers are reassigned to the refs each render, so the wrappers always call
@@ -299,13 +292,13 @@ export const ChatPanel = memo(function ChatPanel({ tabId }: ChatPanelProps) {
         toast.error("That message is no longer in this thread");
         return;
       }
-      window.dispatchEvent(new CustomEvent("atlas:chat-jump", { detail: { index, tabId } }));
+      emitWindowEvent("atlas:chat-jump", { index, tabId });
     },
     [tabId],
   );
-  // The drain edge and the Rust queue hold, then the window events that send
-  // or stop from outside the composer.
-  useQueueDrain({ tabId, session, heldElsewhere, grantHold, handleSendRef, releaseQueueRef });
+  // The drain (`session-send.ts` decides what goes and what Rust's queue
+  // holds), then the window events that send or stop from outside the composer.
+  useQueueDrain({ tabId, session, heldElsewhere, grantHold, bindControlRef });
   useChatPanelEvents(tabId, handleSendRef, handleStopRef);
 
   // No session yet. Normally a single frame (the effect above creates it on
@@ -316,28 +309,12 @@ export const ChatPanel = memo(function ChatPanel({ tabId }: ChatPanelProps) {
     return <ChatPanelSkeleton rootRef={rootRef} />;
   }
 
-  const {
-    handleRestartAgent,
-    handleSwitchAgent,
-    handleCopyDiagnostics,
-    handleStop,
-    handleSend,
-    releaseQueue,
-  } = createChatPanelHandlers({
-    tabId,
-    session,
-    grantHold,
-    bindControlRef,
-    setBindEpoch,
-    addMessage,
-    updateSessionStatus,
-    setSessionTitle,
-  });
+  const { handleRestartAgent, handleSwitchAgent, handleCopyDiagnostics, handleStop, handleSend } =
+    createChatPanelHandlers({ tabId, bindControlRef, setBindEpoch });
 
-  // Keep the queue-drain effect pointing at the latest handleSend closure.
+  // Keep the stable wrappers and the window events pointing at the latest handlers.
   handleSendRef.current = handleSend;
   handleStopRef.current = handleStop;
-  releaseQueueRef.current = releaseQueue;
 
   return (
     <ChatPanelLayout
@@ -444,9 +421,7 @@ export const ChatPanel = memo(function ChatPanel({ tabId }: ChatPanelProps) {
           <BashHistoryPanel
             messages={session.messages}
             onJump={(idx) => {
-              window.dispatchEvent(
-                new CustomEvent("atlas:chat-jump", { detail: { index: idx, tabId } }),
-              );
+              emitWindowEvent("atlas:chat-jump", { index: idx, tabId });
             }}
             onClose={() => closeSidePanel(tabId)}
           />
@@ -481,11 +456,7 @@ export const ChatPanel = memo(function ChatPanel({ tabId }: ChatPanelProps) {
             open={searchPaletteOpen}
             onOpenChange={setSearchPaletteOpen}
             messages={session.messages}
-            onJump={(idx) =>
-              window.dispatchEvent(
-                new CustomEvent("atlas:chat-jump", { detail: { index: idx, tabId } }),
-              )
-            }
+            onJump={(idx) => emitWindowEvent("atlas:chat-jump", { index: idx, tabId })}
           />
         </Suspense>
       )}
@@ -504,9 +475,7 @@ function WelcomeState() {
     <WelcomeStateView
       greeting={greeting}
       backdrop={<WelcomeGlow />}
-      onPick={(text) =>
-        window.dispatchEvent(new CustomEvent("atlas:chat-prefill", { detail: { text } }))
-      }
+      onPick={(text) => emitWindowEvent("atlas:chat-prefill", { text })}
     />
   );
 }

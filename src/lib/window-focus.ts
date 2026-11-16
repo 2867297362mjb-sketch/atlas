@@ -12,6 +12,7 @@
  * so it is a module now. `App.tsx` calls `initWindowFocusTracking()` once.
  */
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { emitWindowEvent } from "@/lib/window-events";
 
 let focused = true;
 let lastInteractionAt = Date.now();
@@ -56,7 +57,7 @@ function setFocused(next: boolean): void {
  * signal the chat pipeline warms itself on.
  */
 export function initWindowFocusTracking(): () => void {
-  const signalActive = () => window.dispatchEvent(new CustomEvent("atlas:window-active"));
+  const signalActive = () => emitWindowEvent("atlas:window-active");
   let unlistenFocus: (() => void) | null = null;
   let disposed = false;
   const appWindow = getCurrentWindow();

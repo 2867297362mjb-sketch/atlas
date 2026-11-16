@@ -12,15 +12,13 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => undefined) }));
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async () => () => {}),
-  emit: vi.fn(async () => {}),
-}));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
 
 import type { AgentDelta, SessionMessage, ToolCall } from "@/types/agents";
 import type { SwitchableAgent } from "@/types/agent";
 import { useChatStore } from "./chat-store";
+import { onWindowEvent } from "@/lib/window-events";
 
 const TAB = "tab-1";
 const AGENT = "agent-1";
@@ -820,12 +818,11 @@ describe("applyAgentDelta: turn terminals", () => {
   it("an auth turn_failed asks the composer to route to sign-in", () => {
     boundTab();
     const seen: unknown[] = [];
-    const onAuth = (e: Event) => seen.push((e as CustomEvent).detail);
-    window.addEventListener("atlas:auth-required", onAuth);
+    const off = onWindowEvent("atlas:auth-required", (detail) => void seen.push(detail));
     try {
       apply(d("turn_failed", { error: "not logged in", error_kind: "auth", turn_seq: 0 }));
     } finally {
-      window.removeEventListener("atlas:auth-required", onAuth);
+      off();
     }
     expect(seen).toEqual([{ sessionId: ACP, agentType: "claude-code", reason: "not logged in" }]);
   });

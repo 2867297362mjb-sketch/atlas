@@ -49,7 +49,7 @@ import {
   TextSearch,
 } from "lucide-react";
 import { AgentIcon } from "@/features/org-agent/lib/agent-icon";
-import type { TabType } from "@/lib/constants";
+import type { TabType } from "@/lib/tab-registry";
 import { useAppStore } from "@/features/app/stores/app-store";
 import { recentsForOrg } from "@/features/app/lib/recent-projects";
 import { useLayoutStore } from "@/features/layout/stores/layout-store";

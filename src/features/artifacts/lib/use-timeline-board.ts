@@ -6,6 +6,7 @@ import { useArtifactsStore, type OpenSession } from "../stores/artifacts-store";
 import type { BoardSession, ProjectFilter } from "../types";
 import { readBoard, refreshCloudBoard } from "./board-api";
 import { boardKey, rowForCheckout } from "./board-key";
+import { listenCloudEvents } from "./cloud-event";
 import { clearDetailCache, invalidateCachedDetail } from "./detail-cache";
 
 /**
@@ -227,16 +228,23 @@ export function useTimelineBoard({
       }),
       // The cloud half of the same story: a teammate's Session grew, or a
       // resync says everything we hold may be behind.
-      listen("atlas:artifacts-cloud", (e) => {
-        const frame = e.payload as { kind?: string; sessionId?: string } | null;
-        if (!frame) return;
-        if (frame.kind === "entryUpsert" && frame.sessionId) {
-          invalidateCachedDetail(frame.sessionId);
-        } else if (frame.kind === "boardChanged") {
-          void refresh();
-        } else if (frame.kind === "resync") {
-          clearDetailCache();
-          void refresh();
+      listenCloudEvents((event) => {
+        switch (event.kind) {
+          case "entryUpsert":
+            invalidateCachedDetail(event.sessionId);
+            return;
+          case "boardChanged":
+            void refresh();
+            return;
+          case "resync":
+            // Any cached detail may be the one with the gap, so all go.
+            clearDetailCache();
+            void refresh();
+            return;
+          case "commentUpsert":
+          case "presence":
+          case "revoked":
+            return;
         }
       }),
     ]);

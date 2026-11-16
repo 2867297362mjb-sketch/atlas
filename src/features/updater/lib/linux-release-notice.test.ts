@@ -2,11 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const toast = vi.fn();
 const openUrl = vi.fn(async (_url: string) => {});
-const invoke = vi.fn(async (_cmd: string, _args?: unknown) => {});
 vi.mock("sonner", () => ({ toast }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl }));
-vi.mock("@tauri-apps/api/core", () => ({ invoke }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
+import { tauri } from "@/test/tauri-fake";
+
+const invoke = tauri.invoke;
 
 const { announceLinuxRelease } = await import("./linux-release-notice");
 

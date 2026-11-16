@@ -1,11 +1,10 @@
 //! The **UI tool server**: Atlas Agent's way to act on the Atlas window
-//! (ADR-0012). A second MCP service beside the memory tool server, on the
-//! same loopback listener, behind the same token check and the same
-//! per-session token — the token store binds one token per session, so a
-//! second minted token would revoke the memory one.
+//! (ADR-0012). One of the tenants of the tool server host
+//! ([`tool_servers`](crate::commands::tool_servers)), which owns the
+//! listener, the session's token and how the server reaches the agent.
 //!
 //! - **Offered only to a connection that carries UI control**
-//!   ([`offers`]): today the in-process native connection. Never decided by
+//!   ([`tenant`]): today the in-process native connection. Never decided by
 //!   agent identity.
 //! - **Every call is one UI action** ([`bridge`]): emitted to the window as
 //!   [`UI_ACTION_EVENT`], performed by the frontend through the app's own
@@ -17,7 +16,6 @@
 //!   offer time and on every call.
 
 mod bridge;
-mod offers;
 #[cfg(test)]
 mod tests;
 mod tools;
@@ -30,9 +28,7 @@ use uuid::Uuid;
 #[allow(unused_imports)]
 pub use bridge::{UiBridge, UiEmitter, UiReply, UiRequest, UI_ACTION_TIMEOUT};
 #[allow(unused_imports)]
-pub use offers::{UiOffer, UiOfferDecision};
-#[allow(unused_imports)]
-pub use tools::{router, UiTools, INSTRUCTIONS};
+pub use tools::{tenant, UiTools, INSTRUCTIONS};
 
 /// The name the server goes by in the agent's MCP configuration; its tools
 /// reach the model as `mcp__atlas_ui__<tool>`.

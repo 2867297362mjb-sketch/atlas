@@ -41,12 +41,16 @@ pub struct FilePatch {
 }
 
 /// Parse ONE file's unified diff (`git diff -- <file>` output).
+///
+/// Lines are split on `\n` alone. Git's own output is LF-terminated, so a
+/// `\r` before the `\n` belongs to the file's line: it is what the changes
+/// view displays and sends back, and what `git apply` needs in the patch.
 pub fn parse_file_diff(text: &str) -> Option<FilePatch> {
     let mut header = Vec::new();
     let mut hunks: Vec<Hunk> = Vec::new();
     let mut binary = false;
 
-    for line in text.lines() {
+    for line in text.split_terminator('\n') {
         if let Some(rest) = line.strip_prefix("@@ ") {
             let hunk = parse_hunk_header(rest)?;
             hunks.push(hunk);
@@ -269,6 +273,107 @@ pub fn line_selection_patch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct FixtureHunk {
+        old_start: u32,
+        new_start: u32,
+        lines: Vec<String>,
+    }
+    #[derive(serde::Deserialize)]
+    struct FixtureFile {
+        #[serde(default)]
+        binary: bool,
+        hunks: Vec<FixtureHunk>,
+    }
+    #[derive(serde::Deserialize)]
+    struct FixtureCase {
+        name: String,
+        diff: String,
+        files: Vec<FixtureFile>,
+    }
+
+    type Reading = (bool, Vec<(u32, u32, Vec<String>)>);
+
+    /// The cases every unified-diff parser in Atlas is held to; the docblock
+    /// of `src/features/git/lib/unified-diff.fixtures.test.ts` names the
+    /// others. This one matters most against `parseDiff` there: staging
+    /// looks for the hunk that parser displayed among the hunks this one
+    /// reads, line for line, so a line they read differently is a hunk that
+    /// cannot be staged.
+    ///
+    /// This parser takes one file's diff, so the multi-file case is not its
+    /// to read. Where it reads a case differently, `differs` says how.
+    #[test]
+    fn it_reads_the_shared_fixtures() {
+        let cases: Vec<FixtureCase> = serde_json::from_str(include_str!(
+            "../../../src/features/git/lib/unified-diff.fixtures.json"
+        ))
+        .expect("the fixture table parses");
+        assert!(cases.len() >= 20);
+        for case in cases {
+            let [file] = case.files.as_slice() else {
+                continue;
+            };
+            let parsed = parse_file_diff(&case.diff).expect("a diff with a header parses");
+            let hunks = parsed
+                .hunks
+                .iter()
+                .map(|h| {
+                    let lines = hunk_signature(h)
+                        .into_iter()
+                        .map(|(marker, text)| format!("{}{text}", marker as char));
+                    (h.old_start, h.new_start, lines.collect())
+                })
+                .collect();
+            let stated: Reading = (
+                file.binary,
+                file.hunks
+                    .iter()
+                    .map(|h| (h.old_start, h.new_start, h.lines.clone()))
+                    .collect(),
+            );
+            let want = differs(&case.name, stated.clone());
+            assert_eq!((parsed.binary, hunks), want, "{}", case.name);
+            if want != stated {
+                continue;
+            }
+            // And back: a hunk it read is written out as git printed it.
+            for (index, hunk) in file.hunks.iter().enumerate() {
+                let Some(patch) = whole_hunk_patch(&parsed, index) else {
+                    assert!(
+                        hunk.lines.is_empty(),
+                        "{}: only an empty hunk has no patch",
+                        case.name
+                    );
+                    continue;
+                };
+                for line in &hunk.lines {
+                    assert!(
+                        patch.contains(&format!("\n{line}\n")),
+                        "{}: {line:?} is not in {patch:?}",
+                        case.name
+                    );
+                }
+            }
+        }
+    }
+
+    /// What this parser answers where it is not what the fixture states.
+    fn differs(name: &str, (binary, mut hunks): Reading) -> Reading {
+        let each_line = |hunks: &mut Vec<(u32, u32, Vec<String>)>, f: &dyn Fn(&mut Vec<String>)| {
+            hunks.iter_mut().for_each(|(_, _, lines)| f(lines));
+        };
+        match name {
+            // `@@@` is not a hunk header here: a conflicted file has no hunks.
+            "combined-merge" => hunks.clear(),
+            // A line with no marker is ignored.
+            "stripped-blank-context" => each_line(&mut hunks, &|lines| lines.retain(|l| l != " ")),
+            _ => {}
+        }
+        (binary, hunks)
+    }
 
     const SAMPLE: &str = "\
 diff --git a/f.txt b/f.txt

@@ -16,9 +16,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
-use atlas_process::NoWindow;
 use std::sync::mpsc;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -286,27 +284,14 @@ pub(crate) fn scan_project_once(
 /// indexes are loaded. A git failure loads all of them: the scan itself will
 /// report what it could not read.
 fn lockfile_ecosystems(root: &Path, sha: &str) -> Vec<Ecosystem> {
-    let out = Command::new("git")
-        .no_window()
-        .arg("-C")
-        .arg(root)
-        .args(["-c", "core.quotepath=off"])
-        .args([
-            "diff-tree",
-            "--no-commit-id",
-            "--name-only",
-            "-r",
-            "--root",
-            sha,
-        ])
-        .output();
+    let paths = GitCli {
+        root: root.to_path_buf(),
+    }
+    .changed_paths(sha);
     let mut ecos = Vec::new();
-    match out {
-        Ok(o) if o.status.success() => {
-            for eco in String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .filter_map(ecosystem_of)
-            {
+    match paths {
+        Ok(Some(paths)) => {
+            for eco in paths.iter().filter_map(|p| ecosystem_of(p)) {
                 if !ecos.contains(&eco) {
                     ecos.push(eco);
                 }
@@ -566,6 +551,7 @@ mod tests {
 
     use atlas_checkpoint::model::ProjectMode;
     use atlas_checkpoint::{CheckpointInput, Source, Store};
+    use atlas_process::NoWindow;
     use atlas_security::finding::Level;
 
     use super::*;

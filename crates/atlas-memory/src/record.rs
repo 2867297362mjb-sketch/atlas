@@ -684,7 +684,7 @@ impl RecordStore {
                 let snapshot = dir.join(crate::health::SNAPSHOT_FILE);
                 let from_snapshot =
                     snapshot.exists() && std::fs::copy(&snapshot, dir.join(DB_FILE)).is_ok();
-                std::fs::write(
+                atlas_fs::replace_file(
                     dir.join("restored.json"),
                     serde_json::json!({ "at": now, "from_snapshot": from_snapshot }).to_string(),
                 )?;

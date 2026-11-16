@@ -1,0 +1,9 @@
+{
+  "repository": "tryatlas/server",
+  "path": "packages/contracts/fixtures",
+  "commit": "818ce6255e328a2b9af4875c705fd4a0bd756900",
+  "sha256": {
+    "rc-frames-v1.json": "912868111cb2470a8eb359727114848579e6d423038f47fad27f4f8488c0a95f",
+    "rc-wire-v1.json": "1c5f4d7d3c2904e8f75577dc2609931884cdd1426ac99bdde0a33c99c7329893"
+  }
+}

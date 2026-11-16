@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
-const invoke = vi.hoisted(() => vi.fn());
-vi.mock("@tauri-apps/api/core", () => ({ invoke }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
+import { tauri } from "@/test/tauri-fake";
+
+const invoke = tauri.invoke;
 import type { NotificationEnv } from "@/features/notifications/lib/decide";
 import { runNotificationAction } from "@/features/notifications/lib/notification-actions";
 import { decideSecurityFinding, type SecurityNotice } from "./security-notify";

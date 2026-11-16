@@ -7,8 +7,13 @@ import { ArrowDownToLine, Hammer, Minus, Search, Square, Copy, X } from "lucide-
 import { cn } from "@/lib/utils";
 import { useAppProfile } from "@/lib/app-profile";
 import { TitlebarDock, type DockItem } from "./titlebar-dock";
-import { invoke, isTauri } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { isTauri } from "@tauri-apps/api/core";
+import { zoomWindow } from "@/features/app/lib/app-lifecycle-api";
+import {
+  captureBinding,
+  captureHealth,
+  onCaptureChanged,
+} from "@/features/capture/lib/capture-api";
 import { toast } from "sonner";
 import type { Window as TauriWindow } from "@tauri-apps/api/window";
 import { useUpdaterStore } from "@/features/updater/stores/updater-store";
@@ -24,13 +29,13 @@ import { isLinux, isMac, isWindows } from "@/lib/platform";
 import { AppMenuButton } from "@/features/menu/components/menu-bar";
 import { OrgSwitcher } from "@/features/organisations/components/org-switcher";
 import { BreadcrumbButton, BreadcrumbSeparator } from "./breadcrumb-button";
-import { OPEN_CAPTURE_EVENT } from "@/features/capture/lib/open-capture";
 import { RightPanelToggle } from "@/features/layout/components/right-panel-toggle";
 import { AccountButton } from "@/features/auth/components/account-button";
 import { HelpSubmenu } from "./help-submenu";
 import { endPeek, releasePeek, requestPeek } from "@/features/sidebar/lib/sidebar-peek";
 import { RailGlyph, HintGroup, HintItem, Spinner } from "@tryatlas/design";
 import { beginDragOnMove, isWindowSurface } from "./titlebar-chrome";
+import { emitWindowEvent, onWindowEvent } from "@/lib/window-events";
 
 /**
  * The native window, for dragging and zooming. Resolved once per module and
@@ -70,7 +75,7 @@ export function useWindowDrag() {
   };
   const onDoubleClick = (e: React.MouseEvent) => {
     if (!isWindowSurface(e.target)) return;
-    if (isMac) void invoke("window_zoom").catch(() => {});
+    if (isMac) void zoomWindow().catch(() => {});
     else void nativeWindow?.toggleMaximize();
   };
   return { onMouseDown, onDoubleClick };
@@ -233,7 +238,7 @@ function PaletteSearchButton({ className }: { className?: string }) {
     <HintItem label={hint ? `Search (${hint})` : "Search"} className={className}>
       <button
         type="button"
-        onClick={() => window.dispatchEvent(new CustomEvent("atlas:command-palette"))}
+        onClick={() => emitWindowEvent("atlas:command-palette")}
         aria-label="Search"
         className="flex size-6 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 hover:bg-element-hover hover:text-secondary-foreground"
       >
@@ -449,13 +454,10 @@ function ProjectLabel({
       setHealth(null);
       return;
     }
-    void invoke<Binding | null>("capture_binding", { projectPath: path })
+    void captureBinding(path)
       .then(setBinding)
       .catch(() => setBinding(null));
-    void invoke<CaptureHealth>("capture_health", {
-      projectPath: path,
-      workspaceId: activeProjectId(),
-    })
+    void captureHealth(path, activeProjectId())
       .then(setHealth)
       .catch(() => setHealth(null));
   }, [path]);
@@ -470,7 +472,7 @@ function ProjectLabel({
   useEffect(() => {
     if (!captureOpen || !isTauri()) return;
     readCapture();
-    const unlisten = listen("atlas:capture-changed", () => readCapture());
+    const unlisten = onCaptureChanged(() => readCapture());
     return () => void unlisten.then((stop) => stop());
   }, [captureOpen, readCapture]);
 
@@ -482,8 +484,7 @@ function ProjectLabel({
     const onOpenCapture = () => {
       if (path && rootRef.current?.offsetParent) setCaptureOpen(true);
     };
-    window.addEventListener(OPEN_CAPTURE_EVENT, onOpenCapture);
-    return () => window.removeEventListener(OPEN_CAPTURE_EVENT, onOpenCapture);
+    return onWindowEvent("atlas:open-capture", onOpenCapture);
   }, [path]);
 
   return (

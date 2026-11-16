@@ -660,6 +660,16 @@ async fn a_new_session_starts_in_a_mode_the_engine_has_been_told_about() {
 }
 
 #[tokio::test]
+async fn a_pinned_model_is_not_a_catalogue_the_seam_can_refresh() {
+    // The Responses dialect runs on one model named in settings. That is not
+    // a list this seam fetched, so it advertises no refresh — the host then
+    // says so rather than tearing a working connection down over a list that
+    // was never its own.
+    let h = harness(assistant_turn("ok")).await;
+    assert!(h.connection.model_catalogue().is_none());
+}
+
+#[tokio::test]
 async fn the_effort_knob_reaches_the_engine_and_rejects_a_level_it_does_not_know() {
     // Acceptance bar item 8, second half, and spec open question 4: the
     // per-session effort knob is `thread/settings/update`'s `effort` field.

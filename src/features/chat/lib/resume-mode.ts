@@ -1,9 +1,9 @@
 // Re-applying the user's approval mode when a session is RESUMED.
 //
-// `session/new` already does this (see the bind effect in `use-agent-bind.ts`):
+// `session/new` already does this (see `createSessionBind` in `session-bind.ts`):
 // it reads the explicit pick the store was seeded with, validates it against
 // what the agent advertises, and pushes it to the agent before the first turn
-// can run. Resume did not, and the gap produced two separate faults:
+// can run. Both go through `settleMode` (`session-configuration.ts`). Resume did not, and the gap produced two separate faults:
 //
 //  1. The engine forces its own default mode on resume, so a user who chose
 //     Bypass came back to Ask after a crash with nothing said about it.
@@ -30,28 +30,10 @@ import {
   agentTypeFromPluginId,
   isClaudePermissionMode,
 } from "@/types/agent";
-import { useChatStore } from "../stores/chat-store";
-import { agents } from "./agents-api";
+import { sessionConfiguration, useChatStore } from "../stores/chat-store";
 import { loadLastModePref, saveLastModePref } from "./last-mode-pref";
 
-/**
- * The mode a session should actually end up in.
- *
- * `requested` is the user's explicit pick, or undefined when they never made
- * one. A pick the agent does not advertise is dropped in favour of whatever
- * the agent reports, because sending it would be rejected and would leave the
- * picker stuck on a mode id that does not exist. An agent that advertises no
- * modes at all is taken at its word and the pick is kept.
- */
-export function resolveEffectiveMode(
-  requested: string | undefined,
-  currentMode: string | null,
-  availableModes: readonly SessionModeInfo[],
-): string | null {
-  if (!requested) return currentMode;
-  const advertised = availableModes.length === 0 || availableModes.some((m) => m.id === requested);
-  return advertised ? requested : currentMode;
-}
+export { resolveEffectiveMode } from "./session-configuration";
 
 /**
  * The user's pick for this session, if any. The tab's own wins over the saved
@@ -134,20 +116,13 @@ export async function applyModeOnResume(
   snapshot: SessionSnapshot,
 ): Promise<void> {
   const { isClaude, requested } = requestedMode(tabId);
-  let effective = resolveEffectiveMode(requested, snapshot.current_mode, snapshot.available_modes);
-  let honouredPick = !!requested && effective === requested;
-
-  if (effective && effective !== snapshot.current_mode) {
-    try {
-      await agents.setMode(key, effective);
-    } catch (err) {
-      // The agent is the authority. If it would not take the mode, the picker
-      // has to show what the agent has rather than what we wanted it to have.
-      console.warn("setMode on resume failed:", err);
-      effective = snapshot.current_mode;
-      honouredPick = false;
-    }
-  }
+  // The same call a new session makes (`session-bind.ts`), so a mode means
+  // the same thing whether a session is new or reopened.
+  const { effective, honoured: honouredPick } = await sessionConfiguration.settleMode(
+    key,
+    requested,
+    snapshot,
+  );
 
   forgetStalePref(
     useChatStore.getState().sessions[tabId]?.agentType,

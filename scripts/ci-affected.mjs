@@ -103,10 +103,33 @@ export const EXTRA_INPUTS = [
     why: "include_str! in the tests module of src-tauri/src/state/atlas_config.rs",
   },
   {
+    path: "src/features/pull-requests/lib/pull-request-stacks.fixtures.json",
+    packages: ["atlas"],
+    testOnly: true,
+    why: "include_str! in the tests module of src-tauri/src/commands/session_pull_requests.rs",
+  },
+  {
+    path: "src/features/git/lib/unified-diff.fixtures.json",
+    packages: ["atlas-gitdiff"],
+    testOnly: true,
+    why: "include_str! in the tests module of crates/atlas-gitdiff/src/parse.rs",
+  },
+  {
+    path: "src/features/git/lib/unified-diff.fixtures.json",
+    packages: ["atlas-git"],
+    testOnly: true,
+    why: "include_str! in the tests module of crates/atlas-git/src/patch.rs",
+  },
+  {
     path: "docs/reference/config.default.toml",
     packages: ["atlas"],
     testOnly: true,
     why: "config_default_file_matches_the_committed_copy in src-tauri/src/state/atlas_config.rs",
+  },
+  {
+    path: "src-tauri/resources/skills/",
+    packages: ["atlas-skills"],
+    why: "include_str! in src/bundled.rs: the skills the binary ships",
   },
   {
     path: "crates/atlas-kb-server/",
@@ -120,16 +143,16 @@ export const EXTRA_INPUTS = [
     why: "the tests module of src/lib.rs, and tests/import.rs, check the mock's snapshots",
   },
   {
-    path: "docs/agents/delta-wire-contract.md",
-    packages: ["atlas-agent-wire"],
-    testOnly: true,
-    why: "tests/contract.rs reads the prose contract when it exists",
-  },
-  {
     path: "src/bindings/agent-wire/",
     packages: ["atlas-agent-wire"],
     testOnly: true,
     why: "tests/bindings.rs compares the committed TypeScript with what the types generate",
+  },
+  {
+    path: "src/bindings/app-state/",
+    packages: ["atlas"],
+    testOnly: true,
+    why: "src-tauri/src/state/app_state_bindings.rs compares the committed TypeScript and fixtures with what the types generate",
   },
   // tests/spawn_audit.rs walks every Rust source in the workspace.
   ...["src-tauri/src/", "crates/", "vendor/atlas-engine/"].map((p) => ({
@@ -137,6 +160,22 @@ export const EXTRA_INPUTS = [
     packages: ["atlas-process"],
     testOnly: true,
     why: "tests/spawn_audit.rs",
+  })),
+  // Its own tests/spawn_audit.rs walks the first-party Rust sources for a
+  // git process built outside its chokepoint.
+  ...["src-tauri/src/", "crates/"].map((p) => ({
+    path: p,
+    packages: ["atlas-git"],
+    testOnly: true,
+    why: "tests/spawn_audit.rs",
+  })),
+  // Its own tests/replace_audit.rs walks the first-party Rust sources for a
+  // file replaced by temp-and-rename outside atlas_fs::replace_file.
+  ...["src-tauri/src/", "crates/"].map((p) => ({
+    path: p,
+    packages: ["atlas-fs"],
+    testOnly: true,
+    why: "tests/replace_audit.rs",
   })),
 ];
 

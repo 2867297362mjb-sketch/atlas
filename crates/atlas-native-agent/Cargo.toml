@@ -21,7 +21,11 @@ name = "engine_gateway_turn"
 path = "tests/engine_gateway_turn.rs"
 
 [dependencies]
+# `replace_file`: the crash-safe write of the model catalogue and its cache.
+atlas-fs = { path = "../atlas-fs" }
 atlas-process = { path = "../atlas-process" }
+# `/diff` runs git through the one spawn chokepoint.
+atlas-git = { path = "../atlas-git" }
 # The seam. Same exact pin as every other ACP crate in the workspace.
 agent-client-protocol = { version = "=2.0.0", features = ["unstable"] }
 atlas-acp-thread = { path = "../atlas-acp-thread" }
@@ -84,6 +88,8 @@ atlas-engine-linux-sandbox = { workspace = true }
 atlas-engine-sandboxing = { workspace = true }
 
 [dev-dependencies]
+# The shared scripted `AgentConnection`; the feature is for tests only.
+atlas-acp-thread = { path = "../atlas-acp-thread", features = ["test-support"] }
 async-trait = "0.1"
 # The Linux sandbox helper, for tests only.
 #

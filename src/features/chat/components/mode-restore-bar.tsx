@@ -3,9 +3,7 @@ import { useChatStore } from "../stores/chat-store";
 import { modeName } from "../lib/resume-mode";
 import { useStripHidden } from "./composer-strip-close";
 import { ChatNoticeView } from "./views/chat-notice-view";
-
-/** Asks this tab's composer to open its mode picker (`ComposerGroupsMenu`). */
-export const OPEN_MODE_PICKER_EVENT = "atlas:composer-open-mode";
+import { emitWindowEvent } from "@/lib/window-events";
 
 /**
  * A resume could not put this chat in the mode the user picked, so it runs in
@@ -33,8 +31,7 @@ export function ModeRestoreBar({ tabId }: { tabId: string }) {
       action={{
         label: "Choose mode",
         title: "Open the mode picker",
-        onClick: () =>
-          window.dispatchEvent(new CustomEvent(OPEN_MODE_PICKER_EVENT, { detail: { tabId } })),
+        onClick: () => emitWindowEvent("atlas:composer-open-mode", { tabId }),
       }}
       onDismiss={hide}
     >

@@ -1,36 +1,46 @@
-import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+// @vitest-environment happy-dom
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+
 import {
-  TAB_PLACEMENT,
+  LAUNCHER_ENTRIES,
   TAB_TYPES,
   WINDOW_TYPES,
   isDestination,
   isDestinationOnly,
   isDualPlacement,
+  isPersistent,
+  placementOf,
   surfaceMinWidth,
   type DestinationType,
   type DualPlacementType,
-  type Placement,
   type TabType,
-} from "@/lib/constants";
+} from "@/lib/tab-registry";
 import { LAYOUT_TEMPLATES } from "@/features/layout/templates";
+import { SURFACES } from "@/features/layout/lib/surfaces";
+import { useLayoutStore, type Tab } from "@/features/layout/stores/layout-store";
 
 /**
  * Guards ADR-0024: surfaces sit beside the session, destinations take the
  * window.
  *
- * `TAB_PLACEMENT` is a `Record<TabType, …>`, so `tsc` already refuses a tab
- * type without a placement, and the destination screen's `switch` refuses a
- * destination without a page. What it cannot see is a destination being
- * offered somewhere that would put it in a column anyway: the ⌘T list, a
- * layout template, zen, or the column renderer's keep-mounted list. Each of
- * those lives in its own file, so this suite reads them.
+ * A type's placement is one fact of its entry in the tab registry
+ * (`@/lib/tab-registry`), so `tsc` already refuses a tab type without one,
+ * and the destination screen's `switch` refuses a destination without a page.
+ * What it cannot see is a destination being offered somewhere that would put
+ * it in a column anyway: the ⌘T list, a layout template, zen, or the column
+ * renderer's keep-mounted policy.
+ *
+ * Three of those are registry data now, so this suite reads the data: a
+ * type's launcher row and its mount policy sit in the same entry as its
+ * placement. Zen builds its columns in the layout store by hand, so that one
+ * is checked by running it. Nothing here reads source text.
  *
  * A full page squeezed into a column is what this ADR exists to stop. If you
  * need a destination beside the session, the answer is a peek (a compact
- * view designed for a column), not an entry in one of these lists.
+ * view designed for a column), not a launcher row or a persistent mount.
  *
  * The 2026-10-24 amendment adds `surface-or-destination`, for a tool that
  * passes the surface test and is also a place of its own (team chat). Such a
@@ -38,22 +48,45 @@ import { LAYOUT_TEMPLATES } from "@/features/layout/templates";
  * opening it in one form moves it out of the other.
  */
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const read = (rel: string) => readFileSync(path.join(ROOT, rel), "utf-8");
-
-const placement = (type: TabType): Placement => TAB_PLACEMENT[type];
-const DESTINATIONS = TAB_TYPES.filter((t) => placement(t).kind === "destination");
-const DUAL = TAB_TYPES.filter((t) => placement(t).kind === "surface-or-destination");
+const kindOf = (type: TabType) => placementOf(type).kind;
+const DESTINATIONS = TAB_TYPES.filter((t) => kindOf(t) === "destination");
+const DUAL = TAB_TYPES.filter((t) => kindOf(t) === "surface-or-destination");
 const SURFACES_ = TAB_TYPES.filter((t) => {
-  const kind = placement(t).kind;
+  const kind = kindOf(t);
   return kind === "surface" || kind === "surface-or-destination";
 });
 
+const sessionTab = (id: string): Tab => ({
+  id,
+  type: "chat",
+  title: id,
+  closable: false,
+  dirty: false,
+  data: {},
+  groupId: "main",
+});
+
+beforeEach(() => {
+  useLayoutStore.setState({
+    tabs: [sessionTab("welcome")],
+    groupOrder: ["main"],
+    activeByGroup: { main: "welcome" },
+    focusedGroupId: "main",
+    activeTabId: "welcome",
+    surfaces: "shown",
+    zen: false,
+    zenPrev: null,
+    destination: null,
+    destinationShown: false,
+    lastForm: {},
+  });
+});
+
 describe("tab placement (ADR-0024)", () => {
-  it("has a non-trivial set of each kind (parser smoke test)", () => {
+  it("has a non-trivial set of each kind (a floor, so no check below passes empty)", () => {
     expect(DESTINATIONS.length).toBeGreaterThan(3);
     expect(SURFACES_.length).toBeGreaterThan(3);
-    expect(TAB_TYPES.filter((t) => placement(t).kind === "session")).toEqual(["chat"]);
+    expect(TAB_TYPES.filter((t) => kindOf(t) === "session")).toEqual(["chat"]);
   });
 
   it("every surface declares a believable minimum width", () => {
@@ -88,39 +121,43 @@ describe("tab placement (ADR-0024)", () => {
   });
 
   it("the ⌘T list offers surfaces only", () => {
-    const source = read("src/features/layout/lib/surfaces.ts");
-    const block = source.slice(source.indexOf("export const SURFACES"));
-    const offered = [...block.matchAll(/type: "([a-z-]+)"/g)].map((m) => m[1] as TabType);
-    expect(offered.length).toBeGreaterThan(3);
-    for (const type of offered) expect(placement(type).kind, type).not.toBe("destination");
+    // The registry's rows, and the list the `+` menu and the launcher render.
+    expect(LAUNCHER_ENTRIES.length).toBeGreaterThan(3);
+    expect(SURFACES.map((s) => s.type)).toEqual(LAUNCHER_ENTRIES.map((s) => s.type));
+    for (const { type } of SURFACES) expect(kindOf(type), type).not.toBe("destination");
   });
 
   it("no layout template puts a destination in a column, and each starts with the session", () => {
     for (const template of LAYOUT_TEMPLATES) {
       expect(template.columns[0]?.type, template.id).toBe("chat");
       for (const col of template.columns) {
-        expect(placement(col.type).kind, `${template.id}: ${col.type}`).not.toBe("destination");
+        expect(kindOf(col.type), `${template.id}: ${col.type}`).not.toBe("destination");
       }
     }
   });
 
   it("zen builds its columns from surfaces only", () => {
-    const source = read("src/features/layout/stores/layout-store.ts");
-    // The action, not its declaration in the actions interface.
-    const zen = source.slice(source.indexOf("toggleZenMode: () =>\n"));
-    const body = zen.slice(0, zen.indexOf("applyLayoutTemplate: (template) =>"));
-    const ensured = [...body.matchAll(/ensure\("([a-z-]+)"/g)];
-    expect(ensured.length).toBeGreaterThan(0);
-    for (const [, type] of ensured) {
-      expect(placement(type as TabType).kind, type).not.toBe("destination");
+    // From a window holding only the session, so zen has to make every tab
+    // it wants beside it.
+    useLayoutStore.getState().actions.toggleZenMode();
+    const { zen, tabs, groupOrder, activeByGroup, destination } = useLayoutStore.getState();
+    expect(zen).toBe(true);
+    expect(groupOrder.length).toBeGreaterThanOrEqual(2);
+    expect(tabs.length).toBeGreaterThanOrEqual(2);
+    for (const t of tabs) expect(kindOf(t.type), t.type).not.toBe("destination");
+    // Every column shows one of them, and the main column shows the session.
+    for (const group of groupOrder) {
+      const active = tabs.find((t) => t.id === activeByGroup[group]);
+      expect(active, group).toBeDefined();
+      expect(kindOf(active!.type), group).not.toBe("destination");
     }
+    expect(tabs.find((t) => t.id === activeByGroup[groupOrder[0]])?.type).toBe("chat");
+    expect(destination).toBeNull();
   });
 
   it("the column renderer keeps no destination mounted", () => {
-    const source = read("src/features/layout/components/tab-panels.tsx");
-    const match = source.match(/const PERSISTENT_TYPES_LIST = \[([\s\S]*?)\] as const/);
-    expect(match).not.toBeNull();
-    const kept = [...match![1].matchAll(/^\s*"([a-z-]+)",/gm)].map((m) => m[1] as TabType);
-    for (const type of kept) expect(placement(type).kind, type).not.toBe("destination");
+    const kept = TAB_TYPES.filter(isPersistent);
+    expect(kept.length).toBeGreaterThanOrEqual(5);
+    for (const type of kept) expect(kindOf(type), type).not.toBe("destination");
   });
 });

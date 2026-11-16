@@ -10,7 +10,7 @@ use super::{
     conversation_json, member_json, resolve_conversation, resolve_member, tool_error, tool_json,
     OrgTools, NOT_RECORDED_YET,
 };
-use crate::commands::memory_server::Grant;
+use crate::commands::tool_servers::Grant;
 impl OrgTools {
     /// `org_whoami`: the caller, the organisation, the Workspace and the
     /// current recorded session. The caller is required — without it there

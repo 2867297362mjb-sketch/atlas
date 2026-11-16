@@ -5,6 +5,7 @@ import {
   type ResolvedTheme,
   type ThemeOverride,
 } from "@tryatlas/design/theme";
+import { emitWindowEvent } from "@/lib/window-events";
 
 const STYLE_ID = "atlas-resolved-theme";
 /**
@@ -202,7 +203,7 @@ export function applyTheme(
   const cache = launchCache(resolved);
   applyBootVars(root, cache);
   if (!preview) cacheLaunchTheme(cache);
-  window.dispatchEvent(new CustomEvent("atlas:theme-applied"));
+  emitWindowEvent("atlas:theme-applied");
   return resolved;
 }
 

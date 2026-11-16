@@ -1,6 +1,6 @@
 import { MessageSquare } from "lucide-react";
 import { AtlasIcon } from "@/components/brand-marks";
-import type { TabType } from "@/lib/constants";
+import type { TabType } from "@/lib/tab-registry";
 import type { LayoutTemplate } from "../templates";
 import { tabIcons } from "./pane-tab";
 

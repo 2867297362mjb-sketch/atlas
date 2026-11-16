@@ -17,9 +17,7 @@
 import { create } from "zustand";
 import { toast } from "sonner";
 import { createSelectors } from "@/lib/create-selectors";
-import { useLayoutStore } from "@/features/layout/stores/layout-store";
-import { ORG_SCOPED_TYPES } from "@/lib/constants";
-import { useSpacesStore } from "@/features/spaces/stores/spaces-store";
+import { activeOrganisationChanged } from "@/features/organisations/lib/active-org-change";
 import { comms, type CommsEnvelope, type ConnectionInfo } from "../lib/comms-api";
 import { CHAT_MESSAGE_ATTACHMENT_MAX, TYPING_EXPIRY_MS } from "../types";
 import { publishDraftEvent } from "../lib/draft-bus";
@@ -366,7 +364,11 @@ export const useCommsStore = createSelectors(
         // and re-hydrate.
         const currentOrg = state.connection.orgId;
         if (envelope.org && !expectation && currentOrg && envelope.org !== currentOrg) {
-          closeOrgScopedTabs();
+          activeOrganisationChanged({
+            why: "boot-reconciliation",
+            from: currentOrg,
+            to: envelope.org,
+          });
           set({
             ...serverOwned(),
             // The old org's roster must not survive the retarget — the panel
@@ -1113,25 +1115,6 @@ function withoutTyper(
   if (!room || !(userId in room)) return typing;
   const { [userId]: _gone, ...rest } = room;
   return { ...typing, [convId]: rest };
-}
-
-/**
- * Close center tabs whose content belongs to ONE org (draft editors,
- * Spaces canvases — their ids embed conversation ids). Called on every path
- * that moves the org under the renderer: the deliberate `switchOrg` and the
- * boot-reconciliation branch above. Settings is org-agnostic and stays.
- */
-function closeOrgScopedTabs(): void {
-  const layout = useLayoutStore.getState();
-  for (const tab of layout.tabs) {
-    if (ORG_SCOPED_TYPES.has(tab.type)) layout.actions.closeTab(tab.id);
-  }
-  if (layout.destination && ORG_SCOPED_TYPES.has(layout.destination.type)) {
-    layout.actions.closeTab(layout.destination.id);
-  }
-  // The spaces metadata cache is org-scoped too — page trees and authors
-  // for the outgoing org's conversations must not survive into the next.
-  useSpacesStore.getState().actions.clearAll();
 }
 
 function mergeReads(current: ChatReadState[], incoming: ChatReadState[]): ChatReadState[] {

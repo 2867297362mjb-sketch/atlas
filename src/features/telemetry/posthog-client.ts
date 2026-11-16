@@ -8,7 +8,7 @@
  * browser shares the same anonymous `distinct_id` and opt-in state. Nothing is
  * sent until the user has opted in AND a PostHog key resolved server-side.
  */
-import { invoke } from "@tauri-apps/api/core";
+import { telemetryConfig, type TelemetryConfig } from "./lib/telemetry-api";
 
 type PostHogClient = (typeof import("posthog-js"))["default"];
 /**
@@ -21,18 +21,6 @@ type PostHogClient = (typeof import("posthog-js"))["default"];
  * production CSP (`script-src 'self'`) blocks.
  */
 let posthog: PostHogClient | null = null;
-
-interface TelemetryConfig {
-  enabled: boolean;
-  host: string;
-  /** Device-stable anonymous id (Rust's `device.json`). */
-  anonId: string;
-  /** Atlas account id when already signed in at boot, else null. */
-  accountId: string | null;
-  usingDefaultKey: boolean;
-  /** Write-only project key, or null on an inert build (→ posthog never inits). */
-  key: string | null;
-}
 
 /** The account a renderer-side `identify` should attribute crashes to. */
 export interface TelemetryIdentity {
@@ -94,7 +82,7 @@ export async function initTelemetry(): Promise<void> {
 
   let cfg: TelemetryConfig;
   try {
-    cfg = await invoke<TelemetryConfig>("telemetry_config");
+    cfg = await telemetryConfig();
   } catch {
     return; // command unavailable → stay dark
   }

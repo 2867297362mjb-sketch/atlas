@@ -45,13 +45,8 @@ import type { ChatMessage, Subagent, ToolCallDisplay, TurnInterruption } from "@
 const NO_ATTACHMENTS: readonly TranscriptImage[] = Object.freeze([]);
 import { isBashToolCall, bashCommandOf } from "./tool-calls";
 import { orgToolOf, orgToolRow } from "@/features/org-actions/lib/org-tool-rows";
-import {
-  getFilePathFromInput,
-  classifyToolFileKind,
-  countChangedLines,
-  countEditLines,
-  isFileCreated,
-} from "./tool-files";
+import { getFilePathFromInput, classifyToolFileKind } from "./tool-files";
+import { changesOfLoggedCall } from "./tool-changes";
 import { isEmptyMessage, stableTurnKey } from "./turn-identity";
 import { splitAtlasContext } from "./atlas-context";
 import { stripNextSteps, stripNextStepsDirective } from "./next-steps";
@@ -110,66 +105,6 @@ function isInternalTool(tc: ToolCallDisplay): boolean {
 
 // ── Marker labelling ───────────────────────────────────────────────────────
 
-/** What a tool call changed, however it reported it. */
-interface FileEdit {
-  /** The file the marker names — the first one the call touched. */
-  path: string;
-  added: number;
-  removed: number;
-  created: boolean;
-}
-
-/** The edit a tool call reported STRUCTURALLY, as ACP `diff` content blocks.
- *
- *  An ACP agent's tools are its own: `apply_patch(patch_id)` says nothing that
- *  `classifyToolFileKind` can read, and the edit lives entirely in the blocks.
- *  Without this the marker fell through to the generic branch — no file name,
- *  no line counts, and a click that opened the output pane instead of the diff
- *  viewer, even though the before/after text was right there.
- *
- *  Each block carries the WHOLE file either side, not the fragment that
- *  changed, so blocks naming the SAME path collapse to first-before against
- *  last-after — the state the call found the file in against the state it left
- *  it in. Summing them instead would count intermediate states the reader
- *  never sees: a line rewritten twice would read as two changed lines against
- *  a diff showing one. This is the same fold `collectTurnEdits` does for the
- *  viewer the marker opens, so the count and the diff agree.
- *
- *  A tool call is still exactly ONE marker (the row invariant), so a call that
- *  changed several files is named by the first and sized by all of them. */
-function diffEditOf(tc: ToolCallDisplay): FileEdit | null {
-  const blocks = (tc.contentBlocks ?? []).filter((b) => b.type === "diff");
-  if (blocks.length === 0) return null;
-
-  const byPath = new Map<string, { old: string; new: string; created: boolean }>();
-  for (const b of blocks) {
-    const seen = byPath.get(b.path);
-    byPath.set(b.path, {
-      // The wire OMITS `oldText` for a file the call created; an empty string
-      // is a real file that happened to be empty.
-      old: seen ? seen.old : (b.oldText ?? ""),
-      new: b.newText,
-      created: seen ? seen.created : b.oldText === undefined,
-    });
-  }
-
-  let added = 0;
-  let removed = 0;
-  for (const file of byPath.values()) {
-    const counts = countChangedLines(file.old, file.new);
-    added += counts.added;
-    removed += counts.removed;
-  }
-  return {
-    path: blocks[0].path,
-    added,
-    removed,
-    // "Created" only when the call brought nothing into existence but new
-    // files — one edited file among them makes it an edit.
-    created: [...byPath.values()].every((file) => file.created),
-  };
-}
-
 /**
  * An Atlas memory call's tool, from either spelling of its name:
  * `mcp__atlas_memory__memory_search` (an ACP agent's) or
@@ -197,19 +132,6 @@ function memoryToolRow(
     default:
       return { verb: "Read memory", detail: "" };
   }
-}
-
-/** Where the engine moved the file its arguments name, read off its `changes`
- *  list without parsing the patch: a renamed file's row opens where it went. */
-function movedPathOf(args: Record<string, unknown>, path: string | null): string | null {
-  if (!path || !Array.isArray(args.changes)) return null;
-  for (const change of args.changes as unknown[]) {
-    if (!change || typeof change !== "object") continue;
-    const c = change as { path?: unknown; movePath?: unknown };
-    if (c.path !== path) continue;
-    return typeof c.movePath === "string" && c.movePath.length > 0 ? c.movePath : null;
-  }
-  return null;
 }
 
 /**
@@ -247,22 +169,18 @@ function markerFor(tc: ToolCallDisplay, turnId: string, first: boolean): MarkerR
 
   const args = tc.arguments ?? {};
   const fileKind = classifyToolFileKind(tc.kind, tc.toolName);
-  const argsPath = getFilePathFromInput(args);
-  // Two ways an edit is reported, one shape. Recognisable arguments win: a
-  // tool Atlas already understands must not read differently just because the
-  // agent also attached the structural blocks.
-  const edit: FileEdit | null =
-    fileKind === "edit" && argsPath
-      ? {
-          path: argsPath,
-          created: isFileCreated(tc.toolName, args),
-          ...countEditLines(tc.toolName, args),
-        }
-      : diffEditOf(tc);
-  // The path the marker reports: whatever the arguments named, else whatever
-  // the diff blocks did. It is what the diff viewer lands on.
-  // A file the engine renamed is reported where it went.
-  const path = movedPathOf(args, argsPath) ?? argsPath ?? edit?.path ?? null;
+  // What the call changed, by the one reading every view of a turn's edits
+  // asks (`tool-changes.ts`): its arguments, diff blocks and locations read
+  // together, so this line, the turn card and the viewer it opens agree on
+  // the files and the counts.
+  //
+  // A tool call is still exactly ONE marker (the row invariant), so a call
+  // that changed several files is named by the first and sized by all of them.
+  const changes = changesOfLoggedCall(tc);
+  const edit = changes.length > 0 ? changes[0] : null;
+  // The path the marker reports, which is what the diff viewer lands on: a
+  // file the call renamed is reported where it went.
+  const path = edit?.path ?? getFilePathFromInput(args);
 
   const orgTool = orgToolOf(tc.toolName);
   const memoryTool = memoryToolOf(tc.toolName);
@@ -316,11 +234,16 @@ function markerFor(tc: ToolCallDisplay, turnId: string, first: boolean): MarkerR
       cmd = undefined;
     }
   } else if (edit) {
-    verb = edit.created ? "Created" : "Edited";
+    // "Created" only when the call brought nothing into existence but new
+    // files — one edited file among them makes it an edit.
+    verb = changes.every((c) => c.kind === "added") ? "Created" : "Edited";
     tool = "edit";
-    detail = shortPath(edit.path);
-    added = edit.added;
-    removed = edit.removed;
+    // Named as the call named it: a renamed file by where it was.
+    detail = shortPath(edit.previousPath ?? edit.path);
+    for (const c of changes) {
+      added += c.added;
+      removed += c.removed;
+    }
     opens = "diff";
   } else if (fileKind === "read" && path) {
     verb = "Read";

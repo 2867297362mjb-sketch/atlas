@@ -87,12 +87,12 @@ afterEach(() => {
 });
 
 describe("SessionPullRequestsPanel", () => {
-  it("lists the links with chains, the eye and the footer counts", () => {
+  it("lists the links with stacks, the eye and the footer counts", () => {
     setLinks([link(1, "a", "main", true), link(2, "b", "a"), link(3, "z", "main")]);
     renderPanel();
     const items = screen.getAllByRole("listitem");
     expect(items).toHaveLength(3);
-    expect(screen.getByTitle("2 pull requests chained by base branch")).toBeTruthy();
+    expect(screen.getByTitle("2 pull requests stacked by base branch")).toBeTruthy();
     expect(screen.getAllByLabelText(/^Watching/)).toHaveLength(1);
     expect(screen.getByLabelText("Checks failing")).toBeTruthy();
     expect(screen.getByText(/2 open · 3 linked/)).toBeTruthy();

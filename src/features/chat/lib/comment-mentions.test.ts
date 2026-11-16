@@ -6,8 +6,8 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
 
 import type { Comment } from "@/features/artifacts/lib/comments-api";
 import type { OrgMember } from "@/features/auth/lib/auth-api";
@@ -15,7 +15,6 @@ import type { OrgDirectory } from "@/features/organisations/lib/use-org-director
 
 import { EMPTY_ANCHOR_MAP } from "./comment-anchors";
 import {
-  COMMENT_LINK_EVENT,
   commentExcerpt,
   commentToMention,
   linkCommentToComposer,
@@ -25,6 +24,7 @@ import {
 } from "./comment-mentions";
 import { categoryForKind, toShortForm } from "./mentions";
 import { useChatCommentsStore, type TabComments } from "../stores/chat-comments-store";
+import { onWindowEvent } from "@/lib/window-events";
 
 function comment(over: Partial<Comment> & { id: string }): Comment {
   return {
@@ -183,11 +183,10 @@ describe("a comment mention", () => {
 
   it("is linked into the composer of the tab that owns it", () => {
     const seen: CommentLinkDetail[] = [];
-    const onLink = (e: Event) => seen.push((e as CustomEvent<CommentLinkDetail>).detail);
-    window.addEventListener(COMMENT_LINK_EVENT, onLink);
+    const off = onWindowEvent("atlas:chat-link-comment", (detail) => void seen.push(detail));
     const mention = commentToMention(comment({ id: "c-1" }), tab())!;
     linkCommentToComposer("tab-1", mention);
-    window.removeEventListener(COMMENT_LINK_EVENT, onLink);
+    off();
     expect(seen).toEqual([{ tabId: "tab-1", mention }]);
   });
 });

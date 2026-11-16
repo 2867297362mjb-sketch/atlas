@@ -117,7 +117,8 @@ fn save_manifest(app: &AppHandle, m: &Staging) -> Result<(), String> {
     let dir = updates_dir(app)?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("updates dir: {e}"))?;
     let raw = serde_json::to_string_pretty(m).map_err(|e| format!("serialize manifest: {e}"))?;
-    std::fs::write(dir.join("staging.json"), raw).map_err(|e| format!("write manifest: {e}"))
+    atlas_fs::replace_file(dir.join("staging.json"), raw)
+        .map_err(|e| format!("write manifest: {e}"))
 }
 
 /// The staged MSI recorded in `m`, if it is still on disk.
@@ -275,10 +276,12 @@ pub(super) async fn update_ignore(version: String, app: AppHandle) -> Result<(),
     .await
     .map_err(|e| e.to_string())?
     .map_err(|e| e.to_string())?;
-    crate::commands::atlas_config::notify_settings_changed(
+    crate::settings_effects::apply(
         &app,
         &snapshot.settings,
-        snapshot.generation,
+        crate::settings_effects::When::Changed {
+            generation: snapshot.generation,
+        },
     );
     Ok(())
 }

@@ -21,6 +21,7 @@ import {
   type PastSessionRef,
 } from "../lib/mentions";
 import { ComposerAddMenuView } from "./views/composer-add-menu-view";
+import { emitWindowEvent, onWindowEvent, useWindowEvent } from "@/lib/window-events";
 
 interface ComposerAddMenuProps {
   disabled?: boolean;
@@ -74,13 +75,9 @@ export function ComposerAddMenu({
   // The composer hosts two floating menus (this + menu and the grouped
   // agent/mode/model panel). Opening either announces itself; the other
   // closes — they must never stack (see atlas:composer-menu-open).
-  useEffect(() => {
-    const onOther = (e: Event) => {
-      if ((e as CustomEvent<string>).detail !== "add") setOpen(false);
-    };
-    window.addEventListener("atlas:composer-menu-open", onOther);
-    return () => window.removeEventListener("atlas:composer-menu-open", onOther);
-  }, []);
+  useWindowEvent("atlas:composer-menu-open", (detail) => {
+    if (detail !== "add") setOpen(false);
+  });
 
   const onOpenChange = useCallback((o: boolean) => {
     setOpen(o);
@@ -94,7 +91,7 @@ export function ComposerAddMenu({
       setSessions(null);
       setProjectQuery("");
       setProjects(null);
-      window.dispatchEvent(new CustomEvent("atlas:composer-menu-open", { detail: "add" }));
+      emitWindowEvent("atlas:composer-menu-open", "add");
     }
   }, []);
 
@@ -109,8 +106,7 @@ export function ComposerAddMenu({
   useEffect(() => {
     if (!open) return;
     const on = () => loadCloned();
-    window.addEventListener("atlas:repo-cloned", on);
-    return () => window.removeEventListener("atlas:repo-cloned", on);
+    return onWindowEvent("atlas:repo-cloned", on);
   }, [open, loadCloned]);
 
   // A searched repo is "already downloaded" when its on-disk dir (`owner-repo`)

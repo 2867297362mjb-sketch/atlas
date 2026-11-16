@@ -22,6 +22,11 @@
     "clippy": true
   },
   {
+    "crate": "atlas-fs",
+    "clippy": true,
+    "cross": true
+  },
+  {
     "crate": "atlas-agent-servers",
     "clippy": true,
     "cross": true
@@ -59,6 +64,11 @@
   {
     "crate": "atlas-embed",
     "clippy": true
+  },
+  {
+    "crate": "atlas-gh",
+    "clippy": true,
+    "cross": true
   },
   {
     "crate": "atlas-git",
@@ -107,6 +117,11 @@
   {
     "crate": "atlas-security",
     "clippy": true
+  },
+  {
+    "crate": "atlas-skills",
+    "clippy": true,
+    "cross": true
   },
   {
     "crate": "atlas-search",

@@ -14,8 +14,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * `byok_env_set` / `byok_env_unset` destructure — a rename on either side is a
  * silent no-op at runtime, which is exactly what these catch.
  */
-const invoke = vi.hoisted(() => vi.fn());
-vi.mock("@tauri-apps/api/core", () => ({ invoke }));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+import { tauri } from "@/test/tauri-fake";
+
+const invoke = tauri.invoke;
 
 const { byok } = await import("./byok-api");
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { bracketBody } from "./support/source";
 
 /**
  * Small, independent wire-shape pins. The first four are regressions found by
@@ -83,11 +84,16 @@ import { fileURLToPath } from "node:url";
  * still handles a kind, and that a mapper still copies an optional field
  * across.
  *
- * Unlike `tests/state-payload-contract.test.ts` (which is specifically the
- * `save_app_state` / `bootstrap_app_state` payload and generalises over many
- * struct pairs), these four are one-off, unrelated commands — plain regression
- * pins on source text rather than a shared parsing framework, so each failure
- * message names the exact bug instead of a generic set difference.
+ * The same goes for the app-state payloads (`bootstrap_app_state` /
+ * `save_app_state`): generated into `src/bindings/app-state/` and held to the
+ * JSON Rust writes by `fixtures.ts` there, which is why the suite that used to
+ * compare their keys by text is gone.
+ *
+ * Everything still pinned here is hand-written on both sides, in crates and
+ * command modules that derive no TypeScript. Each block is a plain regression
+ * pin on source text rather than a shared parsing framework, so each failure
+ * message names the exact bug instead of a generic set difference. A surface
+ * that moves to generated types takes its block out of this file.
  */
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -747,12 +753,11 @@ describe("linked pull requests: session row, store and commands (#15)", () => {
     // frontend knows, and the event carries the wake's own.
     expect(watch).toMatch(/source:\s*wake\.source\.token\(\)\.into\(\)/);
     const wake = read("src-tauri", "src", "commands", "agent_host", "wake.rs");
-    const tokenFn = wake.slice(wake.indexOf("pub fn token"));
-    const rustTokens = [
-      ...tokenFn.slice(0, tokenFn.indexOf("\n    }\n")).matchAll(/=> "([a-z-]+)"/g),
-    ]
-      .map((m) => m[1])
-      .sort();
+    const tokenFn = bracketBody(wake, /\bpub fn token\b/, {
+      lang: "rust",
+      where: "src-tauri/src/commands/agent_host/wake.rs",
+    });
+    const rustTokens = [...tokenFn.matchAll(/=> "([a-z-]+)"/g)].map((m) => m[1]).sort();
     const union = /InjectedPromptSource = ([^;]+);/.exec(injected)?.[1] ?? "";
     const tsTokens = [...union.matchAll(/"([a-z-]+)"/g)].map((m) => m[1]).sort();
     expect(rustTokens).toEqual(["pull-request-watch", "restart"]);

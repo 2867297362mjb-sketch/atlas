@@ -12,16 +12,14 @@
 //! that commit's subject and body; several give the branch name as the title
 //! and the commit subjects as a list.
 
-use std::ffi::OsStr;
 use std::path::Path;
-use std::process::Stdio;
 use std::time::Duration;
 
+use atlas_gh::{GhCommand, GhError, Intent};
 use serde::{Deserialize, Serialize};
-use tokio::io::AsyncWriteExt;
 
 use super::checkout::run;
-use super::gh::{classify_no_response, PR_PERMITS, WRITE_TIMEOUT};
+use super::gh::WRITE_TIMEOUT;
 use super::model::PrError;
 
 /// One local `git` read for the prefill or the head: a ref, a log.
@@ -90,11 +88,13 @@ pub async fn pr_create(
         .ok_or_else(|| PrError::invalid("A pull request cannot be opened from a detached HEAD."))?;
     let head_ref = head_ref(&cwd, &head).await;
     let args = create_args(title, &head_ref, &input);
-    let _permit = PR_PERMITS
-        .acquire()
-        .await
-        .map_err(|e| PrError::failed(e.to_string()))?;
-    let out = run_gh(OsStr::new("gh"), &cwd, &args, input.body.as_bytes()).await?;
+    // A write the user asked for: it runs even while the API is paused.
+    let out = open_with(
+        GhCommand::new(&cwd, &args, Intent::Write)
+            .stdin(input.body.clone().into_bytes())
+            .timeout(WRITE_TIMEOUT),
+    )
+    .await?;
     let created = parse_created(&out).ok_or_else(|| {
         PrError::failed("gh opened the pull request but did not say where it is.")
     })?;
@@ -214,61 +214,30 @@ fn create_args(title: &str, head: &str, input: &PrCreateInput) -> Vec<String> {
     args
 }
 
-async fn run_gh(
-    program: &OsStr,
-    cwd: &str,
-    args: &[String],
-    stdin: &[u8],
-) -> Result<String, PrError> {
-    if !Path::new(cwd).is_dir() {
-        return Err(classify_no_response(None, "not a git repository"));
-    }
-    let mut cmd = atlas_process::async_command(program);
-    cmd.args(args)
-        .current_dir(cwd)
-        .env("GH_PROMPT_DISABLED", "1")
-        .env("GH_NO_UPDATE_NOTIFIER", "1")
-        .env("NO_COLOR", "1")
-        .env("GH_PAGER", "")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    let mut child = match cmd.spawn() {
-        Ok(child) => child,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(PrError::NotInstalled),
-        Err(e) => return Err(PrError::failed(e.to_string())),
-    };
-    let pipe = child.stdin.take();
-    let body = stdin.to_vec();
-    let work = async move {
-        if let Some(mut pipe) = pipe {
-            let _ = pipe.write_all(&body).await;
-            drop(pipe);
-        }
-        child.wait_with_output().await
-    };
-    let output = match tokio::time::timeout(WRITE_TIMEOUT, work).await {
-        Ok(Ok(output)) => output,
-        Ok(Err(e)) => return Err(PrError::failed(e.to_string())),
-        Err(_) => {
+/// Run a `gh pr create` and return what it printed.
+async fn open_with(command: GhCommand) -> Result<String, PrError> {
+    let output = match command.output().await {
+        Ok(output) => output,
+        // Not "offline, try again": `gh` may have opened it before it was
+        // stopped, and a second try would be refused as a duplicate.
+        Err(GhError::Network { .. }) => {
             return Err(PrError::failed(
                 "gh took too long to open the pull request.",
             ))
         }
+        Err(e) => return Err(e.into()),
     };
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        // `gh` says plainly when the branch already has one; that is the
-        // user's answer, not a network failure.
-        if let Some(line) = stderr.lines().find(|l| l.contains("already exists")) {
-            return Err(PrError::invalid(
-                line.trim().trim_start_matches("gh: ").to_string(),
-            ));
-        }
-        return Err(classify_no_response(output.status.code(), &stderr));
+    if output.success() {
+        return Ok(output.stdout_text());
     }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    // `gh` says plainly when the branch already has one; that is the user's
+    // answer, not a failure of the request.
+    if let Some(line) = output.stderr.lines().find(|l| l.contains("already exists")) {
+        return Err(PrError::invalid(
+            line.trim().trim_start_matches("gh: ").to_string(),
+        ));
+    }
+    Err(output.failure().into())
 }
 
 /// The URL `gh pr create` prints last, and the number at its end.
@@ -287,7 +256,7 @@ fn parse_created(stdout: &str) -> Option<PrCreated> {
 
 /// A bounded local `git` read; `None` for any failure.
 async fn git(cwd: &Path, args: &[&str]) -> Option<String> {
-    run(cwd, "git", args, GIT_READ_TIMEOUT)
+    run(cwd, args, GIT_READ_TIMEOUT)
         .await
         .ok()
         .map(|out| out.trim().to_string())
@@ -499,5 +468,27 @@ mod tests {
             )
         );
         assert_eq!(prefill(None, &[]), (String::new(), String::new()));
+    }
+
+    /// The branch name brushes the network wording on purpose: the
+    /// duplicate is read before anything is classified.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_branch_that_already_has_a_pull_request_is_the_user_s_answer() {
+        let dir = tempfile::tempdir().unwrap();
+        // Run through `/bin/sh`, not exec'd: no ETXTBSY from a fresh script.
+        let script = dir.path().join("gh");
+        std::fs::write(
+            &script,
+            "echo 'gh: a pull request for branch \"fix-connection\" already exists:' >&2; exit 1\n",
+        )
+        .unwrap();
+        let command = GhCommand::new(dir.path(), [&script], Intent::Write).program("/bin/sh");
+        assert_eq!(
+            open_with(command).await,
+            Err(PrError::invalid(
+                "a pull request for branch \"fix-connection\" already exists:"
+            ))
+        );
     }
 }

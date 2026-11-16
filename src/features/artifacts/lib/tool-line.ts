@@ -20,8 +20,8 @@
  *
  * * `parseShellCommand` reduces a command to its real action, so a recorded
  *   `cat src/main.rs` reads as "Read main.rs" here exactly as it does live.
- * * `getFilePathFromInput` / `isFileCreated` answer which file, and whether the
- *   call created it.
+ * * `getFilePathFromInput` answers which file, and `changesOfToolCall` (the
+ *   reading the transcript's line takes too) whether the call created it.
  * * `toolIconFor` picks the glyph for an `Other` call, which is where the MCP
  *   name sniff still applies.
  *
@@ -31,11 +31,8 @@
 
 import { bashCommandOf, isBashToolCall } from "@/features/chat/lib/tool-calls";
 import { parseShellCommand } from "@tryatlas/design/session";
-import {
-  classifyToolFileKind,
-  getFilePathFromInput,
-  isFileCreated,
-} from "@/features/chat/lib/tool-files";
+import { classifyToolFileKind, getFilePathFromInput } from "@/features/chat/lib/tool-files";
+import { changesOfToolCall } from "@/features/chat/lib/tool-changes";
 import { shortPath, toolIconFor, type MarkerTool } from "@tryatlas/design/session";
 
 import type { TimelineEntry } from "../types";
@@ -115,6 +112,19 @@ function argsOf(entry: TimelineEntry): Record<string, unknown> {
   }
 }
 
+/** Whether a recorded edit only created files, by the reading the live
+ *  transcript's line takes of the same call (`tool-changes.ts`). The record
+ *  holds no ACP kind and no diff blocks, so the arguments say it alone. */
+function createdFiles(name: string, args: Record<string, unknown>, paths: string[]): boolean {
+  const changes = changesOfToolCall({
+    tool_name: name,
+    kind: null,
+    arguments: args,
+    locations: paths,
+  });
+  return changes.length > 0 && changes.every((c) => c.kind === "added");
+}
+
 export function toolLine(entry: TimelineEntry): ToolLine {
   const name = entry.toolName ?? "Other";
   const args = argsOf(entry);
@@ -161,7 +171,7 @@ export function toolLine(entry: TimelineEntry): ToolLine {
         tool: "edit",
         // `Write` is usually a creation and `Edit` usually is not, but both
         // tools do both — the arguments are what actually say so.
-        verb: isFileCreated(name, args) ? "Created" : "Edited",
+        verb: createdFiles(name, args, entry.paths) ? "Created" : "Edited",
         detail: path ? shortPath(path) : title,
         fileDetail: path !== null,
       };

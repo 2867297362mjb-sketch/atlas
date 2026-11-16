@@ -36,7 +36,6 @@ pub mod git_avatars;
 pub mod git_conflicts;
 pub mod git_graph;
 pub mod git_ops;
-pub mod git_pr;
 pub mod git_snapshot;
 pub mod git_stage_ops;
 pub mod git_watcher;
@@ -104,9 +103,22 @@ pub mod terminal;
 pub mod theme_import;
 pub mod themes;
 pub mod tips;
+pub mod tool_servers;
 pub mod tool_stats;
 pub mod ui_server;
 pub mod updater;
 pub mod usage;
 pub mod usage_dashboard;
 pub mod window;
+
+/// The names in `dir`, sorted. A store's save test asserts on the whole
+/// listing, so a temp file left beside the target fails it.
+#[cfg(test)]
+pub(crate) fn file_names_in(dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .expect("the directory a save created")
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}

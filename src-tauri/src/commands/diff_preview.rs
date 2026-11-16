@@ -20,12 +20,12 @@
 //! tree, and a project opened in a subdirectory of its repository sees only
 //! its own changes.
 
+use atlas_git::GitCommand;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::io::Read;
 use std::path::{Component, Path};
-use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
 
 /// Patch bytes per source. Past this a review is read file by file anyway,
@@ -298,15 +298,11 @@ pub async fn diff_texts_patch(
 // ── Git plumbing ────────────────────────────────────────────────────────────
 
 /// A read-only git: `--no-optional-locks` so a background read never takes
-/// `index.lock` from under a commit (see `git::git_read`), and unquoted paths.
-/// `LC_ALL=C` keeps git's messages in English whatever the user's locale, so
-/// nothing that reads stderr depends on a translation.
-fn git(cwd: &Path) -> Command {
-    let mut cmd = atlas_process::command("git");
-    cmd.args(["--no-optional-locks", "-c", "core.quotePath=false"])
-        .env("LC_ALL", "C")
-        .current_dir(cwd);
-    cmd
+/// `index.lock` from under a commit, and unquoted paths. The standard
+/// environment keeps git's messages in English whatever the user's locale,
+/// so nothing that reads stderr depends on a translation.
+fn git(cwd: &Path) -> GitCommand {
+    GitCommand::new(cwd, &["-c", "core.quotePath=false"]).read_only()
 }
 
 struct Out {
@@ -316,17 +312,17 @@ struct Out {
     stderr: String,
 }
 
-fn run(mut cmd: Command) -> Result<Out, String> {
+fn run(cmd: GitCommand) -> Result<Out, String> {
     let o = cmd.output().map_err(|e| format!("git: {e}"))?;
     Ok(Out {
-        ok: o.status.success(),
-        code: o.status.code(),
+        ok: o.success(),
+        code: o.exit_code,
+        stderr: o.stderr_text(),
         stdout: o.stdout,
-        stderr: String::from_utf8_lossy(&o.stderr).into_owned(),
     })
 }
 
-fn stdout_line(cmd: Command) -> Option<String> {
+fn stdout_line(cmd: GitCommand) -> Option<String> {
     let o = run(cmd).ok()?;
     if !o.ok {
         return None;
@@ -335,31 +331,12 @@ fn stdout_line(cmd: Command) -> Option<String> {
     (!s.is_empty()).then_some(s)
 }
 
-/// Run `cmd` and keep at most `cap` bytes of stdout. Past the cap the child
-/// is killed rather than drained: a 50 MB patch should cost 120 KB of reading.
-/// Returns the bytes, whether the cap cut them, and whether git succeeded
-/// (unknowable once killed, so `true` then).
-fn run_capped(mut cmd: Command, cap: usize) -> Result<(Vec<u8>, bool, bool), String> {
-    let mut child = cmd
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .stdin(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("git: {e}"))?;
-    let mut out = Vec::new();
-    let mut stdout = child.stdout.take().expect("piped stdout");
-    // One byte past the cap tells "exactly cap" from "more than cap".
-    let read = (&mut stdout).take(cap as u64 + 1).read_to_end(&mut out);
-    drop(stdout);
-    // Reaped on every path: a read error must not leave a zombie behind.
-    if read.is_err() || out.len() > cap {
-        let _ = child.kill();
-        let _ = child.wait();
-        read.map_err(|e| e.to_string())?;
-        return Ok((out, true, true));
-    }
-    let status = child.wait().map_err(|e| e.to_string())?;
-    Ok((out, false, status.success()))
+/// Run `cmd` and keep at most `cap` bytes of stdout
+/// ([`GitCommand::stdout_capped`]). Returns the bytes, whether the cap cut
+/// them, and whether git succeeded (unknowable once killed, so `true` then).
+fn run_capped(cmd: GitCommand, cap: usize) -> Result<(Vec<u8>, bool, bool), String> {
+    let out = cmd.stdout_capped(cap).map_err(|e| format!("git: {e}"))?;
+    Ok((out.bytes, out.truncated, out.success))
 }
 
 enum Head {
@@ -369,8 +346,7 @@ enum Head {
 }
 
 fn resolve_head(cwd: &Path) -> Result<Head, String> {
-    let mut cmd = git(cwd);
-    cmd.args(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]);
+    let cmd = git(cwd).args(&["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]);
     let o = run(cmd)?;
     if o.ok {
         return Ok(Head::Commit(
@@ -389,9 +365,8 @@ fn resolve_head(cwd: &Path) -> Result<Head, String> {
 /// The empty tree's id, for diffing a repository with no commits. Asked of
 /// git so SHA-256 repositories get theirs.
 fn empty_tree(cwd: &Path) -> Result<String, String> {
-    let mut cmd = git(cwd);
-    cmd.args(["hash-object", "-t", "tree", "--stdin"])
-        .stdin(Stdio::null());
+    // No stdin is an empty one: the empty tree.
+    let cmd = git(cwd).args(&["hash-object", "-t", "tree", "--stdin"]);
     stdout_line(cmd).ok_or_else(|| "could not hash the empty tree".to_string())
 }
 
@@ -399,8 +374,7 @@ fn empty_tree(cwd: &Path) -> Result<String, String> {
 /// remote's default (`origin/HEAD`), else the first of `origin/main`,
 /// `origin/master`, `main`, `master` that exists.
 fn default_base(cwd: &Path) -> Option<String> {
-    let mut cmd = git(cwd);
-    cmd.args([
+    let cmd = git(cwd).args(&[
         "symbolic-ref",
         "--quiet",
         "--short",
@@ -415,9 +389,9 @@ fn default_base(cwd: &Path) -> Option<String> {
         "refs/heads/main",
         "refs/heads/master",
     ];
-    let mut cmd = git(cwd);
-    cmd.args(["for-each-ref", "--format=%(refname)"])
-        .args(CANDIDATES);
+    let cmd = git(cwd)
+        .args(&["for-each-ref", "--format=%(refname)"])
+        .args(&CANDIDATES);
     let found = stdout_line(cmd)?;
     let found: Vec<&str> = found.lines().collect();
     CANDIDATES.iter().find(|c| found.contains(c)).map(|c| {
@@ -428,8 +402,7 @@ fn default_base(cwd: &Path) -> Option<String> {
 }
 
 fn merge_base(cwd: &Path, base: &str) -> Option<String> {
-    let mut cmd = git(cwd);
-    cmd.args(["merge-base", "--end-of-options", base, "HEAD"]);
+    let cmd = git(cwd).args(&["merge-base", "--end-of-options", base, "HEAD"]);
     stdout_line(cmd)
 }
 
@@ -452,15 +425,18 @@ fn diff_against(cwd: &Path, rev: &str, ignore_ws: bool) -> Result<Tracked, Strin
     // for the other.
     std::thread::scope(|s| {
         let stat = s.spawn(|| {
-            let mut cmd = git(cwd);
-            cmd.args(DIFF_ARGS)
-                .args(ws)
-                .args(["--raw", "--numstat", "-z", rev, "--"]);
+            let cmd =
+                git(cwd)
+                    .args(DIFF_ARGS)
+                    .args(ws)
+                    .args(&["--raw", "--numstat", "-z", rev, "--"]);
             run(cmd)
         });
         let patch = s.spawn(|| {
-            let mut cmd = git(cwd);
-            cmd.args(DIFF_ARGS).args(ws).args(["--patch", rev, "--"]);
+            let cmd = git(cwd)
+                .args(DIFF_ARGS)
+                .args(ws)
+                .args(&["--patch", rev, "--"]);
             run_capped(cmd, PATCH_CAP)
         });
         let stat = stat
@@ -615,8 +591,7 @@ pub fn cut_at_file_boundary(mut patch: Vec<u8>, cap: usize) -> Vec<u8> {
 /// An embedded repository (a nested clone, an unregistered submodule) comes
 /// back as `sub/`: a directory, not a file anyone can diff, so it is dropped.
 fn untracked(cwd: &Path) -> Result<Vec<String>, String> {
-    let mut cmd = git(cwd);
-    cmd.args(["ls-files", "--others", "--exclude-standard", "-z", "--"]);
+    let cmd = git(cwd).args(&["ls-files", "--others", "--exclude-standard", "-z", "--"]);
     let o = run(cmd)?;
     if !o.ok {
         return Err(format!("git ls-files: {}", o.stderr.trim()));
@@ -631,8 +606,7 @@ fn untracked(cwd: &Path) -> Result<Vec<String>, String> {
 /// Every unmerged path, relative to `cwd`: the files a merge or rebase left
 /// in conflict.
 fn unmerged(cwd: &Path) -> Vec<String> {
-    let mut cmd = git(cwd);
-    cmd.args(["diff", "--relative", "--name-only", "--diff-filter=U", "-z"]);
+    let cmd = git(cwd).args(&["diff", "--relative", "--name-only", "--diff-filter=U", "-z"]);
     match run(cmd) {
         Ok(o) if o.ok => o
             .stdout
@@ -1080,8 +1054,7 @@ pub fn file_contents(
             // `<rev>:./<path>` resolves against the cwd, so the path stays
             // relative to the project like everything else here.
             let spec = format!("{rev}:./{}", old_rel.to_string_lossy());
-            let mut cmd = git(cwd);
-            cmd.args(["cat-file", "blob", &spec]);
+            let cmd = git(cwd).args(&["cat-file", "blob", &spec]);
             let (bytes, _, ok) = run_capped(cmd, FILE_CAP)?;
             // Absent at that revision (an added file, an unborn HEAD).
             Ok(if ok { bytes } else { Vec::new() })
@@ -1211,13 +1184,14 @@ pub fn file_patch(
         &[]
     };
     let diff = || {
-        let mut cmd = git(cwd);
-        cmd.args(DIFF_ARGS).args(ws).args(["--patch", &rev, "--"]);
+        let mut cmd = git(cwd)
+            .args(DIFF_ARGS)
+            .args(ws)
+            .args(&["--patch", &rev, "--"]);
         if old_rel != new_rel {
-            cmd.arg(old_rel);
+            cmd = cmd.arg(old_rel);
         }
-        cmd.arg(new_rel);
-        cmd
+        cmd.arg(new_rel)
     };
     let (mut patch, mut truncated, ok) = run_capped(diff(), FILE_PATCH_CAP)?;
 
@@ -1236,8 +1210,8 @@ pub fn file_patch(
     if patch.is_empty() {
         // Either unchanged now, or not in git's view at all: an untracked
         // file, which is all added.
-        let mut ls = git(cwd);
-        ls.args(["ls-files", "--others", "--exclude-standard", "--"])
+        let ls = git(cwd)
+            .args(&["ls-files", "--others", "--exclude-standard", "--"])
             .arg(new_rel);
         if !run(ls).is_ok_and(|o| !o.stdout.is_empty()) {
             return Ok(DiffFilePatch::default());
@@ -1341,23 +1315,23 @@ pub fn texts_patch(
         // `--no-prefix`: the relative paths already carry `a/` and `b/`.
         // `--no-index` exits 1 when the texts differ, the normal case, so
         // the status is ignored.
-        let mut cmd = atlas_process::command("git");
-        cmd.args([
-            "diff",
-            "--no-index",
-            "--no-color",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--no-prefix",
-        ])
+        let cmd = GitCommand::new(
+            &base,
+            &[
+                "diff",
+                "--no-index",
+                "--no-color",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-prefix",
+            ],
+        )
         .args(if ignore_ws {
             &["--ignore-all-space"][..]
         } else {
             &[]
         })
-        .args(["--", &a, &b])
-        .env("LC_ALL", "C")
-        .current_dir(&base);
+        .args(&["--", &a, &b]);
         let out = run(cmd)?;
         if out.code.is_some_and(|c| c > 1) {
             return Err(format!("git diff --no-index: {}", out.stderr.trim()));

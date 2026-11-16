@@ -17,11 +17,8 @@ import { cleanup, render } from "@testing-library/react";
 import type { ReactNode, RefObject } from "react";
 import type { ChatMessage } from "@/types/agent";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => undefined) }));
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async () => () => {}),
-  emit: vi.fn(async () => {}),
-}));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
 vi.mock("@/features/layout/lib/use-tab-visible", () => ({ useIsTabVisible: () => true }));
 
 const renders = new Map<string, number>();

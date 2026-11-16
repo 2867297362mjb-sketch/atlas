@@ -114,12 +114,8 @@ fn load_cache(project_path: &str) -> HashMap<String, Vec<f32>> {
 }
 
 fn save_cache(project_path: &str, cache: &HashMap<String, Vec<f32>>) {
-    let path = cache_path(project_path);
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
     if let Ok(json) = serde_json::to_string(cache) {
-        let _ = std::fs::write(path, json);
+        let _ = atlas_fs::replace_file(cache_path(project_path), json);
     }
 }
 
@@ -425,5 +421,27 @@ mod path_tests {
         std::fs::create_dir_all(&proj).unwrap();
         std::os::unix::fs::symlink(home.join(".zshrc"), proj.join("AGENTS.md")).unwrap();
         assert!(!allowed_memory_path(&home, &proj.join("AGENTS.md")));
+    }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+
+    #[test]
+    fn the_vector_cache_loads_back_and_leaves_only_its_file() {
+        let project = tempfile::tempdir().unwrap();
+        let root = project.path().to_string_lossy().to_string();
+        let cache = |v: f32| HashMap::from([("statement".to_string(), vec![v, 0.5])]);
+
+        // The first save is also the one that creates `memory-index/`.
+        save_cache(&root, &cache(0.25));
+        save_cache(&root, &cache(0.75));
+
+        assert_eq!(load_cache(&root), cache(0.75));
+        assert_eq!(
+            crate::commands::file_names_in(cache_path(&root).parent().unwrap()),
+            ["policy.json"]
+        );
     }
 }

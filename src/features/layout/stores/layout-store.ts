@@ -11,10 +11,12 @@ import {
   WINDOW_TYPES,
   isDestinationOnly,
   isDualPlacement,
+  isSession,
   migrateTabType,
+  multiplicityOf,
   type DualPlacementType,
   type TabType,
-} from "@/lib/constants";
+} from "@/lib/tab-registry";
 import type { LayoutTemplate } from "../templates";
 
 export interface Tab {
@@ -155,7 +157,7 @@ interface LayoutActions {
     addTab: (tab: Tab, groupId?: string) => void;
     /** Open a session tab in the main column without showing it: focus, the
      *  column's active tab and any destination stay as they are. It mounts
-     *  hidden, as every session tab does (`PERSISTENT_TYPES`), so it can be
+     *  hidden, as every session tab does (its `persistent` mount policy), so it can be
      *  sent to (`askAgent`). A column with no tab yet shows it. */
     addBackgroundTab: (tab: Tab) => void;
     closeTab: (id: string) => void;
@@ -330,7 +332,7 @@ function reconcileGroups(s: LayoutState): void {
  * column has focus, so they need no exception.
  */
 function belongsInMain(type: TabType): boolean {
-  return type === "chat";
+  return isSession(type);
 }
 
 /** The surfaces column a tool should open in: the focused one when it is not
@@ -568,9 +570,10 @@ function enterDestination(s: LayoutState, tab: Tab): void {
     if (inColumn) removeColumnTab(s, inColumn.id);
     s.lastForm[tab.type] = "destination";
   }
-  const perConversation = tab.type === "spaces";
-  const same =
-    s.destination?.type === tab.type && (!perConversation || s.destination.id === tab.id);
+  // `one` reopens the open one in place; `per-id` (a Space, per
+  // conversation) is the same one only under the same id.
+  const perId = multiplicityOf(tab.type) === "per-id";
+  const same = s.destination?.type === tab.type && (!perId || s.destination.id === tab.id);
   s.destination = same
     ? { ...s.destination!, title: tab.title, data: tab.data }
     : { ...tab, groupId: undefined };
@@ -679,14 +682,13 @@ export const useLayoutStore = createSelectors(
                 if (s.destination?.type === tab.type) s.destination = null;
                 s.lastForm[tab.type] = "surface";
               }
-              // Source control and team chat are one per window, and Files one
-              // per project (these tabs are the project's), wherever the open
-              // one is.
-              if (
-                tab.type === "source-control" ||
-                tab.type === "files" ||
-                WINDOW_TYPES.has(tab.type)
-              ) {
+              // How many of this type the window holds, which is how the open
+              // one is found (`Multiplicity`, in the tab registry).
+              const multiplicity = multiplicityOf(tab.type);
+              // `one`: one in the window (source control, team chat) or the
+              // project (Files, these tabs being the project's), wherever the
+              // open one is.
+              if (multiplicity === "one") {
                 const open = s.tabs.find((t) => t.type === tab.type);
                 if (open) {
                   const grp = groupOf(open);
@@ -698,33 +700,11 @@ export const useLayoutStore = createSelectors(
                   return;
                 }
               }
-              // chat: each session is its own tab. File-backed viewers (editor /
-              // diff / media / svg / pdf / notebook / unsupported) are one-per-FILE (deduped
-              // by id, which is `${type}:${path}`) so opening a different file
-              // always gets its own tab. Everything else is a singleton PER COLUMN
-              // (focus the existing instance in the target column, else open one).
-              const allowMultiple =
-                tab.type === "editor" ||
-                tab.type === "diff" ||
-                // One per COMMIT (id is `commit:{repoPath}:{sha}`).
-                tab.type === "commit" ||
-                // One per AGENT SESSION (id is `session-changes:{sessionId}`).
-                tab.type === "session-changes" ||
-                // One per PULL REQUEST (id is `pull-request:{repoPath}:{number}`).
-                tab.type === "pull-request" ||
-                // One per REPOSITORY (id is `pull-requests:{repoPath}`).
-                tab.type === "pull-requests" ||
-                // One per SESSION (id is `session-pull-requests:{threadId}`).
-                tab.type === "session-pull-requests" ||
-                tab.type === "chat" ||
-                tab.type === "media" ||
-                tab.type === "svg" ||
-                tab.type === "pdf" ||
-                tab.type === "notebook" ||
-                // One per DRAFT (id is `comms-draft-{id}`): the singleton rule
-                // would focus draft A when asked to open draft B.
-                tab.type === "comms-draft" ||
-                tab.type === "unsupported";
+              // `per-id`: the id names what the tab shows (a session, a file,
+              // a commit, a draft), so another id is always another tab.
+              // `one-per-column`, and a first `one`: a singleton in the target
+              // column (focus the instance already there, else open one).
+              const allowMultiple = multiplicity === "per-id";
 
               let targetId = tab.id;
               // Where the tab lands: caller-specified column, else the focused one.

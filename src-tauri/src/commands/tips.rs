@@ -94,12 +94,8 @@ fn read(dir: &Path) -> Option<TipsState> {
 }
 
 fn write(dir: &Path, state: &TipsState) -> Result<(), String> {
-    fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let path = dir.join(FILE_NAME);
-    let tmp = path.with_extension("json.tmp");
     let payload = serde_json::to_string_pretty(state).map_err(|e| e.to_string())?;
-    fs::write(&tmp, payload).map_err(|e| e.to_string())?;
-    fs::rename(&tmp, &path).map_err(|e| e.to_string())
+    atlas_fs::replace_file(dir.join(FILE_NAME), payload).map_err(|e| e.to_string())
 }
 
 /// The state on disk, creating it (and fixing the cohort) the first time.

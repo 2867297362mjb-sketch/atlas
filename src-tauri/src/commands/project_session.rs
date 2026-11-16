@@ -22,11 +22,8 @@ pub async fn save_project_session(
     session_data: String,
 ) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
-        let atlas_dir = atlas_profile::dir_in(Path::new(&project_path));
-        fs::create_dir_all(&atlas_dir).map_err(|e| e.to_string())?;
-        let session_path = atlas_dir.join("session.json");
-        fs::write(&session_path, &session_data).map_err(|e| e.to_string())?;
-        Ok(())
+        let session_path = atlas_profile::dir_in(Path::new(&project_path)).join("session.json");
+        atlas_fs::replace_file(&session_path, &session_data).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -46,4 +43,30 @@ pub async fn load_project_session(project_path: String) -> Result<String, String
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// The file is the frontend's: Rust keeps the string it was handed and
+    /// gives the same bytes back, so nothing in it can be dropped or renamed
+    /// here. A project never saved answers `{}`.
+    #[tokio::test]
+    async fn a_session_is_returned_byte_for_byte_after_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().to_string_lossy().into_owned();
+        let saved = r#"{"version":3,"tabs":[{"id":"t1","kind":"chat"}],"unknown":{"kept":true}}"#;
+
+        tokio::time::timeout(Duration::from_secs(10), async {
+            assert_eq!(load_project_session(project.clone()).await.unwrap(), "{}");
+            save_project_session(project.clone(), saved.to_string())
+                .await
+                .unwrap();
+            assert_eq!(load_project_session(project).await.unwrap(), saved);
+        })
+        .await
+        .expect("the session commands did not finish");
+    }
 }

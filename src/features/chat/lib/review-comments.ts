@@ -22,9 +22,9 @@ import { useMemo } from "react";
 
 import { useChatStore } from "../stores/chat-store";
 import { cutText } from "./cited-text";
-import { COMMENT_LINK_EVENT, type CommentLinkDetail } from "./comment-mentions";
 import { mintedMention } from "./mention-registry";
 import type { MentionData, MentionReviewComment } from "./mentions";
+import { emitWindowEvent } from "@/lib/window-events";
 
 /** The longest comment a chip carries, as a cite's note is capped. */
 export const REVIEW_TEXT_MAX_CHARS = 2000;
@@ -32,10 +32,8 @@ export const REVIEW_TEXT_MAX_CHARS = 2000;
  *  the place, and it can read the file for more. A large paste's limit. */
 export const REVIEW_DIFF_MAX_CHARS = 4000;
 
-/** The window event that takes a review comment's chip back out of a
- *  session's composer (its annotation's delete). */
-export const REVIEW_UNLINK_EVENT = "atlas:chat-unlink-review-comment";
-
+/** `atlas:chat-unlink-review-comment`: takes a review comment's chip back
+ *  out of a session's composer (its annotation's delete). */
 export interface ReviewUnlinkDetail {
   tabId: string;
   id: string;
@@ -127,11 +125,11 @@ export function useComposerReviewComments(tabId: string | null): readonly Mentio
  * event handled, and the caller keeps the comment's box open.
  */
 export function linkReviewCommentToComposer(tabId: string, mention: MentionReviewComment): boolean {
-  const event = new CustomEvent<CommentLinkDetail>(COMMENT_LINK_EVENT, {
-    detail: { tabId, mention: capReviewComment(mention) },
-    cancelable: true,
-  });
-  return !window.dispatchEvent(event);
+  return !emitWindowEvent(
+    "atlas:chat-link-comment",
+    { tabId, mention: capReviewComment(mention) },
+    { cancelable: true },
+  );
 }
 
 /**
@@ -139,11 +137,12 @@ export function linkReviewCommentToComposer(tabId: string, mention: MentionRevie
  * that is not mounted cannot, so its draft loses the token instead.
  */
 export function unlinkReviewComment(tabId: string, id: string): void {
-  const event = new CustomEvent<ReviewUnlinkDetail>(REVIEW_UNLINK_EVENT, {
-    detail: { tabId, id },
-    cancelable: true,
-  });
-  if (!window.dispatchEvent(event)) return;
+  const heard = !emitWindowEvent(
+    "atlas:chat-unlink-review-comment",
+    { tabId, id },
+    { cancelable: true },
+  );
+  if (heard) return;
   const chat = useChatStore.getState();
   const draft = chat.drafts[tabId];
   if (!draft) return;

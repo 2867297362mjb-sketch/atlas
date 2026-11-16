@@ -14,6 +14,7 @@
 import { agents, listenAuthRunDone, type AuthRunDone } from "./agents-api";
 import { catalogEntry } from "@/features/agents/lib/agent-meta";
 import { logEvent } from "@/features/log/lib/log";
+import { emitWindowEvent } from "@/lib/window-events";
 
 /** A completion watcher armed BEFORE the login subprocess exists.
  *
@@ -292,8 +293,7 @@ function isNativeWithoutModels(agentType: string | undefined, err: unknown): boo
 // turn failures) can't render a dialog itself, so it dispatches this window
 // event; the app-level `AgentLoginDialogHost` owns the single dialog instance.
 
-export const AGENT_SIGNIN_EVENT = "atlas:agent-signin";
-
+/** Payload of `atlas:agent-signin`. */
 export interface AgentSignInRequest {
   agentType: string;
   requestId: number;
@@ -343,9 +343,5 @@ export function promptSignIn(
       onDismissed: opts.onDismissed,
     });
   }
-  window.dispatchEvent(
-    new CustomEvent<AgentSignInRequest>(AGENT_SIGNIN_EVENT, {
-      detail: { agentType, requestId, reason: opts?.reason },
-    }),
-  );
+  emitWindowEvent("atlas:agent-signin", { agentType, requestId, reason: opts?.reason });
 }

@@ -18,23 +18,21 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 
 import { useSessionComments } from "@/features/artifacts/lib/use-session-comments";
 import { useIsTabVisible } from "@/features/layout/lib/use-tab-visible";
+import { onCaptureChanged } from "@/features/capture/lib/capture-api";
 import { safeUnlistenPromise } from "@/lib/safe-unlisten";
 import { isBusyAgentStatus } from "@/types/agent";
 
 import { buildAnchorMap, structureKey, type AnchorEntry } from "../lib/comment-anchors";
 import { commentToMention, linkCommentToComposer } from "../lib/comment-mentions";
+import { chatCommentTarget, type CommentTarget } from "../lib/comment-target-api";
 import { projectPathForTab } from "../lib/tab-project";
-import { useChatCommentsStore, type CommentTargetIds } from "../stores/chat-comments-store";
+import { useChatCommentsStore } from "../stores/chat-comments-store";
 import { useChatStore } from "../stores/chat-store";
 
-export interface CommentTarget extends CommentTargetIds {
-  entries: AnchorEntry[];
-}
+export type { CommentTarget };
 
 /** Capture coalesces its own writes; this absorbs the board ticker's echo. */
 const CAPTURE_DEBOUNCE_MS = 300;
@@ -76,10 +74,7 @@ export function ChatCommentsController({ tabId }: { tabId: string }) {
       const sessionId = useChatStore.getState().sessions[tabId]?.acpSessionId;
       let next: CommentTarget | null = null;
       if (projectPath && sessionId) {
-        next = await invoke<CommentTarget | null>("chat_comment_target", {
-          projectPath,
-          nativeSessionId: sessionId,
-        }).catch(() => null);
+        next = await chatCommentTarget(projectPath, sessionId).catch(() => null);
       }
       const prev = targetRef.current;
       const same =
@@ -124,7 +119,7 @@ export function ChatCommentsController({ tabId }: { tabId: string }) {
   // pays the read; a hidden one catches up when it is shown.
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null;
-    const stop = listen("atlas:capture-changed", () => {
+    const stop = onCaptureChanged(() => {
       if (!visibleRef.current) return;
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => void resolve.current(), CAPTURE_DEBOUNCE_MS);

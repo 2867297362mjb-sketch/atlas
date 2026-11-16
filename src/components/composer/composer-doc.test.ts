@@ -12,8 +12,8 @@ import { Editor, type JSONContent } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import { TextSelection } from "@tiptap/pm/state";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => null) }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
 
 import { createChipNode, parseChipRecord } from "./composer-chip";
 import {

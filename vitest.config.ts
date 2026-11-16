@@ -12,6 +12,10 @@ export default defineConfig({
     },
   },
   test: {
+    // In the checkout, not the default `node_modules/.vitest-cache`: worktrees
+    // symlink one `node_modules`, so they all shared that directory, and two
+    // runs at once failed each other with ENOTEMPTY or ENOENT on it.
+    fsModuleCachePath: path.resolve(import.meta.dirname, ".vitest-cache"),
     // `node` by default: the contract tests read the repo off disk and the
     // API-seam tests only need a mocked `invoke`. Files that need a DOM opt in
     // per-file with `// @vitest-environment happy-dom`.

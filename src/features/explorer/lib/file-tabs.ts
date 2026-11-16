@@ -1,20 +1,5 @@
-// The tab types that show one file from disk. Each carries the file's
-// absolute path in `data.filePath`, sits in a file tab's frame
-// (`file-tab-frame.tsx`), and gets the column's docked tree beside it
-// (`file-dock.tsx`).
-
-const FILE_TAB_TYPES: ReadonlySet<string> = new Set([
-  "editor",
-  "media",
-  "svg",
-  "pdf",
-  "notebook",
-  "unsupported",
-]);
-
-export function isFileTab(type: string): boolean {
-  return FILE_TAB_TYPES.has(type);
-}
+// The docked tree beside a file tab. Which tab types are file tabs is a fact
+// of the tab registry (`isFileTab`, `fileTabPath` in `@/lib/tab-registry`).
 
 /**
  * The docked tree's width beside a file: 38% of the column, held between

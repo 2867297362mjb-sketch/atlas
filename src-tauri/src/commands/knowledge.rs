@@ -145,10 +145,7 @@ pub async fn save_knowledge_note(
     tokio::task::spawn_blocking(move || {
         let kb_dir = atlas_profile::dir_in(Path::new(&project_path)).join("knowledge");
         let filepath = kb_dir.join(format!("{id}.md"));
-        if let Some(parent) = filepath.parent() {
-            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        fs::write(&filepath, &content).map_err(|e| e.to_string())?;
+        atlas_fs::replace_file(&filepath, &content).map_err(|e| e.to_string())?;
         Ok(filepath.to_string_lossy().to_string())
     })
     .await
@@ -411,11 +408,8 @@ pub async fn log_interaction(
 #[tauri::command]
 pub async fn save_editor_state(project_path: String, state_json: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
-        let atlas_dir = atlas_profile::dir_in(Path::new(&project_path));
-        fs::create_dir_all(&atlas_dir).map_err(|e| e.to_string())?;
-        let state_path = atlas_dir.join("editor-state.json");
-        fs::write(&state_path, &state_json).map_err(|e| e.to_string())?;
-        Ok(())
+        let state_path = atlas_profile::dir_in(Path::new(&project_path)).join("editor-state.json");
+        atlas_fs::replace_file(&state_path, &state_json).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -745,6 +739,32 @@ mod sanitize_tests {
         for input in [r#"<p onclick="alert(1)"#, "<a href=", "<<<<", "</p></p>"] {
             let _ = sanitize_html(input, "https://example.com/");
         }
+    }
+}
+
+#[cfg(test)]
+mod editor_state_tests {
+    use super::{load_editor_state, save_editor_state};
+    use std::time::Duration;
+
+    /// The editor state is the frontend's: Rust keeps the string it was
+    /// handed and gives the same bytes back, so nothing in it can be dropped
+    /// or renamed here. A project never saved answers `{}`.
+    #[tokio::test]
+    async fn the_editor_state_is_returned_byte_for_byte_after_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().to_string_lossy().into_owned();
+        let saved = r#"{"tabs":[{"id":"t1","type":"file","path":"a.rs"}],"unknown":{"kept":true}}"#;
+
+        tokio::time::timeout(Duration::from_secs(10), async {
+            assert_eq!(load_editor_state(project.clone()).await.unwrap(), "{}");
+            save_editor_state(project.clone(), saved.to_string())
+                .await
+                .unwrap();
+            assert_eq!(load_editor_state(project).await.unwrap(), saved);
+        })
+        .await
+        .expect("the editor-state commands did not finish");
     }
 }
 

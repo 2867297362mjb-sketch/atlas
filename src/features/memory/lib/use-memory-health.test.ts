@@ -2,15 +2,12 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const invoke = vi.fn();
-const handlers = new Map<string, (e: { payload: unknown }) => void>();
-vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async (name: string, h: (e: { payload: unknown }) => void) => {
-    handlers.set(name, h);
-    return () => handlers.delete(name);
-  }),
-}));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
+import { tauri } from "@/test/tauri-fake";
+
+const invoke = tauri.invoke;
+const healthChanged = (cwd: string) => void tauri.emit("atlas:memory-health", { cwd });
 
 import { healthLine, useMemoryHealth, type HealthStatus } from "./use-memory-health";
 
@@ -23,8 +20,7 @@ const status = (checkedAt: number): HealthStatus => ({
 
 beforeEach(() => {
   vi.useFakeTimers();
-  invoke.mockReset();
-  handlers.clear();
+  tauri.reset();
 });
 afterEach(() => vi.useRealTimers());
 
@@ -38,9 +34,8 @@ describe("useMemoryHealth", () => {
     expect(result.current?.checkedAt).toBe(1);
     invoke.mockResolvedValue(status(2));
     await act(async () => {
-      for (let i = 0; i < 5; i++)
-        handlers.get("atlas:memory-health")?.({ payload: { cwd: "/repo" } });
-      handlers.get("atlas:memory-health")?.({ payload: { cwd: "/other" } });
+      for (let i = 0; i < 5; i++) healthChanged("/repo");
+      healthChanged("/other");
       await vi.advanceTimersByTimeAsync(300);
     });
     expect(invoke).toHaveBeenCalledTimes(2);

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 /** Thin IPC wrapper over `src-tauri/src/commands/tips.rs`. Only the tips
  *  store and First run call these. Every command also sends its onboarding
@@ -56,4 +57,9 @@ export function dismissGetStarted(): Promise<TipsState> {
  *  own keys, or "later" when the question was put off (Escape included). */
 export function reportFirstRunComplete(keymap: string): Promise<void> {
   return invoke("first_run_complete", { keymap });
+}
+
+/** Another window (or this one) wrote the tips record. */
+export function onTipsChanged(handler: (state: TipsState) => void): Promise<UnlistenFn> {
+  return listen<TipsState>(TIPS_CHANGED_EVENT, (event) => handler(event.payload));
 }

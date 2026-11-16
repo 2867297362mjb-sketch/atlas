@@ -66,10 +66,8 @@ use uuid::Uuid;
 ///
 /// The sink body is an ordered [`OutboundPipeline`] of small, independently
 /// testable middleware (window broadcast → analytics → capture → transcript →
-/// memory ingest) rather than one monolithic `emit`. The projector also
-/// publishes every delta to an in-process broadcast (`projector.subscribe()`)
-/// before reaching this sink, so a cloud streamer can tap the same stream
-/// without touching any of this.
+/// memory ingest) rather than one monolithic `emit`. An in-process consumer
+/// is a tap on the last stage, not a subscription beside the pipeline.
 pub struct TauriDeltaSink {
     inner: Arc<SinkInner>,
 }
@@ -106,9 +104,10 @@ impl TauriDeltaSink {
             .with(Arc::new(BroadcastMiddleware { app: app.clone() }))
             .with(Arc::new(AnalyticsMiddleware { app: app.clone() }))
             .with(Arc::new(KeepAwakeMiddleware { app: app.clone() }))
-            // Session capture lives here rather than on the event bus because
-            // the bus drops events for a lagging subscriber, and a dropped event
-            // is a turn missing from the permanent record. This stage only
+            // Session capture is a stage here rather than a subscriber to a
+            // broadcast because a broadcast drops events for a lagging
+            // subscriber, and a dropped event is a turn missing from the
+            // permanent record. This stage only
             // enqueues; all disk work happens on the capture worker thread.
             .with(Arc::new(super::capture::CaptureMiddleware {
                 app: app.clone(),
@@ -853,10 +852,13 @@ struct RequestElicitation {
 /// its start would be dropped. The quit path's grace covers the last writes.
 struct SharingGatedLifecycle {
     writes: std::sync::mpsc::Sender<LifecycleWrite>,
-    /// The memory tool server: its tokens are minted and revoked right here,
+    /// The tool server host: its tokens are minted and revoked right here,
     /// in memory, so a session's token exists as soon as its start is
-    /// reported; its per-session clock is dropped when the session ends.
-    server: Arc<super::memory_server::MemoryServerHost>,
+    /// reported.
+    server: Arc<super::tool_servers::ToolServerHost>,
+    /// The memory tool server's per-session clocks: a session's is dropped
+    /// when the session ends.
+    clocks: Arc<super::memory_server::SessionClocks>,
     /// Released here rather than from deltas: a session can end without a
     /// terminal status (sign-out, killing an agent, quitting).
     keep_awake: Option<Arc<crate::keep_awake::KeepAwakeManager>>,
@@ -878,7 +880,8 @@ enum LifecycleWrite {
 impl SharingGatedLifecycle {
     fn new(
         app: AppHandle,
-        server: Arc<super::memory_server::MemoryServerHost>,
+        server: Arc<super::tool_servers::ToolServerHost>,
+        clocks: Arc<super::memory_server::SessionClocks>,
         token_files: Arc<super::memory_bridge::TokenFiles>,
     ) -> Self {
         let keep_awake = app
@@ -939,6 +942,7 @@ impl SharingGatedLifecycle {
         Self {
             writes: tx,
             server,
+            clocks,
             keep_awake,
             sleep_watch,
         }
@@ -972,7 +976,7 @@ impl super::agent_host::SessionLifecycle for SharingGatedLifecycle {
         if let Some(sleep_watch) = &self.sleep_watch {
             sleep_watch.session_ended(session_id);
         }
-        self.server.clocks().forget(session_id);
+        self.clocks.forget(session_id);
         self.queue(LifecycleWrite::Ended {
             session_id: session_id.to_string(),
         });
@@ -1066,8 +1070,12 @@ pub fn install_manager(app: &AppHandle) {
             memory.inner().clone(),
             Arc::new(super::memory_extract::AppExtractionModel::new(app.clone())),
         )));
-        let server = Arc::new(super::memory_server::MemoryServerHost::new());
+        // The tool server host: one loopback listener and one token per
+        // session for Atlas's four tool servers, each registered below as a
+        // tenant.
+        let server = Arc::new(super::tool_servers::ToolServerHost::new());
         app.manage(server.clone());
+        let memory_clocks = Arc::new(super::memory_server::SessionClocks::default());
         // An ACP agent's bridge reads its token from a private file here:
         // never from its entry, which may land on a command line (ADR-0020).
         // A bound session's file goes when the session ends; ended launches'
@@ -1082,6 +1090,7 @@ pub fn install_manager(app: &AppHandle) {
         host.set_session_lifecycle(Arc::new(SharingGatedLifecycle::new(
             app.clone(),
             server.clone(),
+            memory_clocks.clone(),
             token_files.clone(),
         )));
         let gate_app = app.clone();
@@ -1108,9 +1117,9 @@ pub fn install_manager(app: &AppHandle) {
             super::project_settings::effective_settings_for(&nav_app, std::path::Path::new(cwd))
                 .is_some_and(|settings| settings.agent_ui_navigation)
         });
-        let ui_router = super::ui_server::router(super::ui_server::UiTools::new(
+        let ui = super::ui_server::tenant(super::ui_server::UiTools::new(
             ui_bridge.clone(),
-            navigation.clone(),
+            navigation,
         ));
         // The organisation tool server (ADR-0014): calls act in the
         // organisation the session's Project is bound to, through the clients
@@ -1131,8 +1140,8 @@ pub fn install_manager(app: &AppHandle) {
             Arc::new(super::org_server::AppSessionOrgs::new(app.clone()));
         let org_tools = super::org_server::OrgTools::new(
             Arc::new(super::org_server::AppOrganisationCloud::new(app.clone())),
-            org_access.clone(),
-            session_orgs.clone(),
+            org_access,
+            session_orgs,
         )
         .with_audit(Arc::new(
             move |record: &super::org_server::OrgActionRecord| {
@@ -1142,9 +1151,12 @@ pub fn install_manager(app: &AppHandle) {
         // Drawing on a Space page crosses to the window: the page's codec
         // lives in the frontend.
         .with_window(ui_bridge);
-        let org_router = super::org_server::router(org_tools.clone());
+        // The same tools describe an outward call on the approval card —
+        // whom it reaches, and the full body — and keep the user's approval
+        // of it, which the call checks (ADR-0014).
+        let org = super::org_server::tenant(org_tools);
         // The code tool server (ADR-0015): grep and find_files over the
-        // session's directory, for every agent that speaks HTTP MCP. Its
+        // session's directory, for every agent. Its
         // setting is read on every offer and every call, like the two
         // above; the shared-memory toggle does not gate it.
         let code_app = app.clone();
@@ -1158,8 +1170,8 @@ pub fn install_manager(app: &AppHandle) {
         // `request_project_access` rides the same server: every agent that
         // gets the code tools can ask for a folder, and the host puts the
         // request on the session's approval card.
-        let code_router = super::code_server::router(
-            super::code_server::CodeTools::new(code_tools.clone())
+        let code = super::code_server::tenant(
+            super::code_server::CodeTools::new(code_tools)
                 .with_access(Arc::new(super::session_projects::HostAccessBroker(
                     Arc::downgrade(&host),
                 )))
@@ -1177,24 +1189,14 @@ pub fn install_manager(app: &AppHandle) {
                     },
                 )),
         );
-        // Every agent that can take the server is handed it on each session
-        // request, with a token of its own. It is the only way memory reaches
-        // an agent (ADR-0010): nothing is prepended to a prompt. A connection
-        // that carries UI control is also handed the UI tool server, and one
-        // that carries organisation access the organisation tool server, all
-        // on the same token.
+        // Every session request is handed the tenants it may use, on one
+        // token of its own: memory and code for every agent, the UI tool
+        // server for a connection that carries UI control, the organisation
+        // tool server for one that carries organisation access. It is the
+        // only way memory reaches an agent (ADR-0010): nothing is prepended
+        // to a prompt.
         host.set_session_mcp(Arc::new(
-            super::memory_server::MemorySessionOffers::new(server.clone(), gate.clone())
-                .with_ui(super::ui_server::UiOffer::new(navigation))
-                // The same tools describe an outward call on the approval
-                // card — whom it reaches, and the full body — and keep the
-                // user's approval of it, which the call checks (ADR-0014).
-                .with_org(
-                    super::org_server::OrgOffer::new(org_access, session_orgs)
-                        .describing_with(org_tools),
-                )
-                .with_code(super::code_server::CodeOffer::new(code_tools))
-                .with_token_files(token_files),
+            super::tool_servers::SessionOffers::new(server.clone()).with_token_files(token_files),
         ));
         // `memory_search` also answers from the project's indexed documents.
         let index_app = app.clone();
@@ -1242,9 +1244,11 @@ pub fn install_manager(app: &AppHandle) {
                 cites.iter().map(|c| cache.check(c, &resolver)).collect()
             },
         );
-        server.start(
+        let memory_tools = super::memory_server::MemoryTools::new(
             memory.inner().clone(),
             gate,
+            memory_clocks,
+            Arc::new(super::memory_server::SessionReads::default()),
             super::memory_server::Sources {
                 index: Some(index),
                 bootstrap: Some(bootstrap),
@@ -1257,8 +1261,14 @@ pub fn install_manager(app: &AppHandle) {
                 },
                 check: Some(check),
             },
-            vec![ui_router, org_router, code_router],
         );
+        // In the order a session's entries are offered.
+        server.start(vec![
+            super::memory_server::tenant(memory_tools),
+            ui,
+            org,
+            code,
+        ]);
     }
 
     // Connect-phase events the webview needs but no delta carries: the install

@@ -38,11 +38,10 @@ use uuid::Uuid;
 
 /// The contract, as this test asserts it.
 ///
-/// Written out here rather than only in the document because the document is
-/// not in the repository (and `docs/agents/*.md` is git-ignored), so a check
-/// that only read the file would silently pass in CI, which is the one place
-/// it has to hold. [`the_contract_doc_says_the_same_thing`] cross-checks this
-/// against the document; it is `#[ignore]`d until the document exists.
+/// Written out here and nowhere else: this file is the authority. A prose
+/// copy (`docs/agents/delta-wire-contract.md`) was once cited as one, but it
+/// was a git-ignored working note that never reached the repository, and the
+/// test that compared this table with it could only ever run ignored.
 fn expected() -> BTreeMap<String, BTreeSet<String>> {
     [
         ("status", &["status", "turn_seq"][..]),
@@ -146,58 +145,6 @@ fn contract_kind(delta: &SessionDelta) -> &'static str {
         SessionDelta::QueueChanged { .. } => "queue_changed",
         SessionDelta::HoldChanged { .. } => "hold_changed",
     }
-}
-
-/// Where a prose version of the contract would live. It was once cited as the
-/// authority, but is a git-ignored working note, not in the repository.
-const CONTRACT_DOC: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../docs/agents/delta-wire-contract.md"
-);
-
-/// The same table, read out of the contract doc — `None` when the doc is
-/// absent (see [`CONTRACT_DOC`]).
-fn documented() -> Option<BTreeMap<String, BTreeSet<String>>> {
-    let doc = std::fs::read_to_string(CONTRACT_DOC).ok()?;
-
-    // The variant table is the run of table rows after its heading.
-    let body = doc
-        .split("## Rust `SessionDelta`")
-        .nth(1)
-        .expect("the variant table's heading");
-    let table: Vec<&str> = body
-        .lines()
-        .skip_while(|line| !line.starts_with('|'))
-        .take_while(|line| line.starts_with('|'))
-        .collect();
-    assert!(
-        table.len() > 20,
-        "the variant table did not parse: {} rows",
-        table.len()
-    );
-
-    let mut out = BTreeMap::new();
-    for line in table {
-        let cells: Vec<&str> = line.split('|').map(str::trim).collect();
-        // `| kind | fields | notes |` → ["", kind, fields, notes, ""]
-        if cells.len() < 4 {
-            continue;
-        }
-        let kind = cells[1].trim_matches('`');
-        if kind.is_empty() || kind == "`kind`" || kind.starts_with("---") || kind == "kind" {
-            continue;
-        }
-        let fields = cells[2]
-            .split(',')
-            .filter_map(|field| {
-                let field = field.trim().trim_matches('`');
-                let name = field.split(':').next()?.trim().trim_matches('`');
-                (!name.is_empty()).then(|| name.to_string())
-            })
-            .collect::<BTreeSet<String>>();
-        out.insert(kind.to_string(), fields);
-    }
-    Some(out)
 }
 
 /// One sample of every variant, with every skippable field present so the
@@ -743,25 +690,6 @@ fn every_variant_serializes_to_its_golden_json() {
             "`{kind}` changed on the wire (names, value types or shape)"
         );
     }
-}
-
-/// The document and this test are the same contract, said twice.
-///
-/// Ignored by default, loudly: `docs/agents/delta-wire-contract.md` is a
-/// git-ignored working note that does not exist in the repository, so there is
-/// nothing to compare against. The earlier version returned early when the
-/// file was missing, which read as a pass. Once the doc is checked in, drop
-/// the `#[ignore]`; `cargo test -- --ignored` runs it meanwhile, and fails
-/// rather than skips if the doc is still absent.
-#[test]
-#[ignore = "docs/agents/delta-wire-contract.md is not in the repository; nothing to compare"]
-fn the_contract_doc_says_the_same_thing() {
-    let documented = documented().unwrap_or_else(|| panic!("{CONTRACT_DOC} does not exist"));
-    assert_eq!(
-        documented,
-        expected(),
-        "docs/agents/delta-wire-contract.md and this test disagree"
-    );
 }
 
 #[test]

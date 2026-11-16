@@ -1,14 +1,17 @@
-//! The single git spawn chokepoint — every git subprocess in Atlas should go
-//! through [`GitCommand`]. It provides:
-//! per-call success-exit-code contracts, stderr→typed-error parsing on
-//! failure, and a streaming variant that feeds hook/progress output line by
-//! line while retaining a bounded tail for error context.
+//! The single git spawn chokepoint: every git subprocess in Atlas goes
+//! through [`GitCommand`] (`tests/spawn_audit.rs` fails on one that does
+//! not). It provides one environment with prompts off, per-call
+//! success-exit-code contracts, stderr→typed-error parsing on failure, a raw
+//! variant for callers that read the exit code or binary output themselves,
+//! and a streaming variant that feeds hook/progress output line by line
+//! while retaining a bounded tail for error context.
 //!
 //! Always the REAL git binary: hooks, credential helpers, LFS filters and
 //! user config all behave exactly as in a terminal.
 
 use crate::error::{self, GitErrorPayload};
 use std::collections::HashSet;
+use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -32,6 +35,79 @@ pub struct GitOutput {
     pub exit_code: i32,
     pub stdout: String,
     pub stderr: String,
+}
+
+/// A git process that ran to its exit, whatever the exit was: what
+/// [`GitCommand::output`] returns. Bytes, because a blob or a patch is not
+/// always text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitRawOutput {
+    /// `None` when a signal ended it.
+    pub exit_code: Option<i32>,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
+impl GitRawOutput {
+    pub fn success(&self) -> bool {
+        self.exit_code == Some(0)
+    }
+
+    pub fn stdout_text(&self) -> String {
+        String::from_utf8_lossy(&self.stdout).into_owned()
+    }
+
+    pub fn stderr_text(&self) -> String {
+        String::from_utf8_lossy(&self.stderr).into_owned()
+    }
+}
+
+/// What [`GitCommand::stdout_capped`] read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CappedStdout {
+    /// At most one byte more than the cap; the caller trims to a boundary
+    /// that means something to it (a file header, a line).
+    pub bytes: Vec<u8>,
+    /// The cap cut the output short and git was killed.
+    pub truncated: bool,
+    /// Whether git exited 0. Unknowable once killed, so `true` then.
+    pub success: bool,
+}
+
+/// Why a git run has no output at all: no process ran to its end.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GitRunError {
+    /// The binary could not be started because it is not there.
+    NotInstalled,
+    /// Killed after [`GitCommand::timeout`] passed.
+    TimedOut { command: String, limit: Duration },
+    /// The spawn or the wait failed for any other reason.
+    Failed(String),
+}
+
+impl std::fmt::Display for GitRunError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GitRunError::NotInstalled => {
+                f.write_str("git was not found on this system. Install git and try again.")
+            }
+            GitRunError::TimedOut { command, limit } => {
+                write!(f, "{command} timed out after {}s", limit.as_secs())
+            }
+            GitRunError::Failed(message) => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for GitRunError {}
+
+impl From<GitRunError> for GitErrorPayload {
+    fn from(e: GitRunError) -> Self {
+        match e {
+            GitRunError::TimedOut { command, limit } => timed_out(&command, limit),
+            other => GitErrorPayload::internal(other.to_string()),
+        }
+    }
 }
 
 /// Keep only the newest `cap` bytes of streamed output (whole lines) — the
@@ -58,8 +134,9 @@ fn push_capped(buf: &mut String, line: &str) {
 /// A single git invocation. Build with [`GitCommand::new`], chain options,
 /// then call [`run`](Self::run) or [`run_streaming`](Self::run_streaming).
 pub struct GitCommand {
-    cwd: PathBuf,
-    args: Vec<String>,
+    program: OsString,
+    cwd: Option<PathBuf>,
+    args: Vec<OsString>,
     envs: Vec<(String, String)>,
     success_exit_codes: HashSet<i32>,
     stdin: Option<Vec<u8>>,
@@ -69,9 +146,17 @@ pub struct GitCommand {
 
 impl GitCommand {
     pub fn new(cwd: impl Into<PathBuf>, args: &[&str]) -> Self {
+        Self::new_owned(
+            cwd,
+            args.iter().map(std::string::ToString::to_string).collect(),
+        )
+    }
+
+    pub fn new_owned(cwd: impl Into<PathBuf>, args: Vec<String>) -> Self {
         GitCommand {
-            cwd: cwd.into(),
-            args: args.iter().map(std::string::ToString::to_string).collect(),
+            program: "git".into(),
+            cwd: Some(cwd.into()),
+            args: args.into_iter().map(OsString::from).collect(),
             envs: Vec::new(),
             success_exit_codes: HashSet::from([0]),
             stdin: None,
@@ -80,16 +165,34 @@ impl GitCommand {
         }
     }
 
-    pub fn new_owned(cwd: impl Into<PathBuf>, args: Vec<String>) -> Self {
-        GitCommand {
-            cwd: cwd.into(),
-            args,
-            envs: Vec::new(),
-            success_exit_codes: HashSet::from([0]),
-            stdin: None,
-            read_only: false,
-            timeout: None,
-        }
+    /// A git that is not about any repository (`clone`, `ls-remote <url>`,
+    /// `--version`): it runs in the process's own directory.
+    pub fn without_repo(args: &[&str]) -> Self {
+        let mut cmd = Self::new(PathBuf::new(), args);
+        cmd.cwd = None;
+        cmd
+    }
+
+    /// Test seam: run another program in place of `git`. A parameter rather
+    /// than an environment variable or a `PATH` trick, so nothing outside
+    /// the call can redirect a real run.
+    pub fn program(mut self, program: impl Into<OsString>) -> Self {
+        self.program = program.into();
+        self
+    }
+
+    /// One more argument. Takes a path as it is, so a file name that is not
+    /// UTF-8 reaches git intact.
+    pub fn arg(mut self, arg: impl Into<OsString>) -> Self {
+        self.args.push(arg.into());
+        self
+    }
+
+    /// More arguments, after the ones already given.
+    pub fn args<S: AsRef<std::ffi::OsStr>>(mut self, args: &[S]) -> Self {
+        self.args
+            .extend(args.iter().map(|a| a.as_ref().to_os_string()));
+        self
     }
 
     /// Mark as a read query: prepends `--no-optional-locks` so background
@@ -137,7 +240,8 @@ impl GitCommand {
         self
     }
 
-    /// Kill git if it hasn't exited after `limit` ([`run`](Self::run) only).
+    /// Kill git if it hasn't exited after `limit` ([`run`](Self::run) and
+    /// [`output`](Self::output); a streaming run has none).
     /// For unattended network ops: a remote that never answers otherwise
     /// holds the calling thread for as long as TCP takes to give up, which
     /// can be minutes. Expiry is a `NetworkError`.
@@ -150,25 +254,30 @@ impl GitCommand {
     fn display(&self) -> String {
         let mut s = String::from("git");
         for a in &self.args {
+            let a = a.to_string_lossy();
             s.push(' ');
-            // Keep messages readable — elide long stdin-ish args.
-            if a.len() > 60 {
-                s.push_str(&a[..57]);
-                s.push('…');
-            } else {
-                s.push_str(a);
+            // Keep messages readable — elide long stdin-ish args. Cut on a
+            // character boundary: an argument can be a path in any script.
+            match a.char_indices().nth(57) {
+                Some((cut, _)) if a.len() > 60 => {
+                    s.push_str(&a[..cut]);
+                    s.push('…');
+                }
+                _ => s.push_str(&a),
             }
         }
         s
     }
 
     fn command(&self) -> Command {
-        let mut cmd = atlas_process::command("git");
+        let mut cmd = atlas_process::command(&self.program);
         if self.read_only {
             cmd.arg("--no-optional-locks");
         }
+        if let Some(cwd) = &self.cwd {
+            cmd.current_dir(cwd);
+        }
         cmd.args(&self.args)
-            .current_dir(&self.cwd)
             // Never hang on a credential prompt — fail fast and let the UI
             // route the typed AuthFailed error instead.
             .env("GIT_TERMINAL_PROMPT", "0")
@@ -185,6 +294,32 @@ impl GitCommand {
     /// Buffered run. `Ok` when the exit code is in `success_exit_codes`,
     /// otherwise a typed [`GitErrorPayload`] classified from stderr/stdout.
     pub fn run(self) -> Result<GitOutput, GitErrorPayload> {
+        let display = self.display();
+        let success_exit_codes = self.success_exit_codes.clone();
+        let out = self.output()?;
+        let exit_code = out.exit_code.unwrap_or(-1);
+        let stdout = out.stdout_text();
+        let stderr = out.stderr_text();
+        if success_exit_codes.contains(&exit_code) {
+            Ok(GitOutput {
+                exit_code,
+                stdout,
+                stderr,
+            })
+        } else {
+            Err(error::payload(display, out.exit_code, &stderr, &stdout))
+        }
+    }
+
+    /// Run to exit and return what git printed, as bytes, whatever the exit
+    /// code: for a caller whose exit code is an answer (`merge-base
+    /// --is-ancestor`, `diff --no-index`), who reads binary output (a blob),
+    /// or who words its own failure. Nothing is classified;
+    /// [`success_codes`](Self::success_codes) does not apply.
+    ///
+    /// `Err` means no process ran to its end: no binary, a failed spawn, or
+    /// the [`timeout`](Self::timeout).
+    pub fn output(self) -> Result<GitRawOutput, GitRunError> {
         let display = self.display();
         let mut cmd = self.command();
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
@@ -209,28 +344,67 @@ impl GitCommand {
             None => child.wait_with_output(),
             Some(limit) => match wait_with_deadline(child, limit) {
                 Ok(Some(out)) => Ok(out),
-                Ok(None) => return Err(timed_out(&display, limit)),
+                Ok(None) => {
+                    return Err(GitRunError::TimedOut {
+                        command: display,
+                        limit,
+                    })
+                }
                 Err(e) => Err(e),
             },
         }
-        .map_err(|e| GitErrorPayload::internal(format!("{display}: {e}")))?;
+        .map_err(|e| GitRunError::Failed(format!("{display}: {e}")))?;
         if let Some(t) = stdin_thread {
             let _ = t.join();
         }
+        Ok(GitRawOutput {
+            exit_code: out.status.code(),
+            stdout: out.stdout,
+            stderr: out.stderr,
+        })
+    }
 
-        let exit_code = out.status.code().unwrap_or(-1);
-        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-
-        if self.success_exit_codes.contains(&exit_code) {
-            Ok(GitOutput {
-                exit_code,
-                stdout,
-                stderr,
-            })
-        } else {
-            Err(error::payload(display, out.status.code(), &stderr, &stdout))
+    /// Run and keep at most `cap` bytes of stdout. Past the cap git is killed
+    /// rather than drained: a 50 MB patch should cost `cap` bytes of reading.
+    /// stderr is discarded, and stdin and the timeout are not used.
+    pub fn stdout_capped(self, cap: usize) -> Result<CappedStdout, GitRunError> {
+        use std::io::Read;
+        let display = self.display();
+        let mut child = self
+            .command()
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .stdin(Stdio::null())
+            .spawn()
+            .map_err(|e| spawn_error(&display, &e))?;
+        let mut bytes = Vec::new();
+        let Some(mut stdout) = child.stdout.take() else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(GitRunError::Failed(format!("{display}: no stdout pipe")));
+        };
+        // One byte past the cap tells "exactly cap" from "more than cap".
+        let read = (&mut stdout).take(cap as u64 + 1).read_to_end(&mut bytes);
+        drop(stdout);
+        // Reaped on every path: a read error must not leave a zombie behind.
+        if read.is_err() || bytes.len() > cap {
+            let _ = child.kill();
+            let _ = child.wait();
+            read.map_err(|e| GitRunError::Failed(format!("{display}: {e}")))?;
+            return Ok(CappedStdout {
+                bytes,
+                truncated: true,
+                success: true,
+            });
         }
+        let status = child
+            .wait()
+            .map_err(|e| GitRunError::Failed(format!("{display}: {e}")))?;
+        Ok(CappedStdout {
+            bytes,
+            truncated: false,
+            success: status.success(),
+        })
     }
 
     /// Streaming run: stdout/stderr are read line by line and forwarded to
@@ -360,6 +534,18 @@ impl GitCommand {
     }
 }
 
+/// Clone the tip of `url`'s default branch into `dest`: one commit, no tags,
+/// and no LFS downloads. For a copy that is read and never worked in (a
+/// skill pack, a reference repository). The run's own answer is returned so
+/// each caller words its failure.
+pub fn shallow_clone(url: &str, dest: &std::path::Path) -> Result<GitRawOutput, GitRunError> {
+    // `--` so neither the URL nor the path can ever parse as a flag.
+    GitCommand::without_repo(&["clone", "--depth", "1", "--no-tags", "--", url])
+        .arg(dest)
+        .env("GIT_LFS_SKIP_SMUDGE", "1")
+        .output()
+}
+
 /// How long [`GitCommand::run_streaming`] keeps reading after git exits.
 const STREAM_DRAIN_GRACE: Duration = Duration::from_millis(500);
 
@@ -426,11 +612,11 @@ fn timed_out(display: &str, limit: Duration) -> GitErrorPayload {
     }
 }
 
-fn spawn_error(display: &str, e: &std::io::Error) -> GitErrorPayload {
+fn spawn_error(display: &str, e: &std::io::Error) -> GitRunError {
     if e.kind() == std::io::ErrorKind::NotFound {
-        GitErrorPayload::internal("git was not found on this system. Install git and try again.")
+        GitRunError::NotInstalled
     } else {
-        GitErrorPayload::internal(format!("failed to start {display}: {e}"))
+        GitRunError::Failed(format!("failed to start {display}: {e}"))
     }
 }
 

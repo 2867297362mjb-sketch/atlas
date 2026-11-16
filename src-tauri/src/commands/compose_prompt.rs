@@ -827,7 +827,7 @@ fn render_comment_block(
 /// its body, stripping a leading `---` frontmatter block. The frontend
 /// normally pre-fills the already-parsed body, so this is only the fallback
 /// path; it intentionally mirrors the minimal frontmatter handling in
-/// `commands::skills::parse_frontmatter` without depending on it.
+/// `atlas-skills`' `parse_frontmatter` without depending on it.
 fn read_component_body(path: &str) -> String {
     let Ok(raw) = std::fs::read_to_string(path) else {
         return "(unable to read component)".to_string();
@@ -849,7 +849,7 @@ fn describe_lead(file_path: &str) -> String {
 
 /// Extract the single-line `description:` frontmatter field (quotes trimmed).
 /// Empty when there's no frontmatter or no such field. Mirrors the minimal
-/// handling in `strip_frontmatter` without depending on `commands::skills`.
+/// handling in `strip_frontmatter` without depending on `atlas-skills`.
 fn frontmatter_description(raw: &str) -> String {
     let trimmed = raw.strip_prefix('\u{feff}').unwrap_or(raw);
     let mut lines = trimmed.lines();

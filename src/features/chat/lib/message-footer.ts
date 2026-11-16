@@ -37,7 +37,7 @@ export interface MessageFooterActions {
 export function userFooterActions({
   canRetry,
 }: {
-  /** The session's last prompt on an agent that can rewind (`retry-gate.ts`). */
+  /** The session's last prompt on an agent that can rewind (`send-gate.ts`). */
   canRetry: boolean;
 }): MessageFooterActions {
   return {

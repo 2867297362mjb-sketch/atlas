@@ -1,7 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { walk } from "./support/walk";
+import { expectFloor } from "./support/floor";
+import {
+  DYNAMIC_INVOKE_SITES,
+  INVOKE_DYNAMIC,
+  INVOKE_LITERAL,
+  declaredCommands,
+  registeredCommands,
+  rustCommandFiles,
+  stripTsComments,
+} from "./support/ipc";
 
 /**
  * Guards the Tauri IPC contract: ~350 `#[tauri::command]` handlers on the Rust
@@ -19,12 +30,12 @@ import { fileURLToPath } from "node:url";
  * checked-in generated file. This test costs milliseconds and no build.
  *
  * If you add a command, nothing here needs updating — the sets are derived.
+ * The parsers themselves are in `tests/support/ipc.ts`, shared with
+ * `mock-backend-contract.test.ts`.
  */
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const RUST_SRC = path.join(REPO_ROOT, "src-tauri", "src");
 const TS_SRC = path.join(REPO_ROOT, "src");
-const LIB_RS = path.join(RUST_SRC, "lib.rs");
 
 /**
  * Floors that make a vacuous pass impossible.
@@ -32,143 +43,20 @@ const LIB_RS = path.join(RUST_SRC, "lib.rs");
  * The failure mode this defends against: someone reformats `lib.rs`, a regex
  * below stops matching, every derived set comes back empty, and the equality
  * assertions pass trivially — leaving a green test that guards nothing,
- * possibly for years. These numbers are deliberately well under the real
- * counts at the time of writing (350 declared / 345 registered / 316 invoked);
- * they are a smoke alarm for "the parser broke", not a coverage target, so
- * they should only ever be raised if a parser rewrite needs a tighter alarm.
+ * possibly for years. These numbers are deliberately a little under the real
+ * counts; they are a smoke alarm for "the parser broke", not a coverage
+ * target, so they should only ever be raised if a parser rewrite needs a
+ * tighter alarm.
  */
-const MIN_DECLARED = 250;
-const MIN_REGISTERED = 250;
-const MIN_INVOKED = 200;
+const MIN_RUST_FILES = 170;
+const MIN_TS_FILES = 1800;
+const MIN_DECLARED = 500;
+const MIN_REGISTERED = 500;
+const MIN_INVOKED = 500;
 
 /** Repo-relative with forward slashes whatever the OS, so paths compare
  *  against the hand-written tables below on Windows too. */
 const posixRelative = (file: string) => path.relative(REPO_ROOT, file).split(path.sep).join("/");
-
-function walk(dir: string, extensions: string[]): string[] {
-  const out: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    // `target/` holds vendored dependency sources — walking it would pull in
-    // every `#[tauri::command]` in every crate we depend on.
-    if (entry.name === "target" || entry.name === "node_modules") continue;
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...walk(full, extensions));
-    else if (extensions.some((e) => entry.name.endsWith(e))) out.push(full);
-  }
-  return out;
-}
-
-/**
- * Command handlers as *declared*: every `fn` carrying `#[tauri::command]`.
- *
- * The attribute must start its own line. `skills.rs` cites `#[tauri::command]`
- * inside a `//!` module doc comment, and matching that occurrence sent the
- * scan past it to the next unrelated `fn` (an `impl Default`), inventing a
- * command called `default`.
- *
- * Taking the *next* `fn` after the attribute, rather than one regex spanning
- * both, tolerates additional attributes stacked between the two — a
- * fixed-lookahead pattern would silently skip those handlers.
- */
-function declaredCommands(): Map<string, string[]> {
-  const found = new Map<string, string[]>();
-  // `(async)` and other attribute arguments count: `#[tauri::command(async)]`
-  // moves a sync handler off the main thread and is still a command.
-  const attribute = /^[ \t]*#\[tauri::command(\([^)]*\))?\]/gm;
-  for (const file of walk(RUST_SRC, [".rs"])) {
-    const src = readFileSync(file, "utf8");
-    for (const attr of src.matchAll(attribute)) {
-      const match = src.slice(attr.index + attr[0].length).match(/\bfn\s+([a-z_][a-z0-9_]*)/i);
-      if (!match) continue;
-      const name = match[1];
-      const where = posixRelative(file);
-      found.set(name, [...(found.get(name) ?? []), where]);
-    }
-  }
-  return found;
-}
-
-/** Command handlers as *registered* in `tauri::generate_handler![...]`. */
-function registeredCommands(): string[] {
-  const src = readFileSync(LIB_RS, "utf8");
-  const start = src.indexOf("generate_handler![");
-  if (start === -1) throw new Error("no generate_handler! block found in lib.rs");
-
-  // Scan bracket depth from the macro's `[` so a nested `[...]` inside the
-  // list can never end the block early.
-  const open = src.indexOf("[", start);
-  let depth = 0;
-  let end = -1;
-  for (let i = open; i < src.length; i++) {
-    if (src[i] === "[") depth++;
-    else if (src[i] === "]" && --depth === 0) {
-      end = i;
-      break;
-    }
-  }
-  if (end === -1) throw new Error("unterminated generate_handler! block in lib.rs");
-
-  return src
-    .slice(open + 1, end)
-    .split(",")
-    .map((entry) => entry.replace(/\/\/.*$/gm, "").trim())
-    .filter(Boolean)
-    .map((entry) => entry.split("::").pop()!);
-}
-
-/**
- * Comments are removed before scanning, for the same reason as on the Rust
- * side: prose citing a command name should not be able to assert that it
- * exists. `//` only opens a comment when it isn't the tail of `https://`-style
- * text inside a string (the `[^:]` guard); that is imprecise but errs toward
- * keeping code, never toward keeping a comment.
- */
-function stripTsComments(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:\\])\/\/.*$/gm, "$1");
-}
-
-/**
- * The optional type argument between `invoke` and `(`. Balanced angle
- * brackets up to four levels deep — `invoke<Record<string, Array<X>>>("…")` —
- * and `=>` inside a function type doesn't count as a closing bracket. The old
- * `<[^>]*>` stopped at the first `>`, so every call with a nested generic
- * (`models_pricing_get`, `capture_screenshot`, …) went unchecked.
- */
-const TYPE_ARG = (() => {
-  const atom = "(?:=>|[^<>])";
-  let level = `<${atom}*>`;
-  for (let i = 0; i < 3; i++) level = `<(?:${atom}|${level})*>`;
-  return level;
-})();
-
-/** `invoke<…>("name"` — the name may sit on the line after the `(`. */
-const INVOKE_LITERAL = new RegExp(
-  `\\binvoke\\s*(?:${TYPE_ARG})?\\s*\\(\\s*["'\`]([a-zA-Z0-9_]+)["'\`]`,
-  "g",
-);
-
-/** `invoke<…>(someVariable` — a command name this scan cannot read. */
-const INVOKE_DYNAMIC = new RegExp(
-  `\\binvoke\\s*(?:${TYPE_ARG})?\\s*\\(\\s*([A-Za-z_$][\\w$]*)\\s*[,)]`,
-  "g",
-);
-
-/**
- * The call sites that pass `invoke` a variable, with the literal command
- * names that flow into that variable in the same file. A literal scan can't
- * follow data flow, so each site is listed by hand; the tests below check
- * that the list is complete (a new dynamic site fails until it's added
- * here), that each literal still appears in its file, and that each is
- * registered.
- */
-const DYNAMIC_INVOKE_SITES: Record<string, string[]> = {
-  // `runHunkOp(cmd, …)` → `invoke(cmd, …)`
-  "src/features/git/components/git-manager/changes-view.tsx": [
-    "git_stage_hunk",
-    "git_unstage_hunk",
-    "git_discard_hunk",
-  ],
-};
 
 function frontendFiles(): Array<{ where: string; src: string }> {
   return walk(TS_SRC, [".ts", ".tsx"]).map((file) => ({
@@ -240,16 +128,21 @@ describe("tauri IPC contract", () => {
 
   // These three run first so that a broken parser reports itself as a broken
   // parser, rather than as a confusing "0 commands differ" pass.
+  it("reads a plausible number of files on both sides", () => {
+    expectFloor("Rust files under src-tauri/src", rustCommandFiles().length, MIN_RUST_FILES);
+    expectFloor("TypeScript files under src/", frontendFiles().length, MIN_TS_FILES);
+  });
+
   it("parses a plausible number of declared commands", () => {
-    expect(declared.size).toBeGreaterThan(MIN_DECLARED);
+    expectFloor("#[tauri::command] handlers in src-tauri/src", declared.size, MIN_DECLARED);
   });
 
   it("parses a plausible number of registered commands", () => {
-    expect(registered.length).toBeGreaterThan(MIN_REGISTERED);
+    expectFloor("commands in generate_handler![] in lib.rs", registered.length, MIN_REGISTERED);
   });
 
   it("parses a plausible number of invoked commands", () => {
-    expect(invoked.size).toBeGreaterThan(MIN_INVOKED);
+    expectFloor('invoke("name") literals under src/', invoked.size, MIN_INVOKED);
   });
 
   it("registers every command name exactly once", () => {
@@ -318,6 +211,7 @@ describe("tauri IPC contract", () => {
     // be maintained, reviewed and kept safe, and it hides which capability
     // actually lives where. Delete the command, or wire its caller.
     const literals = frontendCommandLiterals();
+    expectFloor("snake_case string literals in shipping TypeScript", literals.size, 2300);
     const uncalled = registered.filter((name) => !literals.has(name) && !KNOWN_UNCALLED.has(name));
     expect(uncalled).toEqual([]);
 

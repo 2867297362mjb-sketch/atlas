@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { walk } from "./support/walk";
+import { expectFloor } from "./support/floor";
 
 /**
  * The lint-suppression ratchet.
@@ -55,17 +57,16 @@ const BASELINE: Record<string, number> = {
 
 const DIRECTIVE = /\b(eslint|oxlint)-disable(?:-next-line|-line)?(?![\w/-])\s*([^\n]*)/g;
 
-function walk(dir: string): string[] {
-  const out: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...walk(full));
-    else if (/\.(ts|tsx)$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) out.push(full);
-  }
-  return out;
+/** `src/` without its tests: a test may suppress what it needs. */
+function scanned(): string[] {
+  return walk(path.join(REPO_ROOT, SCAN_ROOT), [".ts", ".tsx"]).filter(
+    (file) => !/\.test\.tsx?$/.test(file),
+  );
 }
 
 interface Scan {
+  /** How many files were read. */
+  files: number;
   counts: Record<string, number>;
   eslintPrefixed: string[];
   /** Directives naming no rule: they silence every rule in their scope. */
@@ -76,7 +77,8 @@ function scan(): Scan {
   const counts: Record<string, number> = {};
   const eslintPrefixed: string[] = [];
   const bare: string[] = [];
-  for (const file of walk(path.join(REPO_ROOT, SCAN_ROOT))) {
+  const files = scanned();
+  for (const file of files) {
     const where = path.relative(REPO_ROOT, file).split(path.sep).join("/");
     readFileSync(file, "utf8")
       .split("\n")
@@ -94,11 +96,23 @@ function scan(): Scan {
         }
       });
   }
-  return { counts, eslintPrefixed, bare };
+  return { files: files.length, counts, eslintPrefixed, bare };
 }
 
 describe("lint-suppression ratchet", () => {
-  const { counts, eslintPrefixed, bare } = scan();
+  const { files, counts, eslintPrefixed, bare } = scan();
+
+  it("reads the tree and finds the directives it counts", () => {
+    // Without these, a moved root or a directive pattern that stopped matching
+    // would report every rule as "0 now", and the slack check below would ask
+    // for the baseline to be lowered to nothing.
+    expectFloor("non-test TypeScript files under src/", files, 1350);
+    expectFloor(
+      "suppression directives under src/",
+      Object.values(counts).reduce((sum, n) => sum + n, 0),
+      45,
+    );
+  });
 
   it("uses the oxlint prefix, never eslint", () => {
     expect(

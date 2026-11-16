@@ -15,6 +15,7 @@ import {
   DERIVED_VAR_REGISTRY,
   THEME_KEY_REGISTRY,
 } from "@tryatlas/design/theme";
+import { expectFloor } from "./support/floor";
 
 /**
  * The theme-key registry has one source: `keys.toml`, which
@@ -212,8 +213,12 @@ describe("the generated theme-key registry", () => {
     const known = (name: string) => keyNames.has(name) || derivedNames.has(name);
 
     const offenders: string[] = [];
-    const check = (where: string, text: string, pattern: RegExp) => {
-      for (const [, name] of text.matchAll(pattern)) {
+    const check = (where: string, text: string, pattern: RegExp, floor: number) => {
+      const names = [...text.matchAll(pattern)].map(([, name]) => name);
+      // A fixture or a table that moved or changed shape would name no key at
+      // all, and "no key that no longer exists" would hold of nothing.
+      expectFloor(`Atlas keys named in ${where}`, names.length, floor);
+      for (const name of names) {
         if (!known(name)) offenders.push(`${where}: ${name}`);
       }
     };
@@ -224,10 +229,16 @@ describe("the generated theme-key registry", () => {
       "theme-import.ts",
       fixture,
       /\b(?:dark|light)\.keys\.([a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+)/g,
+      7,
     );
 
     // "| `syntax.x` |" — the scope table's Atlas-key column.
-    check("theme-import.md", read("docs/reference/theme-import.md"), /^\| `(syntax\.[a-z_]+)`/gm);
+    check(
+      "theme-import.md",
+      read("docs/reference/theme-import.md"),
+      /^\| `(syntax\.[a-z_]+)`/gm,
+      12,
+    );
 
     expect(offenders.sort()).toEqual([]);
   });

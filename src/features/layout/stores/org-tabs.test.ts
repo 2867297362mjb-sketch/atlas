@@ -7,7 +7,7 @@ import {
   TAB_TYPES,
   migrateTabType,
   type TabType,
-} from "@/lib/constants";
+} from "@/lib/tab-registry";
 // The store's own predicates, not copies: a re-implementation here would keep
 // passing after the store stopped applying the rule.
 import { persistsInEditorState, restoredTabType } from "./layout-store";

@@ -18,6 +18,7 @@ import {
 } from "@/features/github/lib/github-api";
 import { GithubPanelView, type SearchError } from "./views/github-panel-view";
 import type { RowBusy } from "./views/cloned-repo-row-view";
+import { emitWindowEvent, onWindowEvent } from "@/lib/window-events";
 
 /**
  * The GitHub panel's container: search public repositories, clone them as
@@ -67,8 +68,7 @@ export function GithubPanel() {
     // The composer's "Add from GitHub" and the Knowledge sidebar clone and
     // delete too; they announce it the same way.
     const onChanged = () => void refreshRepos();
-    window.addEventListener("atlas:repo-cloned", onChanged);
-    return () => window.removeEventListener("atlas:repo-cloned", onChanged);
+    return onWindowEvent("atlas:repo-cloned", onChanged);
   }, [refreshRepos]);
 
   // Clones made before Atlas cached metadata get theirs filled in once, a
@@ -138,7 +138,7 @@ export function GithubPanel() {
       const repoName = repo.full_name.replace("/", "-");
       await cloneGithubRepo(currentProject.path, repo.clone_url, repoName, metaFromSearch(repo));
       setCloned((s) => new Set(s).add(repo.full_name));
-      window.dispatchEvent(new Event("atlas:repo-cloned"));
+      emitWindowEvent("atlas:repo-cloned");
       logEvent({
         source: "github",
         kind: "clone",
@@ -204,7 +204,7 @@ export function GithubPanel() {
     setBusy(repo, "delete");
     try {
       await deleteClonedRepo(projectPath, repo.name);
-      window.dispatchEvent(new Event("atlas:repo-cloned"));
+      emitWindowEvent("atlas:repo-cloned");
       // The row stays busy until the re-read drops it, then the entry goes
       // too, so a later clone of the same repo does not come back "deleting".
       await refreshRepos();

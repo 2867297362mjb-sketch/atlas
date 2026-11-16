@@ -105,17 +105,11 @@ fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
-/// Atomic write (tmp + rename), matching `AppState::save`.
+/// Replaced whole, matching `AppState::save`.
 fn save(file: &PathBuf, id: &DeviceIdentity) -> std::io::Result<()> {
-    if let Some(dir) = file.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let tmp = file.with_extension("json.tmp");
     let raw = serde_json::to_string_pretty(id)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
-    std::fs::write(&tmp, raw)?;
-    std::fs::rename(tmp, file)?;
-    Ok(())
+    atlas_fs::replace_file(file, raw)
 }
 
 #[cfg(test)]

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { onExplorerChanged } from "@/features/explorer/lib/fs-api";
+import { onGitChanged } from "@/features/git/lib/git-watch-api";
 import { toast } from "sonner";
 import { Code2, Eye, Pencil, RefreshCw, Table2, WrapText } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -57,6 +58,7 @@ import {
 } from "./file-surface-chrome";
 import { FILE_DOCK_RESERVE } from "@/features/explorer/lib/file-tabs";
 import { Button } from "@tryatlas/design";
+import { onWindowEvent } from "@/lib/window-events";
 
 /**
  * A file tab: the file's text in the code editor (`codemirror-file-view.tsx`),
@@ -407,7 +409,7 @@ export function EditorPanel({ tabId, filePath, containerHeight }: EditorPanelPro
   // Repaint bars and blame when the working tree changes elsewhere (commits,
   // stage/unstage, external edits) — the event the git store listens to.
   useEffect(() => {
-    const un = listen("atlas:git-changed", () => {
+    const un = onGitChanged(() => {
       refreshDiffGutter();
       refreshBlame();
     });
@@ -432,13 +434,13 @@ export function EditorPanel({ tabId, filePath, containerHeight }: EditorPanelPro
       clearTimeout(timer);
       timer = setTimeout(() => void revalidateRef.current(), REVALIDATE_DEBOUNCE_MS);
     };
-    const un = listen("atlas:explorer:changed", soon);
+    const un = onExplorerChanged(soon);
     const onActive = () => void revalidateRef.current();
-    window.addEventListener("atlas:window-active", onActive);
+    const offWindowActive = onWindowEvent("atlas:window-active", onActive);
     return () => {
       clearTimeout(timer);
       void un.then((u) => u());
-      window.removeEventListener("atlas:window-active", onActive);
+      offWindowActive();
     };
   }, [path, hasBuffer, isUntitled]);
 

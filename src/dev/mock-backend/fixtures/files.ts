@@ -22,7 +22,7 @@ import type {
   FolderMatch,
 } from "@/features/file-picker/lib/file-picker-api";
 import type { RecentFile } from "@/features/chat/stores/recent-files-store";
-import type { CodeGrepMatch, CodeGrepResult } from "@/components/code-search-api";
+import type { CodeGrepMatch, CodeGrepResult } from "@/lib/code-search-api";
 import type { TypedHandlers, Unread } from "../types";
 import { abs, MOCK_PROJECT } from "../project";
 

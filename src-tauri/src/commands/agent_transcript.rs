@@ -295,8 +295,8 @@ fn cwd_hash(cwd: &str) -> String {
     format!("{:016x}", h.finish())
 }
 
-/// Persist one transcript. Atomic: temp file + rename, so a crash mid-write
-/// leaves the previous good copy rather than a truncated one.
+/// Persist one transcript. Replaced whole, so a crash mid-write leaves the
+/// previous good copy rather than a truncated one.
 ///
 /// Empty messages are dropped at this boundary, not at record time: a
 /// streaming run can legitimately sit empty in the buffer while its chunks are
@@ -304,14 +304,10 @@ fn cwd_hash(cwd: &str) -> String {
 /// still empty when the turn persists — a thought run whose text lives
 /// elsewhere — is nothing a replay could paint.
 pub fn save(config_dir: &Path, t: &StoredTranscript) -> std::io::Result<()> {
-    let dir = dir_for(config_dir, &t.cwd);
-    std::fs::create_dir_all(&dir)?;
-    let path = dir.join(format!("{}.json", sanitize_id(&t.id)));
-    let tmp = path.with_extension("json.tmp");
+    let path = dir_for(config_dir, &t.cwd).join(format!("{}.json", sanitize_id(&t.id)));
     let mut filtered = t.clone();
     filtered.messages.retain(|m| !m.content.trim().is_empty());
-    std::fs::write(&tmp, serde_json::to_vec_pretty(&filtered)?)?;
-    std::fs::rename(&tmp, &path)
+    atlas_fs::replace_file(path, serde_json::to_vec_pretty(&filtered)?)
 }
 
 /// Session ids come from the agent, so they are not guaranteed to be safe as a

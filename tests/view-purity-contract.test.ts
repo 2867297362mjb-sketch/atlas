@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { walk } from "./support/walk";
+import { expectFloor } from "./support/floor";
 
 /**
  * A file under a `views/` directory renders from its props alone.
@@ -70,16 +72,12 @@ function stripComments(src: string): string {
   return src.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
 }
 
-function walk(dir: string, inViews = false): string[] {
-  if (!existsSync(dir)) return [];
-  const out: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...walk(full, inViews || entry.name === "views"));
-    else if (inViews && /\.(ts|tsx)$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name))
-      out.push(full);
-  }
-  return out;
+/** Every non-test file with a `views` directory anywhere above it. */
+const IN_VIEWS = `${path.sep}views${path.sep}`;
+function viewSources(): string[] {
+  return walk(SRC, [".ts", ".tsx"]).filter(
+    (file) => file.slice(SRC.length).includes(IN_VIEWS) && !/\.test\.tsx?$/.test(file),
+  );
 }
 
 interface Violation {
@@ -98,7 +96,7 @@ export function violationsIn(source: string): string[] {
   return found;
 }
 
-const viewFiles = walk(SRC);
+const viewFiles = viewSources();
 
 /**
  * Modules views lean on, checked through their whole value-import graph. A view
@@ -195,6 +193,9 @@ describe("view purity contract", () => {
   });
 
   it("no file under a views/ directory reads stores or IPC", () => {
+    // If `views/` were renamed, or the walk stopped reaching it, there would
+    // be no file to hold to the rule.
+    expectFloor("non-test files under src/**/views/", viewFiles.length, 135);
     const violations: Violation[] = [];
     const badAllows: string[] = [];
     for (const file of viewFiles) {

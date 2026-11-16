@@ -8,8 +8,8 @@
 //! a turn's end, and the history store's writes are batched with no flush at
 //! exit.
 //!
-//! The file is tiny (one entry per running session) and written whole, to a
-//! temporary file then renamed, so a crash mid-write leaves the previous
+//! The file is tiny (one entry per running session) and written whole through
+//! `atlas_fs::replace_file`, so a crash mid-write leaves the previous
 //! version. Writes go to the blocking pool; each one writes the record as it
 //! is when it runs, under a lock, so a late write never puts back an entry a
 //! newer one removed.
@@ -129,9 +129,7 @@ impl OpenTurns {
                     return;
                 }
             };
-            let tmp = path.with_extension("json.tmp");
-            let written = std::fs::write(&tmp, bytes).and_then(|()| std::fs::rename(&tmp, &path));
-            if let Err(e) = written {
+            if let Err(e) = atlas_fs::replace_file(&path, bytes) {
                 tracing::warn!(error = %e, path = %path.display(), "could not record the open turns");
             }
         });

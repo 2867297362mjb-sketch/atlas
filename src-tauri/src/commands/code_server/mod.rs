@@ -1,10 +1,9 @@
 //! The **code tool server**: code search as MCP tools, served by the Tauri
-//! backend itself (ADR-0015). A third Atlas service on the memory tool
-//! server's listener, behind the same token check and the same per-session
-//! token: the token table holds one token per session, so a separately
-//! minted one would revoke the memory one (see `ui_server`).
+//! backend itself (ADR-0015). One of the tenants of the tool server host
+//! ([`tool_servers`](crate::commands::tool_servers)), which owns the
+//! listener, the session's token and how the server reaches each agent.
 //!
-//! - **Offered to every agent that speaks HTTP MCP** ([`offers`]) while the
+//! - **Offered to every agent** ([`tenant`]) while the
 //!   user's "Let agents search code with Atlas" setting is on. Not gated by
 //!   the shared-memory toggle — code search holds no memory — and never
 //!   decided by which agent it is.
@@ -16,7 +15,6 @@
 //!   and stops when the call is cancelled or its future is dropped.
 //! - **The project search overlay runs on the same engine** ([`code_grep`]).
 
-mod offers;
 #[cfg(test)]
 mod tests;
 mod tools;
@@ -27,9 +25,7 @@ use std::time::Instant;
 use serde::Serialize;
 
 #[allow(unused_imports)]
-pub use offers::{CodeOffer, CodeOfferDecision};
-#[allow(unused_imports)]
-pub use tools::{router, CodeTools, INSTRUCTIONS};
+pub use tools::{tenant, CodeTools, INSTRUCTIONS};
 
 /// The name the server goes by in every agent's MCP configuration; its tools
 /// reach the model as `mcp__atlas_code__<tool>`.

@@ -22,22 +22,12 @@ import { trustedMentionPaths } from "./picked-mentions";
 import { saveLastAgentPref } from "./last-agent-pref";
 import { rc, roomOpen } from "./rc-api";
 import { useRcStore } from "@/features/chat/stores/rc-store";
-import {
-  enqueuePrompt,
-  flushLocalQueue,
-  queueKey,
-  setQueueHold,
-  takeQueuedPrompts,
-} from "./turn-queue";
+import { sessionSend } from "./session-send";
+import { emitWindowEvent } from "@/lib/window-events";
 
-/** The window event a handoff fires; the composer of `tabId` inserts the
- *  previous conversation as a past-session chip. */
-export const SESSION_HANDOFF_EVENT = "atlas:chat-handoff-session";
-
-/** Ask the chat panel of `detail.tabId` to stop its running turn, the same as
- *  its Stop button. */
-export const CHAT_STOP_EVENT = "atlas:chat-stop";
-
+/** `atlas:chat-handoff-session`: the window event a handoff fires; the
+ *  composer of `tabId` inserts the previous conversation as a past-session
+ *  chip. */
 export interface SessionHandoffDetail {
   tabId: string;
   mention: MentionPastSession;
@@ -202,12 +192,12 @@ export function switchAgentForTab(
     );
   } else if (handoff) {
     const detail: SessionHandoffDetail = { tabId, mention: handoff };
-    window.dispatchEvent(new CustomEvent(SESSION_HANDOFF_EVENT, { detail }));
+    emitWindowEvent("atlas:chat-handoff-session", detail);
     toast(
       `${agentMeta(previousAgent).label} conversation attached. Your next message hands it to ${agentMeta(next).label}.`,
     );
   }
-  window.dispatchEvent(new CustomEvent("atlas:chat-focus", { detail: { tabId } }));
+  emitWindowEvent("atlas:chat-focus", { tabId });
 }
 
 /** Longest a pre-switch `/remember` turn is waited on before switching anyway. */
@@ -235,32 +225,24 @@ interface PendingSwitch {
 
 const pendingSwitches = new Map<string, PendingSwitch>();
 
-/** Whether a switch on `tabId` is waiting on its `/remember` turn. The chat
- *  panel holds the tab's queue meanwhile: a message typed during the save goes
- *  to whichever agent the tab is on once the switch is done, not to the one
- *  being left (`rememberThenSwitch`). */
-export function isSwitchPending(tabId: string): boolean {
-  return pendingSwitches.has(tabId);
-}
-
 /** Send the head of a queue the chat panel held during a pending switch, if
  *  the tab can take it now: bound, idle and not resuming. The rest drains
  *  after that turn as usual. An unbound tab (switched in place) needs nothing:
  *  its bind drains the queue. */
 function releaseHeldQueue(tabId: string): void {
   // The session's own queue is Rust's: lifting the hold drains its head if
-  // the session is idle (`turn-queue.ts`).
-  setQueueHold(tabId, "switch", false);
+  // the session is idle (`session-send.ts`).
+  sessionSend.setHold(tabId, "switch", false);
   const { sessions, queues, actions } = useChatStore.getState();
   const sess = sessions[tabId];
   if (!sess?.acpSessionId || sess.resumePending || isBusyAgentStatus(sess.status)) return;
-  if (queueKey(tabId)) {
-    void flushLocalQueue(tabId, { drain: true });
+  if (sessionSend.queueKey(tabId)) {
+    void sessionSend.flushLocal(tabId, { drain: true });
     return;
   }
   if (!queues[tabId]?.length) return;
   const text = actions.shiftQueue(tabId);
-  if (text) window.dispatchEvent(new CustomEvent("atlas:chat-send", { detail: { tabId, text } }));
+  if (text) emitWindowEvent("atlas:chat-send", { tabId, text });
 }
 
 /** The "saving…" notice for a pending switch; with `id`, updates it in place. */
@@ -302,7 +284,7 @@ async function stopTurn(tabId: string): Promise<void> {
   if (!sess || !isBusyAgentStatus(sess.status)) return;
   // Subscribed before the Stop: the turn may end inside the dispatch.
   const ended = awaitTurnEnd(tabId, { timeoutMs: REMEMBER_STOP_GRACE_MS });
-  if (!sess.stopping) window.dispatchEvent(new CustomEvent(CHAT_STOP_EVENT, { detail: { tabId } }));
+  if (!sess.stopping) emitWindowEvent("atlas:chat-stop", { tabId });
   await ended;
 }
 
@@ -349,12 +331,12 @@ async function rememberThenSwitch(
   pending.toastId = showSavingToast(pending);
   pendingSwitches.set(tabId, pending);
   // What is typed during the save is for the agent the tab ends up on: Rust
-  // must not drain it into this one when the `/remember` turn ends.
-  setQueueHold(tabId, "switch", true);
+  // must not drain it into this one when the `/remember` turn ends. The same
+  // hold is what the panel's drain reads as "a switch is pending"
+  // (`SendState.switchPending`), so it leaves the queue alone meanwhile.
+  sessionSend.setHold(tabId, "switch", true);
   try {
-    window.dispatchEvent(
-      new CustomEvent("atlas:chat-send", { detail: { tabId, text: REMEMBER_MESSAGE } }),
-    );
+    emitWindowEvent("atlas:chat-send", { tabId, text: REMEMBER_MESSAGE });
     const end = await awaitTurnEnd(tabId, {
       timeoutMs: REMEMBER_BEFORE_SWITCH_TIMEOUT_MS,
       startTimeoutMs: REMEMBER_START_TIMEOUT_MS,
@@ -381,14 +363,14 @@ async function rememberThenSwitch(
     // in-place switch clears the session, queue included, so they are taken
     // out and handed to the switch; when a new tab opened instead, they go
     // back to this tab.
-    const typed = takeQueuedPrompts(tabId);
+    const typed = sessionSend.takeQueued(tabId);
     switchAgentForTab(tabId, pending.next, {
       afterRemember: end === "not-started" ? "unsent" : "sent",
       typed,
       model: pending.model,
     });
     if (stillOn(tabId, from)) {
-      for (const text of typed) enqueuePrompt(tabId, text, []);
+      for (const text of typed) sessionSend.enqueue(tabId, text, []);
     }
   } finally {
     pendingSwitches.delete(tabId);

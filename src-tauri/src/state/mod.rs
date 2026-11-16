@@ -12,6 +12,8 @@
 //!   Windows: `%APPDATA%\dev.atlas.ide\state.json`
 
 pub mod app_state;
+#[cfg(test)]
+mod app_state_bindings;
 pub mod atlas_config;
 pub mod project_config;
 

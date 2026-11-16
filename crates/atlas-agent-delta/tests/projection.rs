@@ -9,15 +9,13 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::v1 as acp;
+use atlas_acp_thread::test_support::FakeConnection;
 use atlas_acp_thread::{
-    AcpThread, AcpThreadHandle, AgentConnection, AgentId as ThreadAgentId, AuthorizationKind,
-    PermissionOptions,
+    AcpThread, AcpThreadHandle, AgentConnection, AuthorizationKind, PermissionOptions,
 };
 use atlas_agent_delta::{
     AgentId, DeltaProjector, DeltaSink, Origin, QueuedPrompt, SessionDelta, SessionDeltaEnvelope,
 };
-use futures::future::BoxFuture;
-use futures::FutureExt;
 
 // ------------------------------------------------------------------- harness
 
@@ -61,37 +59,14 @@ impl DeltaSink for Recorder {
     }
 }
 
-struct StubConnection;
-
-impl AgentConnection for StubConnection {
-    fn agent_id(&self) -> ThreadAgentId {
-        ThreadAgentId::new("stub")
-    }
-    fn telemetry_id(&self) -> Arc<str> {
-        "stub".into()
-    }
-    fn new_session(
-        self: Arc<Self>,
-        _work_dirs: Vec<PathBuf>,
-    ) -> BoxFuture<'static, anyhow::Result<AcpThreadHandle>> {
-        async { Err(anyhow::anyhow!("not used")) }.boxed()
-    }
-    fn auth_methods(&self) -> &[acp::AuthMethod] {
-        &[]
-    }
-    fn authenticate(&self, _method: acp::AuthMethodId) -> BoxFuture<'static, anyhow::Result<()>> {
-        async { Ok(()) }.boxed()
-    }
-    fn prompt(
-        &self,
-        _params: acp::PromptRequest,
-    ) -> BoxFuture<'static, anyhow::Result<acp::PromptResponse>> {
-        async { Ok(acp::PromptResponse::new(acp::StopReason::EndTurn)) }.boxed()
-    }
-    fn cancel(&self, _session_id: &acp::SessionId) {}
-    fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
-        self
-    }
+/// A connection that answers nothing: these tests drive the thread
+/// directly, so no request ever leaves it.
+fn stub_connection() -> Arc<dyn AgentConnection> {
+    FakeConnection::builder()
+        .agent("stub")
+        .fail_new_session("not used")
+        .build()
+        .0
 }
 
 struct Harness {
@@ -116,7 +91,7 @@ impl Harness {
         let events = (projector.thread_events())(&session_id);
         let thread = Arc::new(Mutex::new(AcpThread::new(
             session_id.clone(),
-            Arc::new(StubConnection) as Arc<dyn AgentConnection>,
+            stub_connection(),
             vec![PathBuf::from("/tmp")],
             None,
             events,
@@ -1643,7 +1618,7 @@ async fn a_session_whose_stream_ends_leaves_no_routes_behind() {
     let events = (projector.thread_events())(&session_id);
     let thread = Arc::new(Mutex::new(AcpThread::new(
         session_id.clone(),
-        Arc::new(StubConnection) as Arc<dyn AgentConnection>,
+        stub_connection(),
         vec![PathBuf::from("/tmp")],
         None,
         events,

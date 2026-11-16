@@ -1,19 +1,17 @@
-//! atlas-bus — the global event broadcaster + middleware pipeline seam for the
-//! Atlas agent subsystem.
+//! atlas-bus — the outbound middleware pipeline for the Atlas agent subsystem.
 //!
-//! Two cross-cutting abstractions, both generic (no dependency on any agent /
-//! ACP domain type, so they stay reusable and cheap to test):
+//! [`OutboundPipeline`] is an ordered chain of [`OutboundMiddleware`] that
+//! observes every emitted event (window broadcast, telemetry, capture,
+//! memory-ingest). The concrete middleware live in the host; this crate only
+//! owns the plumbing, and is generic: no dependency on any agent or ACP type,
+//! so it stays reusable and cheap to test.
 //!
-//! - [`EventBus`] — a cloneable `tokio::sync::broadcast` fan-out. Every emitted
-//!   agent event is published here; the Tauri window-emitter subscribes today,
-//!   and a cloud streamer can subscribe tomorrow with zero changes to the
-//!   producers. Lagging subscribers drop (never block the producer).
-//! - [`OutboundPipeline`] — an ordered chain of [`OutboundMiddleware`] that
-//!   observes every emitted event (broadcast, telemetry, memory-ingest). The
-//!   concrete middleware live in the host; this crate only owns the plumbing.
+//! The crate once also held a `tokio::sync::broadcast` fan-out, `EventBus`.
+//! Nothing ever subscribed to it, and a consumer that must not lose an event
+//! could not have: a broadcast ring drops for a subscriber that lags. Such a
+//! consumer is a pipeline stage instead, which runs on the emit thread and
+//! cannot lag.
 
-mod bus;
 mod middleware;
 
-pub use bus::EventBus;
 pub use middleware::{OutboundMiddleware, OutboundPipeline};

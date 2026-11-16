@@ -146,16 +146,12 @@ pub fn available(skills: &[SkillRef]) -> Vec<acp::AvailableCommand> {
 /// the cap note says how to see the rest.
 pub fn diff_reply(cwd: &str) -> String {
     const CAP: usize = 40_000;
-    let output = atlas_process::command("git")
-        .args(["diff", "HEAD"])
-        .current_dir(cwd)
-        .output();
-    let output = match output {
+    let output = match atlas_git::GitCommand::new(cwd, &["diff", "HEAD"]).output() {
         Ok(output) => output,
         Err(e) => return format!("Could not run git in {cwd}: {e}"),
     };
-    if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr);
+    if !output.success() {
+        let err = output.stderr_text();
         let err = err.trim();
         // The common case is "not a git repository"; git already says it well.
         return if err.is_empty() {

@@ -274,3 +274,14 @@ export const sharedMemory = {
       payload,
     }),
 };
+
+/** Where the project's memory mirror is written in its repo, or `null` when
+ *  it has not been written yet (`commands/memory_repo.rs`). */
+export function memoryRepoMirrorDir(projectPath: string): Promise<string | null> {
+  return invoke<string | null>("memory_repo_mirror_dir", { projectPath });
+}
+
+/** Accept the memory history as it stands, clearing the "changed" notice. */
+export function acceptMemoryHistory(projectPath: string): Promise<boolean> {
+  return invoke<boolean>("memory_accept_history", { projectPath });
+}

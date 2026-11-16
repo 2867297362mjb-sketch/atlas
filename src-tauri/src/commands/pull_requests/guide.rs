@@ -127,12 +127,8 @@ pub async fn pr_guide_write(
     }
     let file = guide_file(&data_dir(&app)?, &repository, number);
     tokio::task::spawn_blocking(move || {
-        let parent = file.parent().expect("guide files sit in a folder");
-        std::fs::create_dir_all(parent).map_err(|e| PrError::failed(e.to_string()))?;
-        let tmp = file.with_extension("json.tmp");
         let text = serde_json::to_string(&guide).map_err(|e| PrError::failed(e.to_string()))?;
-        std::fs::write(&tmp, text).map_err(|e| PrError::failed(e.to_string()))?;
-        std::fs::rename(&tmp, &file).map_err(|e| PrError::failed(e.to_string()))
+        atlas_fs::replace_file(&file, text).map_err(|e| PrError::failed(e.to_string()))
     })
     .await
     .map_err(|e| PrError::failed(e.to_string()))?
@@ -312,7 +308,6 @@ async fn remotes(root: &Path) -> Vec<String> {
 async fn fetch(root: &Path, remote: &str, refspec: &str, timeout: Duration) -> Result<(), String> {
     run_networked(
         root,
-        "git",
         &["fetch", "--quiet", "--no-tags", "--", remote, refspec],
         timeout,
     )
@@ -495,8 +490,8 @@ async fn prepare(
         .chain(["--unified=0", "--no-color", "--no-ext-diff", range.as_str()])
         .collect();
     let (names, patch) = tokio::join!(
-        run(&checkout, "git", &names_args, GIT_TIMEOUT),
-        run(&checkout, "git", &patch_args, GIT_TIMEOUT),
+        run(&checkout, &names_args, GIT_TIMEOUT),
+        run(&checkout, &patch_args, GIT_TIMEOUT),
     );
     let change = match (names, patch) {
         (Ok(names), Ok(patch)) => parse_change(&names, &patch),

@@ -628,10 +628,10 @@ mod tests {
     //
     // The two redaction cases above are the shapes `looks_secret` was written
     // for, so they pass by construction. These are credentials as they actually turn
-    // up in agent transcripts, and every one of them reaches the shared log
-    // today. They are ignored rather than deleted so the gap stays recorded
-    // and executable: `cargo test -p atlas memory_delta -- --ignored` shows
-    // what is still missed.
+    // up in agent transcripts. The ignored ones reach the shared log today
+    // (ATL-1013). They are ignored rather than deleted so the gap stays
+    // recorded and executable: `cargo test -p atlas memory_delta -- --ignored`
+    // shows what is still missed.
 
     /// Asserts `secret` does not survive redaction of `input`.
     fn assert_redacted(input: &str, secret: &str) {
@@ -647,8 +647,8 @@ mod tests {
         assert_redacted("password: hunter2hunter2", "hunter2hunter2");
     }
 
+    /// Recorded here as a gap once; redacted today, so it runs.
     #[test]
-    #[ignore = "known gap: atlas_memory::record::redact misses this; see redaction migration"]
     fn password_in_a_postgres_dsn_is_redacted() {
         assert_redacted(
             "connect with postgres://app:s3cretPassw0rd@db.internal:5432/app",
@@ -676,8 +676,8 @@ mod tests {
         );
     }
 
+    /// Recorded here as a gap once; redacted today, so it runs.
     #[test]
-    #[ignore = "known gap: atlas_memory::record::redact misses this; see redaction migration"]
     fn password_field_in_json_is_redacted() {
         assert_redacted(
             r#"{"user": "app", "password": "hunter2hunter2"}"#,

@@ -1,10 +1,7 @@
-// Shared helpers for extracting file paths + edit diffs from agent tool-call
-// arguments. Hoisted out of `message-item.tsx` so the chat-store reducer (which
-// accumulates per-turn files-touched for the adaptive turn card) and the
-// rendering layer agree exactly on paths + add/remove counts.
-
-import type { TurnFile } from "@/types/agent";
-import { enginePatchFiles } from "./engine-patch";
+// The pieces a reading of a tool call is built from: which file its arguments
+// name, whether it is a read or an edit, the text its arguments replaced, and
+// how changed lines are counted. What a call CHANGED is `tool-changes.ts`,
+// which every view asks; nothing else should assemble that from these.
 
 const FILE_PATH_KEYS = ["file_path", "path", "filename", "filePath"];
 
@@ -25,12 +22,19 @@ export function getFilePathFromInput(input: Record<string, unknown>): string | n
 /** The file a tool call is about: its arguments first, then the ACP
  *  `locations` the agent attached — the same order Rust's
  *  `tool_stats::extract_path` reads them in, so the two layers name the same
- *  file for the same call. */
+ *  file for the same call. A location is the wire's `{ path }`, or the
+ *  store's mirror of it as a plain path. */
 export function getToolFilePath(
   input: Record<string, unknown>,
-  locations: readonly string[] | undefined,
+  locations: readonly unknown[] | undefined,
 ): string | null {
-  return getFilePathFromInput(input) ?? locations?.find((l) => l.length > 0) ?? null;
+  const named = getFilePathFromInput(input);
+  if (named) return named;
+  for (const l of locations ?? []) {
+    const path = typeof l === "string" ? l : (l as { path?: unknown } | null)?.path;
+    if (typeof path === "string" && path.length > 0) return path;
+  }
+  return null;
 }
 
 /** Tools that mutate files (Claude Code, Codex, native). */
@@ -124,89 +128,4 @@ export function countChangedLines(oldStr: string, neu: string): { added: number;
     en--;
   }
   return { removed: Math.max(0, eo - start), added: Math.max(0, en - start) };
-}
-
-/** True when an edit tool call CREATED the file (every edit op had empty prior
- *  content) → git-status "A". A normal edit (non-empty `old`) is "M". The
- *  native engine's edit created its files when each came as whole content. */
-export function isFileCreated(
-  toolName: string,
-  args: Record<string, unknown>,
-  kind?: string | null,
-): boolean {
-  const parts = getEditParts(toolName, args, kind);
-  if (parts.length > 0) return parts.every((p) => p.old === "");
-  const engine = enginePatchFiles(args);
-  return !!engine && engine.every((f) => f.shape === "content");
-}
-
-/** Total added/removed line counts for an edit tool call, across every file
- *  it names. */
-export function countEditLines(
-  toolName: string,
-  args: Record<string, unknown>,
-  kind?: string | null,
-): { added: number; removed: number } {
-  let added = 0;
-  let removed = 0;
-  const parts = getEditParts(toolName, args, kind);
-  for (const p of parts) {
-    const c = countChangedLines(p.old, p.neu);
-    added += c.added;
-    removed += c.removed;
-  }
-  if (parts.length === 0) {
-    for (const f of enginePatchFiles(args) ?? []) {
-      added += f.added;
-      removed += f.removed;
-    }
-  }
-  return { added, removed };
-}
-
-/**
- * The files a tool call touched, as the per-turn record keeps them — empty
- * when the call is not about a file. One call usually names one file; the
- * native engine's edit names every file of its patch, each with its own
- * counts (`enginePatchFiles`).
- *
- * One builder for the live accumulator (`tool_call_upserted`) and the
- * transcript reconstruction (`reconstructTurnSummaries`), so a resumed session
- * and a live one cannot disagree about what a call did.
- */
-export function turnFilesOfToolCall(call: {
-  toolName: string;
-  kind: string | null | undefined;
-  arguments: Record<string, unknown>;
-  locations?: readonly string[];
-}): TurnFile[] {
-  const kind = classifyToolFileKind(call.kind, call.toolName);
-  if (!kind) return [];
-  if (kind === "edit" && getEditParts(call.toolName, call.arguments, call.kind).length === 0) {
-    const engine = enginePatchFiles(call.arguments);
-    if (engine) {
-      // A renamed file is listed where it went.
-      return engine.map((f) => ({
-        path: f.movePath ?? f.path,
-        kind,
-        added: f.added,
-        removed: f.removed,
-        created: f.shape === "content",
-        ...(f.movePath ? { movedFrom: f.path } : {}),
-      }));
-    }
-  }
-  const path = getToolFilePath(call.arguments, call.locations);
-  if (!path) return [];
-  if (kind === "read") return [{ path, kind, added: 0, removed: 0, created: undefined }];
-  const { added, removed } = countEditLines(call.toolName, call.arguments, call.kind);
-  return [
-    {
-      path,
-      kind,
-      added,
-      removed,
-      created: isFileCreated(call.toolName, call.arguments, call.kind),
-    },
-  ];
 }

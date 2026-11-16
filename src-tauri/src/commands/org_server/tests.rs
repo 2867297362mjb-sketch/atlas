@@ -3,7 +3,7 @@
 //! in-memory organisation; and the offer that hands it out.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use agent_client_protocol::schema::v1 as acp;
@@ -29,12 +29,11 @@ use super::tools::{
 };
 use super::*;
 use crate::auth::Role;
-use crate::commands::memory_server::{
-    MemoryServer, MemoryServerHost, MemorySessionOffers, MemoryTokens, SessionClocks, SessionReads,
-    SharingGate, Sources, TOOLS_LIST_TTL_MS,
+use crate::commands::memory_server;
+use crate::commands::tool_servers::{
+    SessionOffers, SessionTokens, Tenant, ToolServer, ToolServerHost, TOOLS_LIST_TTL_MS,
 };
-use crate::commands::shared_memory::SharedMemoryStore;
-use crate::commands::ui_server::{self, UiBridge, UiOffer, UI_SERVER_NAME};
+use crate::commands::ui_server::{self, UiBridge, UI_SERVER_NAME};
 
 // ── An organisation in memory ────────────────────────────────────────────────
 
@@ -44,7 +43,7 @@ use crate::commands::ui_server::{self, UiBridge, UiOffer, UI_SERVER_NAME};
 /// recorded session's comments. Records every organisation it was asked
 /// about, so a test can show a call acted in the grant's.
 #[derive(Default)]
-struct FakeOrganisation {
+pub(crate) struct FakeOrganisation {
     caller: Mutex<Option<Caller>>,
     roster: Mutex<Vec<Member>>,
     roster_fail: AtomicBool,
@@ -725,7 +724,7 @@ fn acme_conversations() -> Vec<OrgConversation> {
     ]
 }
 
-fn acme() -> OrgScope {
+pub(crate) fn acme() -> OrgScope {
     OrgScope {
         org_id: "org-acme".into(),
         workspace_id: Some("ws-atlas".into()),
@@ -743,13 +742,9 @@ fn current(live: bool) -> RecordedSession {
 
 // ── Serving it ───────────────────────────────────────────────────────────────
 
-fn memory() -> SharedMemoryStore {
-    let t = Arc::new(AtomicI64::new(1_000));
-    SharedMemoryStore::with_clock(Arc::new(move || t.fetch_add(1_000, Ordering::SeqCst)))
-}
-
-fn sharing(on: bool) -> SharingGate {
-    Arc::new(move |_| on)
+/// The memory tenant, there because the app always mounts it.
+fn memory() -> Tenant {
+    memory_server::test_tenant(Arc::new(|_| true))
 }
 
 fn setting(on: bool) -> OrgAccessGate {
@@ -764,31 +759,23 @@ fn switchable(on: bool) -> (OrgAccessGate, Arc<AtomicBool>) {
 }
 
 /// A window that is never asked anything in these tests.
-fn quiet_ui() -> axum::Router {
+fn quiet_ui() -> Tenant {
     let bridge = Arc::new(UiBridge::new(Arc::new(|_| Err("no window".into()))));
-    ui_server::router(ui_server::UiTools::new(bridge, Arc::new(|_: &str| true)))
+    ui_server::tenant(ui_server::UiTools::new(bridge, Arc::new(|_: &str| true)))
 }
 
 async fn serve(
-    tokens: Arc<MemoryTokens>,
+    tokens: Arc<SessionTokens>,
     cloud: Arc<dyn OrganisationCloud>,
     gate: OrgAccessGate,
-) -> MemoryServer {
+) -> ToolServer {
     serve_tools(tokens, OrgTools::new(cloud, gate, bound_to_acme())).await
 }
 
-async fn serve_tools(tokens: Arc<MemoryTokens>, tools: OrgTools) -> MemoryServer {
-    MemoryServer::start_with(
-        memory(),
-        tokens,
-        Arc::new(SessionClocks::default()),
-        Arc::new(SessionReads::default()),
-        sharing(true),
-        Sources::default(),
-        vec![quiet_ui(), router(tools)],
-    )
-    .await
-    .unwrap()
+async fn serve_tools(tokens: Arc<SessionTokens>, tools: OrgTools) -> ToolServer {
+    ToolServer::start(tokens, &[memory(), quiet_ui(), tenant(tools)])
+        .await
+        .unwrap()
 }
 
 /// Signed in, with the Project bound to Acme's Workspace — what every grant
@@ -823,7 +810,7 @@ fn approved_for(
 /// A token as an offer mints one: carrying the organisation, bound to the
 /// chat's session id once the agent answers.
 fn offered_token(
-    tokens: &MemoryTokens,
+    tokens: &SessionTokens,
     session: &str,
     cwd: &str,
     scope: Option<OrgScope>,
@@ -886,7 +873,7 @@ async fn org_whoami_reads_the_caller_the_organisation_the_workspace_and_the_curr
     org.record("s1", current(true));
     org.comment_on("rs-1", comment("c1", None));
     org.comment_on("rs-1", comment("c2", None));
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let server = serve(tokens.clone(), org.clone(), setting(true)).await;
     let token = offered_token(&tokens, "s1", "/p", Some(acme()));
     let client = connect(&server.url_at(ORG_PATH), &token)
@@ -922,7 +909,7 @@ async fn org_whoami_reads_the_caller_the_organisation_the_workspace_and_the_curr
 #[tokio::test(flavor = "multi_thread")]
 async fn a_chat_the_workspace_has_not_recorded_yet_has_no_current_session_and_says_why() {
     let org = FakeOrganisation::with_member("Ada Lovelace", Some(Role::Admin));
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let server = serve(tokens.clone(), org.clone(), setting(true)).await;
     let client = connect(
         &server.url_at(ORG_PATH),
@@ -956,7 +943,7 @@ async fn the_unresolved_count_is_open_roots_only() {
     let mut deleted = comment("deleted", None);
     deleted.deleted_at = Some("2026-09-26T11:00:00Z".into());
     org.comment_on("rs-1", deleted);
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let server = serve(tokens.clone(), org, setting(true)).await;
     let client = connect(
         &server.url_at(ORG_PATH),
@@ -981,7 +968,7 @@ async fn a_failed_comment_read_leaves_the_count_unknown_but_still_answers() {
     let org = FakeOrganisation::with_member("Ada Lovelace", Some(Role::Member));
     org.record("s1", current(true));
     org.comments_fail.store(true, Ordering::SeqCst);
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let server = serve(tokens.clone(), org, setting(true)).await;
     let client = connect(
         &server.url_at(ORG_PATH),
@@ -1006,7 +993,7 @@ async fn a_failed_comment_read_leaves_the_count_unknown_but_still_answers() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_signed_out_user_is_a_tool_error_the_model_can_read() {
     let org = Arc::new(FakeOrganisation::default());
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let server = serve(tokens.clone(), org, setting(true)).await;
     let client = connect(
         &server.url_at(ORG_PATH),
@@ -1023,7 +1010,7 @@ async fn a_signed_out_user_is_a_tool_error_the_model_can_read() {
 // ── org_members ──────────────────────────────────────────────────────────────
 
 /// A connected client on an offered token, against `org`.
-async fn org_client(org: Arc<FakeOrganisation>) -> (MemoryServer, RunningService<RoleClient, ()>) {
+async fn org_client(org: Arc<FakeOrganisation>) -> (ToolServer, RunningService<RoleClient, ()>) {
     let (server, client, _) = consenting_client(org).await;
     (server, client)
 }
@@ -1033,11 +1020,11 @@ async fn org_client(org: Arc<FakeOrganisation>) -> (MemoryServer, RunningService
 async fn consenting_client(
     org: Arc<FakeOrganisation>,
 ) -> (
-    MemoryServer,
+    ToolServer,
     RunningService<RoleClient, ()>,
     Arc<atlas_agent_servers::OutwardConsent>,
 ) {
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let tools = OrgTools::new(org, setting(true), bound_to_acme());
     let consent = tools.consent().clone();
     let server = serve_tools(tokens.clone(), tools).await;
@@ -1521,7 +1508,7 @@ async fn a_page_the_space_refuses_is_a_tool_error_with_its_reason() {
 async fn a_created_page_is_one_audit_record_naming_the_conversation_and_the_page() {
     let org = FakeOrganisation::with_member("Ada Lovelace", None)
         .with_conversations(acme_conversations());
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let (server, records) = serve_audited(tokens.clone(), org, setting(true)).await;
     let client = connect(
         &server.url_at(ORG_PATH),
@@ -1591,8 +1578,8 @@ fn obliging_window() -> (Arc<UiBridge>, Arc<Mutex<Vec<ui_server::UiRequest>>>) {
 async fn drawing_client(
     org: Arc<FakeOrganisation>,
     window: Option<Arc<UiBridge>>,
-) -> (MemoryServer, RunningService<RoleClient, ()>) {
-    let tokens = Arc::new(MemoryTokens::default());
+) -> (ToolServer, RunningService<RoleClient, ()>) {
+    let tokens = Arc::new(SessionTokens::default());
     let mut tools = OrgTools::new(org, setting(true), bound_to_acme());
     if let Some(window) = window {
         tools = tools.with_window(window);
@@ -1875,7 +1862,7 @@ async fn org_page_write_is_auto_approved_and_is_one_audit_record() {
     let org = FakeOrganisation::with_member("Ada Lovelace", None)
         .with_conversations(acme_conversations());
     let (window, _) = obliging_window();
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let records = Arc::new(Mutex::new(Vec::new()));
     let sink = records.clone();
     let tools = OrgTools::new(org, setting(true), bound_to_acme())
@@ -2974,10 +2961,8 @@ async fn one_approval_posts_one_reply() {
 #[tokio::test(flavor = "multi_thread")]
 async fn an_approval_the_native_seam_reports_reaches_the_tools_that_check_it() {
     let org = commented();
-    let host = running_host(org.clone()).await;
     let tools = OrgTools::new(org, setting(true), bound_to_acme());
-    let offers = MemorySessionOffers::new(host, sharing(true))
-        .with_org(OrgOffer::new(setting(true), bound_to_acme()).describing_with(tools.clone()));
+    let offers = SessionOffers::new(running_host_with(tools.clone()).await);
     let session = acp::SessionId::new("s1");
     let args = json!({ "comment": "k1", "body": "Done." });
     let on = |server| atlas_agent_servers::CallToApprove {
@@ -3051,12 +3036,8 @@ fn mention_rewriting_leaves_addresses_and_longer_names_alone() {
 
 /// The offer the native seam asks to describe a waiting call, bound to chat
 /// `s1` the way a real session's is.
-async fn describing_offer(org: Arc<FakeOrganisation>) -> MemorySessionOffers {
-    let host = running_host(org.clone()).await;
-    let offers = MemorySessionOffers::new(host, sharing(true)).with_org(
-        OrgOffer::new(setting(true), FakeSessionOrgs::new(true, Some(acme())))
-            .describing_with(OrgTools::new(org, setting(true), bound_to_acme())),
-    );
+async fn describing_offer(org: Arc<FakeOrganisation>) -> SessionOffers {
+    let offers = SessionOffers::new(running_host(org).await);
     offers
         .offer(&session_request(true))
         .bind(&acp::SessionId::new("s1"));
@@ -3064,7 +3045,7 @@ async fn describing_offer(org: Arc<FakeOrganisation>) -> MemorySessionOffers {
 }
 
 async fn describe(
-    offers: &MemorySessionOffers,
+    offers: &SessionOffers,
     server: &str,
     tool: &str,
     arguments: Value,
@@ -5011,7 +4992,7 @@ async fn a_session_or_entry_the_organisation_cannot_give_is_a_tool_error() {
 async fn switching_organisation_access_off_refuses_the_next_call_of_a_running_session() {
     let org = FakeOrganisation::with_member("Ada Lovelace", Some(Role::Developer));
     let (gate, on) = switchable(true);
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let server = serve(tokens.clone(), org.clone(), gate).await;
     let client = connect(
         &server.url_at(ORG_PATH),
@@ -5035,12 +5016,12 @@ async fn switching_organisation_access_off_refuses_the_next_call_of_a_running_se
 async fn rechecked_client(
     org: Arc<FakeOrganisation>,
 ) -> (
-    MemoryServer,
+    ToolServer,
     RunningService<RoleClient, ()>,
     Arc<FakeSessionOrgs>,
 ) {
     let orgs = bound_to_acme();
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let server = serve_tools(
         tokens.clone(),
         OrgTools::new(org, setting(true), orgs.clone()),
@@ -5121,7 +5102,7 @@ async fn a_project_bound_elsewhere_now_refuses_the_next_call_of_a_running_sessio
 #[tokio::test(flavor = "multi_thread")]
 async fn a_token_that_names_no_organisation_is_refused_and_nothing_is_asked() {
     let org = FakeOrganisation::with_member("Ada Lovelace", Some(Role::Developer));
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let server = serve(tokens.clone(), org.clone(), setting(true)).await;
     let client = connect(
         &server.url_at(ORG_PATH),
@@ -5140,22 +5121,9 @@ async fn a_token_that_names_no_organisation_is_refused_and_nothing_is_asked() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn an_unknown_or_revoked_token_is_refused_on_the_org_path() {
-    let org = FakeOrganisation::with_member("Ada Lovelace", Some(Role::Developer));
-    let tokens = Arc::new(MemoryTokens::default());
-    let server = serve(tokens.clone(), org, setting(true)).await;
-    assert!(connect(&server.url_at(ORG_PATH), "not-a-token")
-        .await
-        .is_err());
-    let token = offered_token(&tokens, "s1", "/p", Some(acme()));
-    tokens.revoke("s1");
-    assert!(connect(&server.url_at(ORG_PATH), &token).await.is_err());
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn the_tool_list_is_what_the_model_is_offered() {
     let org = FakeOrganisation::with_member("Ada Lovelace", Some(Role::Developer));
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let server = serve(tokens.clone(), org, setting(true)).await;
     let client = connect(
         &server.url_at(ORG_PATH),
@@ -5320,24 +5288,20 @@ fn org_server_prefix_bytes_are_measured() {
 /// The server with an audit sink that keeps every record it is handed, as the
 /// app's sink emits each one to the window for its Logs panel.
 async fn serve_audited(
-    tokens: Arc<MemoryTokens>,
+    tokens: Arc<SessionTokens>,
     cloud: Arc<dyn OrganisationCloud>,
     gate: OrgAccessGate,
-) -> (MemoryServer, Arc<Mutex<Vec<OrgActionRecord>>>) {
+) -> (ToolServer, Arc<Mutex<Vec<OrgActionRecord>>>) {
     let records = Arc::new(Mutex::new(Vec::new()));
     let sink = records.clone();
     let audit: OrgAudit =
         Arc::new(move |record: &OrgActionRecord| sink.lock().push(record.clone()));
-    let server = MemoryServer::start_with(
-        memory(),
+    let server = ToolServer::start(
         tokens,
-        Arc::new(SessionClocks::default()),
-        Arc::new(SessionReads::default()),
-        sharing(true),
-        Sources::default(),
-        vec![
+        &[
+            memory(),
             quiet_ui(),
-            router(OrgTools::new(cloud, gate, bound_to_acme()).with_audit(audit)),
+            tenant(OrgTools::new(cloud, gate, bound_to_acme()).with_audit(audit)),
         ],
     )
     .await
@@ -5350,7 +5314,7 @@ async fn every_org_call_writes_one_audit_record_naming_the_session_the_tool_its_
 ) {
     let org = FakeOrganisation::with_member("Ada Lovelace", Some(Role::Developer))
         .with_roster(acme_roster());
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let (server, records) = serve_audited(tokens.clone(), org, setting(true)).await;
     let client = connect(
         &server.url_at(ORG_PATH),
@@ -5389,7 +5353,7 @@ async fn every_org_call_writes_one_audit_record_naming_the_session_the_tool_its_
 async fn a_call_that_fails_is_one_audit_record_that_says_why() {
     let org = FakeOrganisation::with_member("Ada Lovelace", Some(Role::Developer))
         .with_roster(acme_roster());
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let (server, records) = serve_audited(tokens.clone(), org, setting(true)).await;
     let client = connect(
         &server.url_at(ORG_PATH),
@@ -5416,7 +5380,7 @@ async fn a_call_that_fails_is_one_audit_record_that_says_why() {
 async fn a_refused_call_is_one_audit_record_that_says_why() {
     let org = FakeOrganisation::with_member("Ada Lovelace", Some(Role::Developer));
     let (gate, on) = switchable(false);
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let (server, records) = serve_audited(tokens.clone(), org, gate).await;
     let client = connect(
         &server.url_at(ORG_PATH),
@@ -5485,14 +5449,14 @@ fn an_audit_record_reaches_the_window_in_its_wire_shape() {
 
 /// The account and the Project's binding as the offer sees them, counting
 /// how often each is read.
-struct FakeSessionOrgs {
+pub(crate) struct FakeSessionOrgs {
     signed_in: AtomicBool,
     bound: Mutex<Option<OrgScope>>,
-    reads: AtomicUsize,
+    pub(crate) reads: AtomicUsize,
 }
 
 impl FakeSessionOrgs {
-    fn new(signed_in: bool, bound: Option<OrgScope>) -> Arc<Self> {
+    pub(crate) fn new(signed_in: bool, bound: Option<OrgScope>) -> Arc<Self> {
         Arc::new(Self {
             signed_in: AtomicBool::new(signed_in),
             bound: Mutex::new(bound),
@@ -5528,34 +5492,28 @@ impl SessionOrgs for FakeSessionOrgs {
     }
 }
 
-async fn running_host(org: Arc<dyn OrganisationCloud>) -> Arc<MemoryServerHost> {
-    let host = Arc::new(MemoryServerHost::new());
-    let server = MemoryServer::start_with(
-        memory(),
-        host.tokens().clone(),
-        host.clocks().clone(),
-        host.reads().clone(),
-        sharing(true),
-        Sources::default(),
-        vec![
-            quiet_ui(),
-            router(OrgTools::new(org, setting(true), bound_to_acme())),
-        ],
-    )
-    .await
-    .unwrap();
-    host.adopt(server);
-    host
-}
-
-fn offers(
-    host: Arc<MemoryServerHost>,
+/// A host serving `org` behind the setting and the account as given, beside
+/// the memory and UI tenants, as the app mounts them.
+async fn running_host_as(
+    org: Arc<dyn OrganisationCloud>,
     setting_on: bool,
     orgs: Arc<FakeSessionOrgs>,
-) -> MemorySessionOffers {
-    MemorySessionOffers::new(host, sharing(true))
-        .with_ui(UiOffer::new(Arc::new(|_: &str| true)))
-        .with_org(OrgOffer::new(setting(setting_on), orgs))
+) -> Arc<ToolServerHost> {
+    running_host_with(OrgTools::new(org, setting(setting_on), orgs)).await
+}
+
+/// [`running_host_as`] with the organisation tools built by the caller.
+async fn running_host_with(tools: OrgTools) -> Arc<ToolServerHost> {
+    ToolServerHost::running(vec![memory(), quiet_ui(), tenant(tools)]).await
+}
+
+/// Setting on, signed in, the Project bound to Acme's Workspace.
+async fn running_host(org: Arc<dyn OrganisationCloud>) -> Arc<ToolServerHost> {
+    running_host_as(org, true, bound_to_acme()).await
+}
+
+fn offers(host: Arc<ToolServerHost>) -> SessionOffers {
+    SessionOffers::new(host)
 }
 
 /// The native connection carries both properties; an ACP one neither. The
@@ -5574,7 +5532,7 @@ fn session_request(in_process: bool) -> SessionMcpRequest {
 
 /// Every entry an offer carries, as `(name, url, bearer token)`.
 fn entries(offer: &SessionMcpOffer) -> Vec<(String, String, String)> {
-    crate::commands::memory_server::offers::offered_entries(offer)
+    crate::commands::tool_servers::offers::offered_entries(offer)
 }
 
 fn names(offer: &SessionMcpOffer) -> Vec<String> {
@@ -5589,9 +5547,8 @@ async fn a_native_session_on_a_cloud_bound_project_is_offered_all_three_on_one_t
 ) {
     let org = FakeOrganisation::with_member("Ada Lovelace", Some(Role::Developer));
     org.record("s1", current(true));
-    let host = running_host(org.clone()).await;
-    let offer = offers(host.clone(), true, FakeSessionOrgs::new(true, Some(acme())))
-        .offer(&session_request(true));
+    let host = running_host_as(org.clone(), true, FakeSessionOrgs::new(true, Some(acme()))).await;
+    let offer = offers(host.clone()).offer(&session_request(true));
     let got = entries(&offer);
     assert_eq!(
         names(&offer),
@@ -5636,9 +5593,8 @@ async fn a_native_session_on_a_cloud_bound_project_is_offered_all_three_on_one_t
 /// server's outward actions, and only while that server is offered.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_offer_declares_the_org_servers_outward_actions_as_asking_first() {
-    let host = running_host(chatting()).await;
-    let offer = offers(host.clone(), true, FakeSessionOrgs::new(true, Some(acme())))
-        .offer(&session_request(true));
+    let host = running_host_as(chatting(), true, FakeSessionOrgs::new(true, Some(acme()))).await;
+    let offer = offers(host.clone()).offer(&session_request(true));
     assert_eq!(
         offer
             .ask_first()
@@ -5657,8 +5613,8 @@ async fn the_offer_declares_the_org_servers_outward_actions_as_asking_first() {
     assert_eq!(offer.ask_first().tools_on("atlas_memory").count(), 0);
     assert_eq!(offer.ask_first().tools_on(UI_SERVER_NAME).count(), 0);
 
-    let offer =
-        offers(host, false, FakeSessionOrgs::new(true, Some(acme()))).offer(&session_request(true));
+    let host = running_host_as(chatting(), false, bound_to_acme()).await;
+    let offer = offers(host).offer(&session_request(true));
     assert_eq!(
         offer.ask_first(),
         &atlas_agent_servers::AskFirst::none(),
@@ -5668,9 +5624,9 @@ async fn the_offer_declares_the_org_servers_outward_actions_as_asking_first() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn an_acp_session_is_not_offered_the_org_server() {
-    let host = running_host(Arc::new(FakeOrganisation::default())).await;
     let orgs = FakeSessionOrgs::new(true, Some(acme()));
-    let offer = offers(host.clone(), true, orgs.clone()).offer(&session_request(false));
+    let host = running_host_as(Arc::new(FakeOrganisation::default()), true, orgs.clone()).await;
+    let offer = offers(host.clone()).offer(&session_request(false));
     assert_eq!(names(&offer), ["atlas_memory"]);
     assert_eq!(
         orgs.reads.load(Ordering::SeqCst),
@@ -5683,17 +5639,25 @@ async fn an_acp_session_is_not_offered_the_org_server() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn with_the_setting_off_the_org_server_is_not_offered() {
-    let host = running_host(Arc::new(FakeOrganisation::default())).await;
-    let offer =
-        offers(host, false, FakeSessionOrgs::new(true, Some(acme()))).offer(&session_request(true));
+    let host = running_host_as(
+        Arc::new(FakeOrganisation::default()),
+        false,
+        FakeSessionOrgs::new(true, Some(acme())),
+    )
+    .await;
+    let offer = offers(host).offer(&session_request(true));
     assert_eq!(names(&offer), ["atlas_memory", UI_SERVER_NAME]);
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_session_on_an_unbound_project_is_not_offered_the_org_server() {
-    let host = running_host(Arc::new(FakeOrganisation::default())).await;
-    let offer =
-        offers(host.clone(), true, FakeSessionOrgs::new(true, None)).offer(&session_request(true));
+    let host = running_host_as(
+        Arc::new(FakeOrganisation::default()),
+        true,
+        FakeSessionOrgs::new(true, None),
+    )
+    .await;
+    let offer = offers(host.clone()).offer(&session_request(true));
     assert_eq!(names(&offer), ["atlas_memory", UI_SERVER_NAME]);
     let token = entries(&offer)[0].2.clone();
     assert_eq!(
@@ -5707,17 +5671,17 @@ async fn a_session_on_an_unbound_project_is_not_offered_the_org_server() {
 /// organisation but no Workspace: not bound, for the offer.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_project_bound_without_a_workspace_is_not_offered_the_org_server() {
-    let host = running_host(Arc::new(FakeOrganisation::default())).await;
     let no_workspace = OrgScope {
         org_id: "org-acme".into(),
         workspace_id: None,
     };
-    let offer = offers(
-        host.clone(),
+    let host = running_host_as(
+        Arc::new(FakeOrganisation::default()),
         true,
         FakeSessionOrgs::new(true, Some(no_workspace)),
     )
-    .offer(&session_request(true));
+    .await;
+    let offer = offers(host.clone()).offer(&session_request(true));
     assert_eq!(names(&offer), ["atlas_memory", UI_SERVER_NAME]);
     let token = entries(&offer)[0].2.clone();
     assert_eq!(
@@ -5729,90 +5693,15 @@ async fn a_project_bound_without_a_workspace_is_not_offered_the_org_server() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_signed_out_user_is_not_offered_the_org_server() {
-    let host = running_host(Arc::new(FakeOrganisation::default())).await;
     let orgs = FakeSessionOrgs::new(false, Some(acme()));
-    let offer = offers(host, true, orgs.clone()).offer(&session_request(true));
+    let host = running_host_as(Arc::new(FakeOrganisation::default()), true, orgs.clone()).await;
+    let offer = offers(host).offer(&session_request(true));
     assert_eq!(names(&offer), ["atlas_memory", UI_SERVER_NAME]);
     assert_eq!(
         orgs.reads.load(Ordering::SeqCst),
         1,
         "the binding is not opened for a signed-out user"
     );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn without_the_org_third_the_offer_is_as_before() {
-    let host = running_host(Arc::new(FakeOrganisation::default())).await;
-    let offers = MemorySessionOffers::new(host, sharing(true))
-        .with_ui(UiOffer::new(Arc::new(|_: &str| true)));
-    assert_eq!(
-        names(&offers.offer(&session_request(true))),
-        ["atlas_memory", UI_SERVER_NAME]
-    );
-}
-
-#[test]
-fn the_decision_says_whether_the_org_server_is_included_and_why_not() {
-    use OrgOfferDecision::*;
-    assert_eq!(
-        OrgOfferDecision::decide(true, true, true, true, true, true),
-        Included
-    );
-    assert_eq!(
-        OrgOfferDecision::decide(false, true, true, true, true, true),
-        Omitted("agent did not advertise mcpCapabilities.http")
-    );
-    assert_eq!(
-        OrgOfferDecision::decide(true, false, true, true, true, true),
-        Omitted("connection does not carry organisation access")
-    );
-    assert_eq!(
-        OrgOfferDecision::decide(true, true, false, true, true, true),
-        Omitted("organisation access is off in Settings")
-    );
-    assert_eq!(
-        OrgOfferDecision::decide(true, true, true, false, true, true),
-        Omitted("not signed in")
-    );
-    assert_eq!(
-        OrgOfferDecision::decide(true, true, true, true, false, true),
-        Omitted("project is not bound to a cloud Workspace")
-    );
-    assert_eq!(
-        OrgOfferDecision::decide(true, true, true, true, true, false),
-        Omitted("org tool server is not running")
-    );
-}
-
-#[test]
-fn each_decision_is_one_log_line_naming_the_agent_its_capabilities_and_the_outcome() {
-    assert_eq!(
-        OrgOfferDecision::Included.log_line("atlas-agent", true, true),
-        "org tool server offer: agent=atlas-agent http_mcp=true org_access=true org_server=included",
-    );
-    assert_eq!(
-        OrgOfferDecision::decide(true, false, true, true, true, true).log_line("claude-code", true, false),
-        "org tool server offer: agent=claude-code http_mcp=true org_access=false org_server=omitted \
-         reason=\"connection does not carry organisation access\"",
-    );
-}
-
-#[test]
-fn the_setting_is_not_read_for_a_connection_that_cannot_use_the_server() {
-    let reads = Arc::new(AtomicUsize::new(0));
-    let counted = reads.clone();
-    let orgs = FakeSessionOrgs::new(true, Some(acme()));
-    let offer = OrgOffer::new(
-        Arc::new(move |_: &str| {
-            counted.fetch_add(1, Ordering::SeqCst);
-            true
-        }),
-        orgs.clone(),
-    );
-    assert_eq!(offer.decide(true, false, "/p", true).1, None);
-    assert_eq!(offer.decide(false, true, "/p", true).1, None);
-    assert_eq!(reads.load(Ordering::SeqCst), 0);
-    assert_eq!(orgs.reads.load(Ordering::SeqCst), 0);
 }
 
 // ── Which organisation a binding places a Project in ─────────────────────────
@@ -6379,7 +6268,7 @@ async fn a_consent_the_server_refused_for_another_reason_is_spent_not_kept() {
     let (gate, on) = switchable(false);
     let tools = OrgTools::new(org.clone(), gate, bound_to_acme());
     let consent = tools.consent().clone();
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let server = serve_tools(tokens.clone(), tools).await;
     let client = connect(
         &server.url_at(ORG_PATH),
@@ -6414,7 +6303,7 @@ async fn a_consent_refused_while_signed_out_is_spent_too() {
     let orgs = bound_to_acme();
     let tools = OrgTools::new(org.clone(), setting(true), orgs.clone());
     let consent = tools.consent().clone();
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let server = serve_tools(tokens.clone(), tools).await;
     let client = connect(
         &server.url_at(ORG_PATH),
@@ -6443,7 +6332,7 @@ async fn access_resumes_after_the_setting_is_back_on_and_after_signing_in_again(
     let org = FakeOrganisation::with_member("Ada Lovelace", Some(Role::Developer));
     let (gate, on) = switchable(true);
     let orgs = bound_to_acme();
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let server = serve_tools(
         tokens.clone(),
         OrgTools::new(org.clone(), gate, orgs.clone()),

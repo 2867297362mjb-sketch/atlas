@@ -8,15 +8,17 @@ import { FileTabFrame } from "@/features/explorer/components/file-tab-frame";
 import { readPullRequestTabData } from "@/features/pull-requests/lib/open-pull-request-tab";
 import { readPullRequestListTabData } from "@/features/pull-requests/lib/open-pull-request-list-tab";
 import { readSessionPullRequestsTabData } from "@/features/pull-requests/lib/open-session-pull-requests-tab";
-import type { TabType } from "@/lib/constants";
+import { fileTabPath, typedTab, type PersistentTabType } from "@/lib/tab-registry";
 import { PlaceholderContent } from "./views/placeholder-content";
 
 /*
- * The tab registry: every tab type's lazy import and its render branch, in one
- * place. A new tab type adds its lazy import here and a `case` in `TabContent`
- * (or, if it stays mounted across tab switches, in `PersistentPanel` plus an
- * entry in `PERSISTENT_TYPES_LIST`). `center-panel.tsx` lays out the columns
- * that host these; `tab-content-container.tsx` decides which of them mount.
+ * Every tab type's panel: its lazy import and its render branch. What a type
+ * IS lives in the tab registry (`@/lib/tab-registry`), which stays free of
+ * React so the layout store can import it; this file is the registry's React
+ * half. A new tab type adds its lazy import here and a `case` in `TabContent`
+ * or, if its registry entry keeps it mounted across tab switches, in
+ * `PersistentPanel`, where `tsc` demands it. `center-panel.tsx` lays out the
+ * columns that host these; `tab-content-container.tsx` decides which mount.
  */
 
 // Every other tab type is lazy. Editor/Terminal in particular pull in
@@ -108,53 +110,8 @@ const LogPanel = lazy(() =>
 );
 
 export const GROUP_OF = (t: Tab) => t.groupId ?? "main";
-/**
- * Declared as an `as const` TUPLE, not a bare `Set<TabType>`, so the member
- * literals survive into the type system: `PersistentTabType` below is derived
- * from it, and `PersistentPanel`'s `switch` is checked for exhaustiveness
- * against that union. Adding an entry here without giving it a `case` is a
- * COMPILE ERROR — which is the whole point. A `Set<TabType>` erased the
- * literals, so a missing branch silently fell through to the terminal
- * fallback and mounted a PTY instead of the panel (this is how the Spaces tab
- * regressed in 32767aff8).
- */
-export const PERSISTENT_TYPES_LIST = [
-  "editor",
-  "terminal",
-  "browser",
-  "pdf",
-  // Keep chat mounted across tab switches too: it keeps its mounted
-  // transcript window + scroll position (remounting re-ran the "loading
-  // transcript" path and rebuilt scroll). Team chat, for the same reason: an
-  // open conversation keeps its scroll and its half-typed message.
-  "chat",
-  "team-chat",
-  // The Organisation agent's panel: its conversations keep their scroll and
-  // their half-typed questions across tab switches, as team chat's do.
-  "agent-panel",
-  // Knowledge, the knowledge graph and Spaces were here too; they are
-  // destinations now (ADR-0024), kept mounted by the destination screen.
-] as const satisfies readonly TabType[];
-
-type PersistentTabType = (typeof PERSISTENT_TYPES_LIST)[number];
+/** A tab whose registry entry keeps it mounted across tab switches. */
 export type PersistentTab = Tab & { type: PersistentTabType };
-
-export const PERSISTENT_TYPES: ReadonlySet<TabType> = new Set(PERSISTENT_TYPES_LIST);
-
-// Of the persistent types, these are the ones that keep BURNING CPU/GPU while
-// hidden — a PTY draining output, a live web embed, a Pixi/WebGL graph ticking,
-// a PDF worker. Those get unmounted for background projects (idle heat is the
-// bigger cost than their rebuild). The rest are inert-but-expensive-to-rebuild
-// (chat's transcript window + load path, knowledge's tree walk, settings' form
-// drafts) and stay mounted everywhere: hiding them saves nothing per frame and
-// costs a full remount on switch-back.
-export const IDLE_EXPENSIVE_TYPES_LIST = [
-  "terminal",
-  "browser",
-  "pdf",
-] as const satisfies readonly PersistentTabType[];
-
-export const IDLE_EXPENSIVE_TYPES: ReadonlySet<TabType> = new Set(IDLE_EXPENSIVE_TYPES_LIST);
 
 /**
  * Mounts one persistent tab's panel.
@@ -176,34 +133,20 @@ export function PersistentPanel({
   projectId: string;
   height: number;
 }) {
-  switch (tab.type) {
+  const t = typedTab(tab);
+  switch (t.type) {
     case "editor":
       return (
-        <FileTabFrame
-          tabId={tab.id}
-          projectId={projectId}
-          filePath={tab.data.filePath as string | undefined}
-          ownHeader
-        >
-          <EditorPanel
-            tabId={tab.id}
-            filePath={tab.data.filePath as string | undefined}
-            containerHeight={height}
-          />
+        <FileTabFrame tabId={tab.id} projectId={projectId} filePath={t.data.filePath} ownHeader>
+          <EditorPanel tabId={tab.id} filePath={t.data.filePath} containerHeight={height} />
         </FileTabFrame>
       );
     case "browser":
-      return (
-        <BrowserPanel
-          tabId={tab.id}
-          groupId={GROUP_OF(tab)}
-          initialUrl={tab.data.url as string | undefined}
-        />
-      );
+      return <BrowserPanel tabId={tab.id} groupId={GROUP_OF(tab)} initialUrl={t.data.url} />;
     case "pdf":
       return (
-        <FileTabFrame tabId={tab.id} projectId={projectId} filePath={tab.data.filePath as string}>
-          <PdfViewer filePath={tab.data.filePath as string} tabId={tab.id} />
+        <FileTabFrame tabId={tab.id} projectId={projectId} filePath={t.data.filePath}>
+          <PdfViewer filePath={t.data.filePath} tabId={tab.id} />
         </FileTabFrame>
       );
     case "team-chat":
@@ -218,7 +161,7 @@ export function PersistentPanel({
     case "terminal":
       return <TerminalPanel tabId={tab.id} projectId={projectId} />;
     default: {
-      const _exhaustive: never = tab.type;
+      const _exhaustive: never = t;
       void _exhaustive;
       return <PlaceholderContent tab={tab} />;
     }
@@ -229,19 +172,16 @@ export function TabContent({ tab, projectId = null }: { tab: Tab; projectId?: st
   // A file tab sits in its frame: the header band, and room for the column's
   // docked project tree (`file-tab-frame.tsx`, `file-dock.tsx`).
   const framed = (content: React.ReactNode) => (
-    <FileTabFrame
-      tabId={tab.id}
-      projectId={projectId}
-      filePath={tab.data.filePath as string | undefined}
-    >
+    <FileTabFrame tabId={tab.id} projectId={projectId} filePath={fileTabPath(tab) ?? undefined}>
       {content}
     </FileTabFrame>
   );
-  switch (tab.type) {
+  const t = typedTab(tab);
+  switch (t.type) {
     case "chat":
       return <ChatPanel tabId={tab.id} />;
     case "browser":
-      return <BrowserPanel initialUrl={tab.data.url as string | undefined} />;
+      return <BrowserPanel initialUrl={t.data.url} />;
     case "log":
       return <LogPanel />;
     case "source-control":
@@ -249,17 +189,17 @@ export function TabContent({ tab, projectId = null }: { tab: Tab; projectId?: st
     case "files":
       return <FilesPanel projectId={projectId} />;
     case "media":
-      return framed(<MediaViewer filePath={tab.data.filePath as string} />);
+      return framed(<MediaViewer filePath={t.data.filePath} />);
     case "svg":
-      return framed(<SvgViewer filePath={tab.data.filePath as string} />);
+      return framed(<SvgViewer filePath={t.data.filePath} />);
     case "pdf":
-      return framed(<PdfViewer filePath={tab.data.filePath as string} tabId={tab.id} />);
+      return framed(<PdfViewer filePath={t.data.filePath} tabId={tab.id} />);
     case "notebook":
-      return framed(<NotebookViewer filePath={tab.data.filePath as string} />);
+      return framed(<NotebookViewer filePath={t.data.filePath} />);
     case "diff":
-      return <ReviewPanel tabId={tab.id} repoPath={tab.data.repoPath as string} />;
+      return <ReviewPanel tabId={tab.id} repoPath={t.data.repoPath} />;
     case "commit":
-      return <CommitView repoPath={tab.data.repoPath as string} sha={tab.data.sha as string} />;
+      return <CommitView repoPath={t.data.repoPath} sha={t.data.sha} />;
     case "pull-request": {
       const pr = readPullRequestTabData(tab.data);
       return pr ? (
@@ -286,18 +226,12 @@ export function TabContent({ tab, projectId = null }: { tab: Tab; projectId?: st
     }
     case "session-changes":
       return (
-        <ReviewPanel
-          tabId={tab.id}
-          repoPath={tab.data.projectPath as string}
-          sessionId={tab.data.sessionId as string}
-        />
+        <ReviewPanel tabId={tab.id} repoPath={t.data.projectPath} sessionId={t.data.sessionId} />
       );
     case "comms-draft":
-      return (
-        <CommsDraftTab convId={tab.data.convId as string} draftId={tab.data.draftId as string} />
-      );
+      return <CommsDraftTab convId={t.data.convId} draftId={t.data.draftId} />;
     case "unsupported":
-      return framed(<UnsupportedFile filePath={tab.data.filePath as string} />);
+      return framed(<UnsupportedFile filePath={t.data.filePath} />);
     default:
       return <PlaceholderContent tab={tab} />;
   }

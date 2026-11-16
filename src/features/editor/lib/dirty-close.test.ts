@@ -7,11 +7,8 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => null) }));
-vi.mock("@tauri-apps/api/event", () => ({
-  emit: vi.fn(async () => {}),
-  listen: vi.fn(async () => () => {}),
-}));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
 
 import { useConfirmStore } from "@/lib/confirm";
 import { useLayoutStore } from "@/features/layout/stores/layout-store";

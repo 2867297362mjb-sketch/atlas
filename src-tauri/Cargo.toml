@@ -37,6 +37,8 @@ atlas-process = { path = "../crates/atlas-process" }
 # Whose data this process owns — the released app's or the dev profile's.
 # Fixed from the bundle identifier at the top of `run()`.
 atlas-profile = { path = "../crates/atlas-profile" }
+# `replace_file`: the one crash-safe "rewrite this file" (config, skills, memory, keys).
+atlas-fs = { path = "../crates/atlas-fs" }
 # Devtools intentionally NOT enabled here. Release builds ship without
 # right-click → Inspect Element / Cmd+Option+I; `tauri dev` still auto-
 # enables devtools because the Tauri runtime turns them on for debug
@@ -74,6 +76,10 @@ tauri-plugin-notification = "2"
 tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The frontend's types for the app-state payloads are generated from the Rust
+# structs (`state/app_state_bindings.rs`), as `atlas-agent-wire` does for the
+# session-delta wire. Already in the graph through that crate.
+ts-rs = { workspace = true }
 # Bundled so the Memory panel's reader of a third-party CLI's history database (in-process, WAL-concurrent) is
 # self-contained and doesn't shell out to the `sqlite3` CLI.
 # Pinned to rusqlite 0.39 because its `libsqlite3-sys` is 0.37, the major the
@@ -144,13 +150,17 @@ atlas-embed = { path = "../crates/atlas-embed" }
 atlas-memory = { path = "../crates/atlas-memory" }
 # CLAUDE.md + .claude/rules mirrored into AGENTS.md (commands::instruction_sync).
 atlas-instruction-sync = { path = "../crates/atlas-instruction-sync" }
-# Structured side-by-side git diff engine (vendors delta's word-diff). Drives
-# `commands::gitdiff` (diff viewer + editor gutter).
+# The editor gutter's line status from a file's `git diff` (vendors delta's
+# line pairing). Drives `commands::gitdiff`.
 atlas-gitdiff = { path = "../crates/atlas-gitdiff" }
 # Git execution chokepoint: real-binary spawns (hooks run), typed stderr →
 # error taxonomy with friendly messages, porcelain-v2 status, streaming
 # output. Drives `commands::git`, `commands::git_ops`, `commands::git_snapshot`.
 atlas-git = { path = "../crates/atlas-git" }
+atlas-gh = { path = "../crates/atlas-gh" }
+# The skill store: `.agents/skills`, its projection into each agent's skills
+# directory, bundled skills and packs. `commands::skills` is its IPC adapter.
+atlas-skills = { path = "../crates/atlas-skills" }
 # Single source of truth for secret redaction. Capture scrubs agent content on
 # the way *into* the local store rather than on the way out to the network, so
 # nothing downstream — sync, export, share, support bundles — has to remember to
@@ -250,11 +260,17 @@ unicode-normalization = "0.1"
 libc = { workspace = true }
 
 [dev-dependencies]
+# The shared scripted `AgentConnection`; the feature is for tests only.
+atlas-acp-thread = { path = "../crates/atlas-acp-thread", features = ["test-support"] }
 # An in-process MCP client for the memory tool server's loopback tests.
 # `transport-streamable-http-client-reqwest` is only the union of two features
 # `atlas-engine-rmcp-client` already turns on (`transport-streamable-http-client`, and
 # `__reqwest` through `auth`), so it compiles nothing new.
 rmcp = { workspace = true, features = ["client", "transport-streamable-http-client-reqwest"] }
+# `tauri::test`: the mock runtime the command-seam tests build their app on
+# (`src/command_seam/`). A feature of the dependency above, for tests only:
+# with resolver 2 it is not in the graph of a normal or release build.
+tauri = { version = "2", features = ["test"] }
 # Self-deleting temp dirs for the state/config tests.
 tempfile = "3"
 

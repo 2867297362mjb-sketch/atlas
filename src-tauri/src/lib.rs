@@ -2,6 +2,8 @@ mod app_icon;
 #[cfg(target_os = "macos")]
 mod arrow_keys;
 mod auth;
+#[cfg(test)]
+mod command_seam;
 mod commands;
 mod fs_events;
 mod keep_awake;
@@ -11,6 +13,7 @@ mod menu;
 mod nav_guard;
 mod notifier;
 mod open_vsx;
+mod settings_effects;
 mod sleep_watch;
 mod state;
 mod telemetry;
@@ -27,6 +30,7 @@ use commands::mention_search::MentionCacheState;
 use commands::recent_files::RecentFilesState;
 use commands::terminal::TerminalState;
 use parking_lot::Mutex;
+use settings_effects::When;
 use state::{AppState, AppStateHandle};
 use tauri::Manager;
 
@@ -45,7 +49,7 @@ use tauri::Manager;
 pub fn run_bridge_if_asked() -> bool {
     let mut args = std::env::args_os().skip(1);
     if args.next().and_then(|a| a.into_string().ok()).as_deref()
-        != Some(commands::memory_server::BRIDGE_ARG)
+        != Some(commands::tool_servers::BRIDGE_ARG)
     {
         return false;
     }
@@ -226,12 +230,6 @@ pub fn run() {
             // User preferences live in their own validated, human-editable
             // `config.toml`; a first run writes the documented defaults.
             let config = state::atlas_config::bootstrap();
-            let telemetry_enabled = config.effective().share_telemetry;
-            // The engine reads this gate on its first connect, which happens
-            // after setup — so it must be in the environment before then.
-            commands::atlas_config::apply_curated_plugin_sync_gate(
-                config.effective().curated_plugin_sync,
-            );
             // Opaque window background, in the theme the user actually chose.
             // Fills the brief gap between window-shown and first React paint
             // with the theme's own background instead of the WebKit default
@@ -251,16 +249,9 @@ pub fn run() {
             // Mission Control / Spaces transitions lag system-wide whenever
             // Atlas was the focused window. An opaque window can be snapshotted
             // as a flat texture, so the OS animation stays smooth.
+            //
+            // The colour itself is one of the settings effects applied below.
             if let Some(window) = app.get_webview_window("main") {
-                let settings = config.effective();
-                let system_is_light = matches!(window.theme(), Ok(tauri::Theme::Light));
-                let color = window_background::window_background(
-                    &settings.theme_light,
-                    &settings.theme_dark,
-                    settings.theme_mode,
-                    system_is_light,
-                );
-                let _ = window.set_background_color(Some(color));
                 // tao leaves `trafficLightPosition` unapplied until the first
                 // resize; see the function.
                 commands::window::apply_traffic_light_inset(&window);
@@ -269,22 +260,20 @@ pub fn run() {
             // focused field; see the module.
             #[cfg(target_os = "macos")]
             arrow_keys::install();
-            // The app icon, before the window shows. Later changes arrive
-            // through `notify_settings_changed`.
-            app_icon::apply(app.handle(), &config.effective().app_icon);
-            // Whether `instructionSync` is on as Atlas starts, so switching it
-            // off before any project opens still takes the mirrored blocks out.
-            app.state::<commands::instruction_sync::InstructionSyncState>()
-                .init(config.effective().instruction_sync);
-            // Whether agents start with their own memory off (M4).
-            atlas_agent_servers::set_atlas_only_memory(config.effective().atlas_only_memory);
+            // Product telemetry, on by default (opt-out). Inert when no PostHog
+            // key resolves (env / telemetry.json / build-time default), and
+            // gated off until the settings effects below say otherwise.
+            let (telemetry, flush_rx) = telemetry::TelemetryClient::new(app.handle(), device_id);
+            app.manage(telemetry.clone());
+            app.manage(Arc::new(keep_awake::KeepAwakeManager::new()));
+            // Every setting with a live side effect, applied once for the
+            // settings Atlas starts with; later changes go through the same
+            // call. After the two `manage`s above, which are its targets, and
+            // before anything can connect an agent. See `settings_effects`.
+            settings_effects::apply(app.handle(), config.effective(), When::Boot);
             let atlas_config: state::AtlasConfigHandle = Arc::new(Mutex::new(config));
             app.manage(atlas_config.clone());
             app.manage(state::project_config::ProjectConfigs::default());
-            let keep_awake = Arc::new(keep_awake::KeepAwakeManager::new(
-                atlas_config.lock().effective().keep_awake_while_running,
-            ));
-            app.manage(keep_awake);
             commands::atlas_config::start_watcher(app.handle(), atlas_config);
             commands::themes::start_watcher(app.handle());
             commands::git_autofetch::start(app.handle());
@@ -306,11 +295,7 @@ pub fn run() {
             // that store (`~/.agents/skills`) is shared with the released app.
             commands::skills::ensure_bundled_skills();
 
-            // Product telemetry, on by default (opt-out). Inert when the user has turned it off or no
-            // PostHog key resolves (env / telemetry.json / build-time default).
-            let (telemetry, flush_rx) =
-                telemetry::TelemetryClient::new(app.handle(), device_id, telemetry_enabled);
-            app.manage(telemetry.clone());
+            // The telemetry flush loop; the client was created above.
             if let Some(rx) = flush_rx {
                 let tclient = telemetry.clone();
                 tauri::async_runtime::spawn(async move {

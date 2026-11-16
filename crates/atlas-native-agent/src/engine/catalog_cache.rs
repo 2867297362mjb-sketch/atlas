@@ -332,28 +332,19 @@ pub async fn load_cache(home: &Path) -> Option<CatalogueCache> {
     }
 }
 
-/// Writes the cache atomically: a sibling temp file, then a rename.
+/// Writes the cache whole, through [`atlas_fs::replace_file`].
 ///
 /// A launch that dies mid-write must not leave a half file for the next
 /// launch to trip on; `load_cache` would treat it as absent, which is
 /// survivable, but a stale-but-whole cache is strictly better than none.
 pub async fn write_cache(home: &Path, cache: &CatalogueCache) -> Result<()> {
-    tokio::fs::create_dir_all(home)
-        .await
-        .with_context(|| format!("creating the engine home at {}", home.display()))?;
     let path = cache_path(home);
-    let tmp = home.join(format!("{CACHE_FILE}.{}.tmp", std::process::id()));
     let body = serde_json::to_vec_pretty(cache).context("serialising the model catalogue cache")?;
-    tokio::fs::write(&tmp, body)
+    let target = path.clone();
+    tokio::task::spawn_blocking(move || atlas_fs::replace_file(target, body))
         .await
-        .with_context(|| format!("writing {}", tmp.display()))?;
-    tokio::fs::rename(&tmp, &path).await.with_context(|| {
-        format!(
-            "moving the model catalogue cache into place at {}",
-            path.display()
-        )
-    })?;
-    Ok(())
+        .context("the model catalogue cache write did not finish")?
+        .with_context(|| format!("writing {}", path.display()))
 }
 
 /// A cache is fresh when it is young enough AND was fetched for this org.

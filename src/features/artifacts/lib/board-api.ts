@@ -5,7 +5,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 
-import type { BoardPage, ProjectFilter } from "../types";
+import type { BoardCheckpoint, BoardPage, ProjectFilter } from "../types";
 
 export function readBoard(projects: string[], filter: ProjectFilter | null): Promise<BoardPage> {
   return invoke<BoardPage>("artifacts_board", { projects, filter });
@@ -14,4 +14,14 @@ export function readBoard(projects: string[], filter: ProjectFilter | null): Pro
 /** Resolves true when the cloud sessions loaded this time. */
 export function refreshCloudBoard(): Promise<boolean> {
   return invoke<boolean>("artifacts_cloud_refresh");
+}
+
+/** Point the Timeline's cloud half at an organisation and its projects. */
+export function retargetCloudBoard(orgId: string | null, projectPaths: string[]): Promise<void> {
+  return invoke("artifacts_cloud_retarget", { orgId, projectPaths });
+}
+
+/** Every checkpoint across `projects`, for the checkpoint picker. */
+export function readCheckpoints(projects: string[]): Promise<BoardCheckpoint[]> {
+  return invoke<BoardCheckpoint[]>("artifacts_checkpoints", { projects });
 }

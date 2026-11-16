@@ -6,8 +6,8 @@ import { describe, expect, it, vi } from "vitest";
 
 // The component module pulls in the full chat stack; stub the boundaries the
 // two pure helpers under test never touch.
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
 
 const { sidebarAgentOf, AGENT_TYPE_BY_SIDEBAR } = await import("../lib/sidebar-agents");
 

@@ -1,15 +1,13 @@
-//! Structured side-by-side git-diff engine for Atlas.
+//! The editor gutter's view of a file's `git diff`: which lines of the new
+//! file are added, which are changed, and which follow a removal.
 //!
-//! Parses `git diff` unified output into an aligned left/right row model with
-//! word-level intra-line change spans, ready to serialize to the frontend.
-//! The word-diff (line pairing + token annotation) is vendored from
-//! `dandavison/delta` — see `src/vendor/` and `LICENSE-delta`.
+//! [`line_status`] is the whole interface. Behind it are a unified-diff
+//! parser (`parse`) and the line pairing that tells a changed line from an
+//! added one, vendored from `dandavison/delta` — see `src/vendor/` and
+//! `LICENSE-delta`.
 
+mod engine;
 mod parse;
 mod vendor;
 
-pub mod engine;
-
-pub use engine::{
-    build_file_diff, line_status, FileDiff, LineKind, LineStatus, Row, Segment, Side, Stats,
-};
+pub use engine::{line_status, LineStatus};

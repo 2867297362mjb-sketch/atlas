@@ -7,17 +7,11 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(async () => null),
-  convertFileSrc: (p: string) => p,
-}));
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async () => () => {}),
-  emit: vi.fn(async () => {}),
-}));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
 
 import { useChatStore } from "../stores/chat-store";
-import { COMMENT_LINK_EVENT, type CommentLinkDetail } from "./comment-mentions";
+import { type CommentLinkDetail } from "./comment-mentions";
 import {
   knownMention,
   mintedMention,
@@ -28,7 +22,6 @@ import { toShortForm, type MentionReviewComment } from "./mentions";
 import {
   REVIEW_DIFF_MAX_CHARS,
   REVIEW_TEXT_MAX_CHARS,
-  REVIEW_UNLINK_EVENT,
   capReviewComment,
   fenceFor,
   linkReviewCommentToComposer,
@@ -37,6 +30,7 @@ import {
   unlinkReviewComment,
   withReviewCommentsInline,
 } from "./review-comments";
+import { onWindowEvent } from "@/lib/window-events";
 
 const review = (over: Partial<MentionReviewComment> = {}): MentionReviewComment => ({
   kind: "review_comment",
@@ -117,23 +111,20 @@ describe("as plain text", () => {
 });
 
 describe("adding and removing", () => {
-  const listeners: Array<[string, EventListener]> = [];
-  const on = (type: string, fn: (e: CustomEvent) => void) => {
-    const l = fn as unknown as EventListener;
-    listeners.push([type, l]);
-    window.addEventListener(type, l);
-  };
+  const offs: Array<() => void> = [];
   afterEach(() => {
-    for (const [type, l] of listeners.splice(0)) window.removeEventListener(type, l);
+    for (const off of offs.splice(0)) off();
     useChatStore.setState({ drafts: {} });
   });
 
   it("is added when a composer takes the chip, capped", () => {
     let got: CommentLinkDetail | null = null;
-    on(COMMENT_LINK_EVENT, (e) => {
-      got = e.detail as CommentLinkDetail;
-      e.preventDefault();
-    });
+    offs.push(
+      onWindowEvent("atlas:chat-link-comment", (detail, e) => {
+        got = detail;
+        e.preventDefault();
+      }),
+    );
     expect(linkReviewCommentToComposer("tab", review({ text: " hi " }))).toBe(true);
     expect(got).toMatchObject({ tabId: "tab", mention: { kind: "review_comment", text: "hi" } });
   });
@@ -144,7 +135,7 @@ describe("adding and removing", () => {
 
   it("leaves a mounted composer to take its chip out", () => {
     useChatStore.setState({ drafts: { tab: "see @review:r1x2y3 please" } });
-    on(REVIEW_UNLINK_EVENT, (e) => e.preventDefault());
+    offs.push(onWindowEvent("atlas:chat-unlink-review-comment", (_d, e) => e.preventDefault()));
     unlinkReviewComment("tab", "r1x2y3");
     expect(useChatStore.getState().drafts.tab).toBe("see @review:r1x2y3 please");
   });
