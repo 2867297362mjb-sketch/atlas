@@ -1,0 +1,32 @@
+[package]
+name = "atlas-skills"
+version = "0.1.0"
+edition = "2021"
+description = "The skill store: the canonical `.agents/skills` tree, its projection into each agent's own skills directory, bundled skills, and packs (parse, install, lockfile, projection). Plain blocking file I/O, no async, no Tauri."
+
+[lib]
+name = "atlas_skills"
+
+[dependencies]
+# Durable writes: the ledgers, the pack lock, a merged settings file.
+atlas-fs = { path = "../atlas-fs" }
+# The one way to spawn git: a pack's source is shallow-cloned through it.
+atlas-git = { path = "../atlas-git" }
+# `.atlas` vs `.atlas-dev`: the pack store, the native agent's skills
+# directory, and which bundled skills a build seeds.
+atlas-profile = { path = "../atlas-profile" }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+# The hash sidecar that tells an untouched bundled skill from an edited one.
+sha2 = { workspace = true }
+
+[dev-dependencies]
+# One test pins that both crates derive a pack rule's marker the same way.
+atlas-instruction-sync = { path = "../atlas-instruction-sync" }
+tempfile = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
+
+# The workspace lint table is only real for members that opt in —
+# without this stanza it is dead configuration (#60).
+[lints]
+workspace = true

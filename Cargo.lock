@@ -3467,6 +3467,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "atlas-skills"
+version = "0.1.0"
+dependencies = [
+ "atlas-fs",
+ "atlas-git",
+ "atlas-instruction-sync",
+ "atlas-profile",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "uuid",
+]
+
+[[package]]
 name = "atlas-terminal"
 version = "0.1.0"
 dependencies = [

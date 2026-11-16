@@ -119,6 +119,11 @@
     "clippy": true
   },
   {
+    "crate": "atlas-skills",
+    "clippy": true,
+    "cross": true
+  },
+  {
     "crate": "atlas-search",
     "clippy": true
   },
