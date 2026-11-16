@@ -226,7 +226,7 @@ pub async fn spaces_media_fetch(
         .join("spaces-media");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join(format!("{content_hash}.{ext}"));
-    if path.exists() {
+    if atlas_fs::cache_file_present(&path) {
         return Ok(path.to_string_lossy().into_owned());
     }
 
@@ -248,7 +248,8 @@ pub async fn spaces_media_fetch(
     if actual != content_hash {
         return Err("media bytes did not match their content hash".to_string());
     }
-    atlas_fs::replace_file(&path, &bytes).map_err(|e| e.to_string())?;
+    // A cache of a download: atomic, but not flushed to disk.
+    atlas_fs::replace_cache_file(&path, &bytes).map_err(|e| e.to_string())?;
     Ok(path.to_string_lossy().into_owned())
 }
 

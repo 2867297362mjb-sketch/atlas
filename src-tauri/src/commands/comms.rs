@@ -1011,14 +1011,15 @@ pub async fn comms_fetch_recording(
         .join("comms-recordings");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join(format!("{track_id}.{ext}"));
-    if path.exists() {
+    if atlas_fs::cache_file_present(&path) {
         return Ok(path.to_string_lossy().into_owned());
     }
     let bytes = mgr
         .download_recording(&url, &track_id)
         .await
         .map_err(map_err)?;
-    atlas_fs::replace_file(&path, &bytes).map_err(|e| e.to_string())?;
+    // A cache of a download: atomic, but not flushed to disk.
+    atlas_fs::replace_cache_file(&path, &bytes).map_err(|e| e.to_string())?;
     Ok(path.to_string_lossy().into_owned())
 }
 
@@ -1062,7 +1063,7 @@ async fn cache_attachment(
         .join("comms-attachments");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join(format!("{file_id}.{ext}"));
-    if path.exists() {
+    if atlas_fs::cache_file_present(&path) {
         return Ok(path);
     }
 
@@ -1080,7 +1081,8 @@ async fn cache_attachment(
             .map_err(map_err)?,
     };
     // Replaced whole, so a crash mid-download never leaves a plausible file.
-    atlas_fs::replace_file(&path, &bytes).map_err(|e| e.to_string())?;
+    // Not flushed to disk: the attachment can be downloaded again.
+    atlas_fs::replace_cache_file(&path, &bytes).map_err(|e| e.to_string())?;
     Ok(path)
 }
 
