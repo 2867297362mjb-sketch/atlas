@@ -179,15 +179,12 @@ impl Opened {
     }
 }
 
+/// The ids `on_session_ended` was told, in order.
+type EndedIds = Arc<std::sync::Mutex<Vec<String>>>;
+
 fn observed_host(
     advertised: Advertised,
-) -> (
-    Arc<AgentHost>,
-    PathBuf,
-    Arc<Deltas>,
-    Arc<std::sync::Mutex<Vec<String>>>,
-    Watchdog,
-) {
+) -> (Arc<AgentHost>, PathBuf, Arc<Deltas>, EndedIds, Watchdog) {
     let watchdog = Watchdog::arm();
     let deltas = Arc::new(Deltas::default());
     let (host, dir) = super::super::test_support::fresh_host_with_native_and_sink(

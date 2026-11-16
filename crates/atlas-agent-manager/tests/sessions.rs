@@ -186,7 +186,10 @@ async fn closing_one_session_leaves_another_on_the_connection_and_the_last_leave
 
     assert_eq!(f.residue(&first), Residue::default());
     assert_eq!(f.residue(&second), open_residue());
-    assert_eq!(f.registry.sessions_of(&f.agent), [second.clone()]);
+    assert_eq!(
+        f.registry.sessions_of(&f.agent),
+        std::slice::from_ref(&second)
+    );
 
     ended(f.registry.close(&second));
 
@@ -461,7 +464,6 @@ async fn a_bind_that_lands_after_its_session_was_closed_is_refused_and_closed_on
         .new_session(f.agent.clone(), Vec::new())
         .await
         .expect("opened");
-    let id = thread.lock().unwrap().session_id().clone();
 
     let refused = f
         .registry
