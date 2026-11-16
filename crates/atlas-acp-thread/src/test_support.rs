@@ -417,9 +417,16 @@ impl FakeHandle {
         self.shared.release.notify_one();
     }
 
-    /// Let one held open finish. Kept if none is parked yet.
+    /// Let one held open finish: the one parked longest. Kept if none is
+    /// parked yet.
     pub fn release_open(&self) {
         self.shared.release_open.notify_one();
+    }
+
+    /// Let the most recently held open finish, ahead of the ones parked
+    /// before it: an agent answering two opens out of order.
+    pub fn release_newest_open(&self) {
+        self.shared.release_open.notify_last();
     }
 
     /// Queue an answer the test delivers by hand: the returned sender ends the

@@ -7,7 +7,7 @@
 //! wire, the `session/close` the agent was sent.
 
 use super::*;
-use atlas_acp_thread::test_support::FakeHandle;
+use atlas_acp_thread::test_support::{FakeCall, FakeHandle};
 use atlas_agent_wire::{SessionDelta, SessionDeltaEnvelope};
 
 const SESSION: &str = "s-end";
@@ -717,5 +717,211 @@ async fn a_session_closed_while_it_is_loading_does_not_come_back() {
         "the agent is told to let go of what it loaded"
     );
     assert!(ended.lock().unwrap().is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---- a bind that is refused -------------------------------------------------
+
+/// How many opens of each kind the agent has been asked for. An open is
+/// parked on its hold by the time its call is on record: the test's runtime
+/// has one thread, and the task that made the call has yielded.
+fn opens_asked(fake: &FakeHandle) -> (usize, usize) {
+    let calls = fake.calls();
+    let count = |wanted: fn(&FakeCall) -> bool| calls.iter().filter(|call| wanted(call)).count();
+    (
+        count(|call| matches!(call, FakeCall::NewSession)),
+        count(|call| matches!(call, FakeCall::LoadSession(_))),
+    )
+}
+
+async fn joined<T>(task: tokio::task::JoinHandle<T>) -> T {
+    tokio::time::timeout(std::time::Duration::from_secs(5), task)
+        .await
+        .expect("the open never came back")
+        .expect("joined")
+}
+
+#[tokio::test]
+async fn a_late_refused_load_leaves_a_newer_bind_of_the_same_session_alone() {
+    // Every thread the agent loads, in the order the loads land.
+    let loaded: Arc<std::sync::Mutex<Vec<std::sync::Weak<Mutex<AcpThread>>>>> = Arc::default();
+    let seen = loaded.clone();
+    let (host, dir, deltas, ended, _watchdog, fake) = observed_host(
+        script()
+            .hold_opens()
+            .supports_load()
+            .supports_close()
+            .on_load(move |thread| seen.lock().unwrap().push(Arc::downgrade(thread))),
+    );
+    let agent_id = host.spawn(ATLAS_AGENT_ID).await.expect("spawn").agent_id;
+    let load = || {
+        tokio::spawn({
+            let (host, dir) = (host.clone(), dir.clone());
+            async move { host.load_session(agent_id, SESSION.into(), dir).await }
+        })
+    };
+
+    // The row is opened, and its tab closes before the agent has answered.
+    let first = load();
+    until("the first load never reached the agent", || {
+        opens_asked(&fake).1 == 1
+    })
+    .await;
+    host.drop_session(SESSION).await.expect("drop");
+
+    // The row is opened again, and this load is answered first.
+    let second = load();
+    until("the second load never reached the agent", || {
+        opens_asked(&fake).1 == 2
+    })
+    .await;
+    fake.release_newest_open();
+    joined(second).await.expect("the reopened session binds");
+    let bound = Residue {
+        record: true,
+        manager_handle: true,
+        projection: true,
+        history_row: true,
+        ..Residue::default()
+    };
+    assert_eq!(residue(&host, SESSION), bound);
+
+    // The load the close gave up on lands now, and is refused.
+    fake.release_open();
+    let late = joined(first).await;
+    assert!(late.is_err(), "the load the tab gave up on was bound");
+
+    let after = residue(&host, SESSION);
+    assert!(after.record, "the reopened session is still bound");
+    assert!(
+        after.projection,
+        "its projection went with the refused load"
+    );
+    assert!(after.history_row, "its history row was unbound");
+    assert!(
+        fake.closes().is_empty(),
+        "the agent was told to close the session the reopened tab is on"
+    );
+    assert!(ended.lock().unwrap().is_empty());
+
+    // The reopened tab can still send: the manager's handle, which a send
+    // resolves through, is the reopened session's thread and not the late one.
+    let thread = loaded.lock().unwrap()[0]
+        .upgrade()
+        .expect("the reopened session's thread is alive");
+    let handle = host
+        .manager()
+        .session(&acp::SessionId::new(SESSION))
+        .expect("the reopened session lost its handle, so it cannot send");
+    assert!(
+        Arc::ptr_eq(&handle.thread, &thread),
+        "the manager holds the refused load's thread"
+    );
+    // And nothing keeps the refused load's thread, which pins the agent's
+    // connection.
+    assert!(
+        loaded.lock().unwrap()[1].upgrade().is_none(),
+        "the refused load's thread is still held"
+    );
+
+    // The reopened tab still hears its session.
+    thread
+        .lock()
+        .unwrap()
+        .handle_session_update(acp::SessionUpdate::AgentMessageChunk(
+            acp::ContentChunk::new(acp::ContentBlock::Text(acp::TextContent::new("still here"))),
+        ))
+        .expect("the thread takes the update");
+    until(
+        "the reopened session's delta never reached the window",
+        || {
+            deltas.0.lock().unwrap().iter().any(|envelope| {
+                envelope.session_id == SESSION
+                    && serde_json::to_string(envelope).is_ok_and(|json| json.contains("still here"))
+            })
+        },
+    )
+    .await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn a_bind_refused_after_a_kill_leaves_no_history_row() {
+    let (host, dir, _deltas, ended, _watchdog, fake) = observed_host(script().hold_opens());
+    let agent_id = host.spawn(ATLAS_AGENT_ID).await.expect("spawn").agent_id;
+    let opening = tokio::spawn({
+        let (host, dir) = (host.clone(), dir.clone());
+        async move { host.new_session(agent_id, dir, Vec::new()).await }
+    });
+    until("the open never reached the agent", || {
+        opens_asked(&fake).0 == 1
+    })
+    .await;
+
+    host.kill(agent_id).expect("kill");
+    fake.release_open();
+
+    assert!(
+        joined(opening).await.is_err(),
+        "the session opened on a killed agent"
+    );
+    assert_eq!(residue(&host, SESSION), Residue::default());
+    assert!(
+        host.history()
+            .expect("history")
+            .store()
+            .threads()
+            .is_empty(),
+        "the refused bind left a row behind"
+    );
+    assert!(ended.lock().unwrap().is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn a_bind_refused_after_a_kill_keeps_the_row_that_was_there_before() {
+    let (host, dir, _deltas, _ended, _watchdog, fake) =
+        observed_host(script().hold_opens().supports_load());
+    let acp_id = acp::SessionId::new(SESSION);
+    let agent_id = host.spawn(ATLAS_AGENT_ID).await.expect("spawn").agent_id;
+    // A session nobody has sent to yet: a draft row, reached through its
+    // binding alone. Its agent is killed, which keeps both for the rebind.
+    let opening = tokio::spawn({
+        let (host, dir) = (host.clone(), dir.clone());
+        async move { host.new_session(agent_id, dir, Vec::new()).await }
+    });
+    fake.release_open();
+    joined(opening).await.expect("a session opens");
+    host.kill(agent_id).expect("kill");
+    let row = host
+        .history()
+        .expect("history")
+        .thread_for(&acp_id)
+        .expect("the kill keeps the row for the rebind");
+
+    // The rebind is in flight when the agent is killed again.
+    let agent_id = host.spawn(ATLAS_AGENT_ID).await.expect("respawn").agent_id;
+    let loading = tokio::spawn({
+        let (host, dir) = (host.clone(), dir.clone());
+        async move { host.load_session(agent_id, SESSION.into(), dir).await }
+    });
+    until("the load never reached the agent", || {
+        opens_asked(&fake).1 == 1
+    })
+    .await;
+    host.kill(agent_id).expect("kill");
+    fake.release_open();
+
+    assert!(
+        joined(loading).await.is_err(),
+        "the session bound on a killed agent"
+    );
+    assert_eq!(residue(&host, SESSION), KEPT_FOR_THE_REBIND);
+    let history = host.history().expect("history");
+    assert_eq!(history.thread_for(&acp_id), Some(row));
+    assert!(
+        history.store().thread(row).is_some(),
+        "the refused bind deleted a row it did not create"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
