@@ -267,6 +267,10 @@ atlas-acp-thread = { path = "../crates/atlas-acp-thread", features = ["test-supp
 # `atlas-engine-rmcp-client` already turns on (`transport-streamable-http-client`, and
 # `__reqwest` through `auth`), so it compiles nothing new.
 rmcp = { workspace = true, features = ["client", "transport-streamable-http-client-reqwest"] }
+# `tauri::test`: the mock runtime the command-seam tests build their app on
+# (`src/command_seam/`). A feature of the dependency above, for tests only:
+# with resolver 2 it is not in the graph of a normal or release build.
+tauri = { version = "2", features = ["test"] }
 # Self-deleting temp dirs for the state/config tests.
 tempfile = "3"
 

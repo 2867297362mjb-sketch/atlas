@@ -169,6 +169,8 @@ Miss any of the three and the command either fails to compile or silently 404s f
 
 **Every blocking operation must run inside `tokio::task::spawn_blocking`** — `Command::output`/`Command::spawn`, file I/O over large trees, git subprocess calls, anything not already `async`. The Tauri command runtime is shared with the UI's IPC channel; a blocking call there stalls every other in-flight command and freezes the UI.
 
+**A command can be tested the way the window calls it.** `src-tauri/src/command_seam/` builds an app on Tauri's mock runtime over a temp directory, sends a command by name with a JSON payload and returns the JSON answer and the events emitted. Use it when the behaviour is in the command itself: its argument names, the shape of its error, an event, a write that has to survive a restart. Its module doc says which commands it can reach and how to bring in one that takes `AppHandle`.
+
 ### Pull requests
 
 Every GitHub read and write goes through the user's own `gh` login; Atlas never holds or reads a token. The path, top to bottom:

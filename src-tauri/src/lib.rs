@@ -2,6 +2,8 @@ mod app_icon;
 #[cfg(target_os = "macos")]
 mod arrow_keys;
 mod auth;
+#[cfg(test)]
+mod command_seam;
 mod commands;
 mod fs_events;
 mod keep_awake;
