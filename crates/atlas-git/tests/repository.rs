@@ -1828,3 +1828,33 @@ fn the_serialized_shapes_are_the_ones_the_frontend_reads() {
         assert_eq!(parsed, strategy);
     }
 }
+
+/// Staging a hunk re-reads the file's diff, finds the hunk the changes view
+/// displayed and writes a patch for `git apply`. A CRLF file's lines carry
+/// their `\r` on both sides of that: without it the displayed hunk is not
+/// found, and a patch that did get written would not apply.
+#[test]
+fn a_hunk_of_a_crlf_file_is_found_and_stages() {
+    use atlas_git::patch;
+
+    let dir = scratch();
+    let repo = Repo::init(dir.path());
+    repo.commit("crlf.txt", "a\r\nb\r\nc\r\n", "a CRLF file");
+    repo.write("crlf.txt", "a\r\nB\r\nc\r\n");
+
+    let fresh = repo.git(&["diff", "--no-color", "--", "crlf.txt"]);
+    let parsed = patch::parse_file_diff(&fresh).expect("the file has a diff");
+    // The hunk as the changes view displays it and sends it back.
+    let displayed = [(b' ', "a\r"), (b'-', "b\r"), (b'+', "B\r"), (b' ', "c\r")]
+        .map(|(marker, text)| (marker, text.to_string()));
+    let index = patch::find_matching_hunk(&parsed, &displayed).expect("the displayed hunk");
+    let text = patch::whole_hunk_patch(&parsed, index).expect("a hunk with changes");
+
+    let mut apply = GitCommand::new(&repo.path, &["apply", "--cached", "-"]).stdin(text.into());
+    for (k, v) in HERMETIC_ENV {
+        apply = apply.env(k, v);
+    }
+    apply.run().unwrap_or_else(|e| panic!("{}", e.raw_stderr));
+    assert_eq!(repo.staged(), "crlf.txt");
+    assert_eq!(repo.unstaged(), "", "the whole change is staged");
+}

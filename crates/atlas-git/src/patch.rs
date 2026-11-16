@@ -41,12 +41,16 @@ pub struct FilePatch {
 }
 
 /// Parse ONE file's unified diff (`git diff -- <file>` output).
+///
+/// Lines are split on `\n` alone. Git's own output is LF-terminated, so a
+/// `\r` before the `\n` belongs to the file's line: it is what the changes
+/// view displays and sends back, and what `git apply` needs in the patch.
 pub fn parse_file_diff(text: &str) -> Option<FilePatch> {
     let mut header = Vec::new();
     let mut hunks: Vec<Hunk> = Vec::new();
     let mut binary = false;
 
-    for line in text.lines() {
+    for line in text.split_terminator('\n') {
         if let Some(rest) = line.strip_prefix("@@ ") {
             let hunk = parse_hunk_header(rest)?;
             hunks.push(hunk);
@@ -362,15 +366,6 @@ mod tests {
             hunks.iter_mut().for_each(|(_, _, lines)| f(lines));
         };
         match name {
-            // Lines are split with `str::lines`, which takes a `\r\n` as the
-            // line ending: a CRLF file's lines lose their `\r`.
-            "crlf-file" | "crlf-to-lf" => each_line(&mut hunks, &|lines| {
-                for line in lines {
-                    if let Some(body) = line.strip_suffix('\r') {
-                        *line = body.to_string();
-                    }
-                }
-            }),
             // `@@@` is not a hunk header here: a conflicted file has no hunks.
             "combined-merge" => hunks.clear(),
             // A line with no marker is ignored.
