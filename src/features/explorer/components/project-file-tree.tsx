@@ -244,7 +244,7 @@ export function ProjectFileTree({
 
   // ── Decorations ─────────────────────────────────────────────────────────
   const changes = useWorkingTreeChanges(root);
-  const hideArrows = useIconThemeStore.use.hidesExplorerArrows();
+  const hideArrows = useIconThemeStore((s) => s.hidesExplorerArrows);
 
   // ── Actions ─────────────────────────────────────────────────────────────
   const rowsRef = useRef(rows);

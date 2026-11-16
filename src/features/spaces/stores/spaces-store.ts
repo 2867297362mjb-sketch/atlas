@@ -3,7 +3,6 @@
 // spaces-bus straight into the one mounted canvas (the draft-bus rule).
 
 import { create } from "zustand";
-import { createSelectors } from "@/lib/create-selectors";
 import type { SpaceConnState, SpacePage, SpaceSummary } from "../lib/spaces-api";
 
 export interface SpaceMeta {
@@ -61,52 +60,50 @@ interface SpacesState {
   };
 }
 
-export const useSpacesStore = createSelectors(
-  create<SpacesState>((set, get) => ({
-    byConv: {},
-    pageAuthors: {},
-    requestedPages: {},
-    actions: {
-      patch: (convId, patch) =>
-        set((s) => ({
-          byConv: {
-            ...s.byConv,
-            [convId]: { ...(s.byConv[convId] ?? EMPTY), ...patch },
+export const useSpacesStore = create<SpacesState>((set, get) => ({
+  byConv: {},
+  pageAuthors: {},
+  requestedPages: {},
+  actions: {
+    patch: (convId, patch) =>
+      set((s) => ({
+        byConv: {
+          ...s.byConv,
+          [convId]: { ...(s.byConv[convId] ?? EMPTY), ...patch },
+        },
+      })),
+    adoptSummary: (convId, summary) =>
+      set((s) => ({
+        byConv: {
+          ...s.byConv,
+          [convId]: {
+            ...(s.byConv[convId] ?? EMPTY),
+            summary,
+            pages: summary.pages,
+            archived: summary.archived,
+            error: null,
           },
-        })),
-      adoptSummary: (convId, summary) =>
-        set((s) => ({
-          byConv: {
-            ...s.byConv,
-            [convId]: {
-              ...(s.byConv[convId] ?? EMPTY),
-              summary,
-              pages: summary.pages,
-              archived: summary.archived,
-              error: null,
-            },
-          },
-        })),
-      notePageAuthor: (convId, pageId, userId) =>
-        set((s) => ({
-          pageAuthors: {
-            ...s.pageAuthors,
-            [convId]: { ...s.pageAuthors[convId], [pageId]: userId },
-          },
-        })),
-      requestPage: (convId, pageId) =>
-        set((s) => ({ requestedPages: { ...s.requestedPages, [convId]: pageId } })),
-      takeRequestedPage: (convId) => {
-        const asked = get().requestedPages[convId] ?? null;
-        if (asked !== null) {
-          set((s) => {
-            const { [convId]: _taken, ...rest } = s.requestedPages;
-            return { requestedPages: rest };
-          });
-        }
-        return asked;
-      },
-      clearAll: () => set({ byConv: {}, pageAuthors: {}, requestedPages: {} }),
+        },
+      })),
+    notePageAuthor: (convId, pageId, userId) =>
+      set((s) => ({
+        pageAuthors: {
+          ...s.pageAuthors,
+          [convId]: { ...s.pageAuthors[convId], [pageId]: userId },
+        },
+      })),
+    requestPage: (convId, pageId) =>
+      set((s) => ({ requestedPages: { ...s.requestedPages, [convId]: pageId } })),
+    takeRequestedPage: (convId) => {
+      const asked = get().requestedPages[convId] ?? null;
+      if (asked !== null) {
+        set((s) => {
+          const { [convId]: _taken, ...rest } = s.requestedPages;
+          return { requestedPages: rest };
+        });
+      }
+      return asked;
     },
-  })),
-);
+    clearAll: () => set({ byConv: {}, pageAuthors: {}, requestedPages: {} }),
+  },
+}));

@@ -14,7 +14,7 @@ export interface ShapeNodeData extends Record<string, unknown> {
  *  only editable content is a centered text label (double-click to edit). */
 export const ShapeNode = memo(function ShapeNode({ id, data, selected }: NodeProps) {
   const d = data as ShapeNodeData;
-  const { updateNote, moveNote, beginInteraction } = useCanvasStore.use.actions();
+  const { updateNote, moveNote, beginInteraction } = useCanvasStore((s) => s.actions);
   const ref = useRef<HTMLDivElement>(null);
   const [editing, setEditing] = useState(false);
 

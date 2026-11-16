@@ -1,6 +1,5 @@
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
-import { createSelectors } from "@/lib/create-selectors";
 
 /**
  * Hint-mode ("ShortCat") state — intentionally tiny: just whether the overlay
@@ -20,24 +19,22 @@ interface HintActions {
   };
 }
 
-export const useHintStore = createSelectors(
-  create<HintState & HintActions>()(
-    immer((set) => ({
-      open: false,
-      actions: {
-        open: () =>
-          set((s) => {
-            s.open = true;
-          }),
-        close: () =>
-          set((s) => {
-            s.open = false;
-          }),
-        toggle: () =>
-          set((s) => {
-            s.open = !s.open;
-          }),
-      },
-    })),
-  ),
+export const useHintStore = create<HintState & HintActions>()(
+  immer((set) => ({
+    open: false,
+    actions: {
+      open: () =>
+        set((s) => {
+          s.open = true;
+        }),
+      close: () =>
+        set((s) => {
+          s.open = false;
+        }),
+      toggle: () =>
+        set((s) => {
+          s.open = !s.open;
+        }),
+    },
+  })),
 );

@@ -10,7 +10,6 @@
 import { create } from "zustand";
 import { useEffect, useRef } from "react";
 import { toast } from "sonner";
-import { createSelectors } from "@/lib/create-selectors";
 import { agents } from "../lib/agents-api";
 import { errInfo } from "../lib/agent-signin";
 import { useActiveGatewayOrgId } from "./ai-grant-store";
@@ -36,46 +35,44 @@ interface NativeModelsState {
  *  call. A promise, not state: nothing renders it. */
 let inFlight: Promise<boolean> | null = null;
 
-export const useNativeModelsStore = createSelectors(
-  create<NativeModelsState>()((set) => ({
-    refreshing: false,
-    actions: {
-      refresh: (opts) => {
-        if (inFlight) return inFlight;
-        const run = async (): Promise<boolean> => {
-          set({ refreshing: true });
-          try {
-            const result = await agents.refreshNativeModels();
-            useChatStore.getState().actions.setAcpModelsForAgent(NATIVE_AGENT_TYPE, result.models);
-            if (result.reconnected && !opts?.silent) {
-              // The sessions themselves show the Restart affordance; this
-              // just says why it appeared.
-              toast.info(
-                "Model list updated — open Atlas Agent chats will restart on their next message.",
-              );
-            }
-            return true;
-          } catch (err) {
-            // Titled, with the cause under it, so "Fix with agent" offers.
-            if (!opts?.silent) {
-              toast.error("Couldn't refresh the model list", {
-                description: errInfo(err).message,
-              });
-            }
-            return false;
-          } finally {
-            set({ refreshing: false });
+export const useNativeModelsStore = create<NativeModelsState>()((set) => ({
+  refreshing: false,
+  actions: {
+    refresh: (opts) => {
+      if (inFlight) return inFlight;
+      const run = async (): Promise<boolean> => {
+        set({ refreshing: true });
+        try {
+          const result = await agents.refreshNativeModels();
+          useChatStore.getState().actions.setAcpModelsForAgent(NATIVE_AGENT_TYPE, result.models);
+          if (result.reconnected && !opts?.silent) {
+            // The sessions themselves show the Restart affordance; this
+            // just says why it appeared.
+            toast.info(
+              "Model list updated — open Atlas Agent chats will restart on their next message.",
+            );
           }
-        };
-        const started = run().finally(() => {
-          if (inFlight === started) inFlight = null;
-        });
-        inFlight = started;
-        return started;
-      },
+          return true;
+        } catch (err) {
+          // Titled, with the cause under it, so "Fix with agent" offers.
+          if (!opts?.silent) {
+            toast.error("Couldn't refresh the model list", {
+              description: errInfo(err).message,
+            });
+          }
+          return false;
+        } finally {
+          set({ refreshing: false });
+        }
+      };
+      const started = run().finally(() => {
+        if (inFlight === started) inFlight = null;
+      });
+      inFlight = started;
+      return started;
     },
-  })),
-);
+  },
+}));
 
 /**
  * Refreshes the list when the user switches to another synced organisation.

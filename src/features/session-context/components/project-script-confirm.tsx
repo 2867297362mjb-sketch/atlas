@@ -26,7 +26,7 @@ import {
 } from "@tryatlas/design";
 
 export function ProjectScriptConfirmHost() {
-  const request = useSessionDetailsStore.use.scriptConfirm();
+  const request = useSessionDetailsStore((s) => s.scriptConfirm);
   if (!request) return null;
   return (
     <ProjectScriptConfirm

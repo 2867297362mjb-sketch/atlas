@@ -44,9 +44,9 @@ import { Button, Icon, IconButton, KbdKeys, Segmented, Hint } from "@tryatlas/de
  * because a change to the built-in Default forks it (see the store).
  */
 export function KeybindingsSettings() {
-  const resolved = useKeybindingsStore.use.resolved();
-  const fileWarnings = useKeybindingsStore.use.warnings();
-  const { removeBinding } = useKeybindingsStore.use.actions();
+  const resolved = useKeybindingsStore((s) => s.resolved);
+  const fileWarnings = useKeybindingsStore((s) => s.warnings);
+  const { removeBinding } = useKeybindingsStore((s) => s.actions);
   const [query, setQuery] = useState("");
   const [pressing, setPressing] = useState(false);
   const [pressed, setPressed] = useState<Combo | null>(null);
@@ -296,7 +296,7 @@ function SearchField({
   // While the field takes a chord, no shortcut in the app may act on it (⌘B
   // would toggle the sidebar). Held only while it has focus, and dropped on
   // blur, on leaving press mode and on unmount, so it is never left on.
-  const { setRecording } = useKeybindingsStore.use.actions();
+  const { setRecording } = useKeybindingsStore((s) => s.actions);
   const [focused, setFocused] = useState(false);
   useEffect(() => {
     if (!pressing || !focused) return;
@@ -374,7 +374,7 @@ function SearchField({
 }
 
 function UnknownCommands({ ids }: { ids: string[] }) {
-  const { removeUnknown } = useKeybindingsStore.use.actions();
+  const { removeUnknown } = useKeybindingsStore((s) => s.actions);
   return (
     <SettingsSection
       title="Unknown commands"

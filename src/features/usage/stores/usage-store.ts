@@ -1,6 +1,5 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
-import { createSelectors } from "@/lib/create-selectors";
 import { activeOrgProjectsSnapshot } from "@/features/projects/lib/org-scope";
 import { useOrgStore } from "@/features/organisations/stores/org-store";
 import {
@@ -56,52 +55,50 @@ function projectSignature(paths: string[]): string {
   return [...paths].sort().join("\n");
 }
 
-export const useUsageStore = createSelectors(
-  create<UsageState>()((set, get) => ({
-    data: null,
-    loading: false,
-    error: null,
-    fetchedAt: null,
-    projectSig: "",
-    range: { preset: "30d" },
-    facets: NO_FACETS,
-    groupBy: "project",
-    metric: "tokens",
-    table: "sessions",
-    search: "",
-    actions: {
-      refresh: async (opts) => {
-        // Only the ACTIVE org's projects — Usage must never aggregate across
-        // organisations.
-        const projectPaths = activeOrgProjectsSnapshot().map((p) => p.path);
-        const sig = projectSignature(projectPaths);
-        const { fetchedAt, projectSig, loading } = get();
-        const fresh = fetchedAt !== null && Date.now() - fetchedAt < STALE_MS && sig === projectSig;
-        if (!opts?.force && (fresh || loading)) return;
-        set({ loading: true, error: null });
-        try {
-          const data = await invoke<UsageDashboard>("usage_dashboard", { projectPaths });
-          set({ data, loading: false, fetchedAt: Date.now(), projectSig: sig });
-        } catch (e) {
-          set({ error: String(e), loading: false });
-        }
-      },
-      setRange: (range) => set({ range }),
-      setFacets: (facets) => set({ facets }),
-      toggleFacet: (axis, value) =>
-        set((s) => {
-          const cur = s.facets[axis];
-          const next = cur.includes(value) ? cur.filter((v) => v !== value) : [...cur, value];
-          return { facets: { ...s.facets, [axis]: next } };
-        }),
-      clearFacets: () => set({ facets: NO_FACETS }),
-      setGroupBy: (groupBy) => set({ groupBy }),
-      setMetric: (metric) => set({ metric }),
-      setTable: (table) => set({ table }),
-      setSearch: (search) => set({ search }),
+export const useUsageStore = create<UsageState>()((set, get) => ({
+  data: null,
+  loading: false,
+  error: null,
+  fetchedAt: null,
+  projectSig: "",
+  range: { preset: "30d" },
+  facets: NO_FACETS,
+  groupBy: "project",
+  metric: "tokens",
+  table: "sessions",
+  search: "",
+  actions: {
+    refresh: async (opts) => {
+      // Only the ACTIVE org's projects — Usage must never aggregate across
+      // organisations.
+      const projectPaths = activeOrgProjectsSnapshot().map((p) => p.path);
+      const sig = projectSignature(projectPaths);
+      const { fetchedAt, projectSig, loading } = get();
+      const fresh = fetchedAt !== null && Date.now() - fetchedAt < STALE_MS && sig === projectSig;
+      if (!opts?.force && (fresh || loading)) return;
+      set({ loading: true, error: null });
+      try {
+        const data = await invoke<UsageDashboard>("usage_dashboard", { projectPaths });
+        set({ data, loading: false, fetchedAt: Date.now(), projectSig: sig });
+      } catch (e) {
+        set({ error: String(e), loading: false });
+      }
     },
-  })),
-);
+    setRange: (range) => set({ range }),
+    setFacets: (facets) => set({ facets }),
+    toggleFacet: (axis, value) =>
+      set((s) => {
+        const cur = s.facets[axis];
+        const next = cur.includes(value) ? cur.filter((v) => v !== value) : [...cur, value];
+        return { facets: { ...s.facets, [axis]: next } };
+      }),
+    clearFacets: () => set({ facets: NO_FACETS }),
+    setGroupBy: (groupBy) => set({ groupBy }),
+    setMetric: (metric) => set({ metric }),
+    setTable: (table) => set({ table }),
+    setSearch: (search) => set({ search }),
+  },
+}));
 
 /** Facet values and data are org-specific: drop both when the org changes so
  *  the next open of the tab fetches the incoming org's projects and nothing of

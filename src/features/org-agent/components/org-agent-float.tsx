@@ -17,9 +17,9 @@ import { OrgAgentThread } from "./org-agent-thread";
 import { HintGroup, HintItem, IconButton } from "@tryatlas/design";
 
 export function OrgAgentFloat() {
-  const floatingId = useOrgAgentStore.use.floatingId();
+  const floatingId = useOrgAgentStore((s) => s.floatingId);
   const title = useOrgAgentStore((s) => (s.floatingId ? askTitle(s, s.floatingId) : ""));
-  const { restoreToPanel, closeFloating } = useOrgAgentStore.use.actions();
+  const { restoreToPanel, closeFloating } = useOrgAgentStore((s) => s.actions);
 
   return (
     <AnimatePresence>

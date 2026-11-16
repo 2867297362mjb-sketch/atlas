@@ -60,9 +60,9 @@ export function pickerTargets(
 }
 
 export function AskAgentHost() {
-  const request = useAskAgentStore.use.request();
-  const serial = useAskAgentStore.use.serial();
-  const { close } = useAskAgentStore.use.actions();
+  const request = useAskAgentStore((s) => s.request);
+  const serial = useAskAgentStore((s) => s.serial);
+  const { close } = useAskAgentStore((s) => s.actions);
   // The last request stays drawn while the popup plays its exit.
   const shown = useRef<AskRequest | null>(null);
   if (request) shown.current = request;

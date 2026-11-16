@@ -20,11 +20,11 @@ export function AppLayout() {
   const settingsOpen = useSettingsNav((s) => s.open);
   const [settingsMounted, setSettingsMounted] = useState(settingsOpen);
   if (settingsOpen && !settingsMounted) setSettingsMounted(true);
-  const sidebarOpen = useProjectStore.use.sidebarOpen();
+  const sidebarOpen = useProjectStore((s) => s.sidebarOpen);
   // What a cover hides must leave the accessibility tree and the Tab order
   // too: `inert`, not just a painted layer on top. Settings covers the whole
   // window; a destination covers the session columns only.
-  const destinationShown = useLayoutStore.use.destinationShown();
+  const destinationShown = useLayoutStore((s) => s.destinationShown);
 
   // Warm the project-pane git data at startup so the first open is smooth.
   useProjectGitPrefetch();

@@ -8,7 +8,6 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { createSelectors } from "@/lib/create-selectors";
 import { fmtCost } from "@/features/monitor/lib/usage-format";
 
 export interface ModelPrice {
@@ -90,7 +89,7 @@ const base = create<ModelPricingState>((set, get) => ({
   },
 }));
 
-export const useModelPricingStore = createSelectors(base);
+export const useModelPricingStore = base;
 
 /** Mirrors Rust's apply_price_overrides: overrides win before catalog lookup. */
 export function applyPriceOverrides(

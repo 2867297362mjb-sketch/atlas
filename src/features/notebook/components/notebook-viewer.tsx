@@ -16,7 +16,7 @@ interface NotebookViewerProps {
  */
 export function NotebookViewer({ filePath }: NotebookViewerProps) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
-  const projectPath = useAppStore.use.currentProject()?.path ?? null;
+  const projectPath = useAppStore((s) => s.currentProject)?.path ?? null;
   const fileRoot = documentFileRoot(filePath, projectPath);
 
   useEffect(() => {

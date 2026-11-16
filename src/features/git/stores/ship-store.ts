@@ -7,7 +7,6 @@
 
 import { create } from "zustand";
 
-import { createSelectors } from "@/lib/create-selectors";
 import type { ShipState } from "../lib/ship-flow";
 
 interface ShipStoreState {
@@ -18,18 +17,16 @@ interface ShipStoreState {
   };
 }
 
-export const useShipStore = createSelectors(
-  create<ShipStoreState>()((set) => ({
-    runs: {},
-    actions: {
-      set: (repoPath, state) => set((s) => ({ runs: { ...s.runs, [repoPath]: state } })),
-      clear: (repoPath) =>
-        set((s) => {
-          if (!(repoPath in s.runs)) return s;
-          const runs = { ...s.runs };
-          delete runs[repoPath];
-          return { runs };
-        }),
-    },
-  })),
-);
+export const useShipStore = create<ShipStoreState>()((set) => ({
+  runs: {},
+  actions: {
+    set: (repoPath, state) => set((s) => ({ runs: { ...s.runs, [repoPath]: state } })),
+    clear: (repoPath) =>
+      set((s) => {
+        if (!(repoPath in s.runs)) return s;
+        const runs = { ...s.runs };
+        delete runs[repoPath];
+        return { runs };
+      }),
+  },
+}));

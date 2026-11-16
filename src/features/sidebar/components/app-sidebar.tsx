@@ -128,7 +128,7 @@ function SidebarFoot() {
  * and place it docks to. Timing is `sidebar-peek.ts`'s.
  */
 export function SidebarPeek() {
-  const open = useSidebarPeek.use.open();
+  const open = useSidebarPeek((s) => s.open);
   const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {

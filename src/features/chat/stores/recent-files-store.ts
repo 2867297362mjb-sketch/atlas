@@ -10,7 +10,6 @@
 // mention picker's "Recent files" section.
 
 import { create } from "zustand";
-import { createSelectors } from "@/lib/create-selectors";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { activeProjectId } from "@/features/projects/lib/active-project";
@@ -35,34 +34,32 @@ interface RecentFilesState {
   };
 }
 
-export const useRecentFilesStore = createSelectors(
-  create<RecentFilesState>()((set) => ({
-    items: [],
-    actions: {
-      push: (entry) => {
-        const projectId = activeProjectId();
-        if (!projectId) return;
-        // Fire-and-forget — the Rust side emits the updated list
-        // through the global listener wired in App.tsx.
-        void invoke<RecentFile[]>("recent_files_push", {
-          absPath: entry.absPath,
-          rel: entry.rel,
-          workspaceId: projectId,
-        })
-          .then((items) => set({ items }))
-          .catch((e) => console.warn("recent_files_push failed:", e));
-      },
-      clear: () => {
-        const projectId = activeProjectId();
-        if (!projectId) return;
-        void invoke("recent_files_clear", { workspaceId: projectId })
-          .then(() => set({ items: [] }))
-          .catch((e) => console.warn("recent_files_clear failed:", e));
-      },
-      hydrate: (items) => set({ items }),
+export const useRecentFilesStore = create<RecentFilesState>()((set) => ({
+  items: [],
+  actions: {
+    push: (entry) => {
+      const projectId = activeProjectId();
+      if (!projectId) return;
+      // Fire-and-forget — the Rust side emits the updated list
+      // through the global listener wired in App.tsx.
+      void invoke<RecentFile[]>("recent_files_push", {
+        absPath: entry.absPath,
+        rel: entry.rel,
+        workspaceId: projectId,
+      })
+        .then((items) => set({ items }))
+        .catch((e) => console.warn("recent_files_push failed:", e));
     },
-  })),
-);
+    clear: () => {
+      const projectId = activeProjectId();
+      if (!projectId) return;
+      void invoke("recent_files_clear", { workspaceId: projectId })
+        .then(() => set({ items: [] }))
+        .catch((e) => console.warn("recent_files_clear failed:", e));
+    },
+    hydrate: (items) => set({ items }),
+  },
+}));
 
 // Singleton event listener — installed lazily on first store read so
 // it doesn't fire during SSR / tests that don't touch the store.

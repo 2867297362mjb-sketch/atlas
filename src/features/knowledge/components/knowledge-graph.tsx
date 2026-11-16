@@ -12,14 +12,14 @@ export type { GraphLayout } from "../lib/knowledge-graph-model";
 
 /** The Knowledge Graph tab: store and IPC wiring for `KnowledgeGraphView`. */
 export function KnowledgeGraph() {
-  const currentProject = useAppStore.use.currentProject();
+  const currentProject = useAppStore((s) => s.currentProject);
   const projectPath = currentProject?.path ?? null;
-  const { bind, unbind } = useKnowledgeGraphStore.use.actions();
-  const { addTab } = useLayoutStore.use.actions();
-  const { selectEntry } = useKnowledgeStore.use.actions();
+  const { bind, unbind } = useKnowledgeGraphStore((s) => s.actions);
+  const { addTab } = useLayoutStore((s) => s.actions);
+  const { selectEntry } = useKnowledgeStore((s) => s.actions);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const { graph: rawGraph, loading } = useProjectGraph();
-  const metaPages = useKnowledgeMetaStore.use.pages();
+  const metaPages = useKnowledgeMetaStore((s) => s.pages);
 
   // Persisted positions — loaded once per project, then handed to the scene
   // as the initial body layout. Tagged with the project they belong to, so a

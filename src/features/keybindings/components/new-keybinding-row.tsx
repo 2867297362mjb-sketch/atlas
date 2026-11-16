@@ -31,8 +31,8 @@ const COMMAND_OPTIONS = ACTIONS.map((a) => ({
  */
 /** `onDone` gets the command a shortcut was saved to, or null on Cancel. */
 export function NewKeybindingRow({ onDone }: { onDone: (saved: ActionId | null) => void }) {
-  const { addBinding, setWhen, setRecording } = useKeybindingsStore.use.actions();
-  const resolved = useKeybindingsStore.use.resolved();
+  const { addBinding, setWhen, setRecording } = useKeybindingsStore((s) => s.actions);
+  const resolved = useKeybindingsStore((s) => s.resolved);
   const [command, setCommand] = useState<ActionId | null>(null);
   const [combo, setCombo] = useState<Combo | null>(null);
   const [recordingKeys, setRecordingKeys] = useState(false);

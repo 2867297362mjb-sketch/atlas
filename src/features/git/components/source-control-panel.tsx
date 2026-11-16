@@ -28,8 +28,8 @@ const GithubPanel = lazy(() =>
  * layout and the UI actions that name a section keep working.
  */
 export function SourceControlPanel() {
-  const section = useLayoutStore.use.sourceControl().section;
-  const { setSourceControlSection } = useLayoutStore.use.actions();
+  const section = useLayoutStore((s) => s.sourceControl).section;
+  const { setSourceControlSection } = useLayoutStore((s) => s.actions);
   const changed = useGitStore((s) => s.files.length);
 
   const options: SegmentedOption<SourceControlSection>[] = [

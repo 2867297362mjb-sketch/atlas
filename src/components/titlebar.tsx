@@ -253,7 +253,7 @@ function PaletteSearchButton({ className }: { className?: string }) {
  * closed (open, the sidebar's band carries it), then `org / project`.
  */
 function TopbarLeading({ breadcrumb = true }: { breadcrumb?: boolean }) {
-  const sidebarOpen = useProjectStore.use.sidebarOpen();
+  const sidebarOpen = useProjectStore((s) => s.sidebarOpen);
   return (
     <div className={cn("flex min-w-0 shrink items-center gap-1", sidebarOpen && "pl-2")}>
       {!sidebarOpen && <CornerCluster />}
@@ -267,16 +267,16 @@ function TopbarLeading({ breadcrumb = true }: { breadcrumb?: boolean }) {
  * head of the first split column.
  */
 export function ProjectBreadcrumb() {
-  const currentProject = useAppStore.use.currentProject();
+  const currentProject = useAppStore((s) => s.currentProject);
   // The label name is read from the PROJECT store (matched by path), not from
   // `currentProject.name`. `currentProject` only re-syncs after a slow Rust
   // AppState round-trip, so a project rename took ~3-4s to show here; the
   // project store mutates synchronously on rename, so this updates instantly.
-  const projects = useProjectStore.use.projects();
+  const projects = useProjectStore((s) => s.projects);
   // Owning organisation, read live so an org switch or rename re-labels
   // immediately.
-  const organisations = useOrgStore.use.organisations();
-  const activeOrganisationId = useOrgStore.use.activeOrganisationId();
+  const organisations = useOrgStore((s) => s.organisations);
+  const activeOrganisationId = useOrgStore((s) => s.activeOrganisationId);
   const orgName = organisations.find((o) => o.id === activeOrganisationId)?.name ?? null;
   // Same path can be a project in several orgs — prefer the ACTIVE org's
   // twin so a rename in another org never re-labels this bar.
@@ -306,7 +306,7 @@ export function ProjectBreadcrumb() {
  * the icons read as one even row.
  */
 function TopbarTrailing() {
-  const currentProject = useAppStore.use.currentProject();
+  const currentProject = useAppStore((s) => s.currentProject);
   return (
     <div
       data-window-controls
@@ -608,8 +608,8 @@ export function DevBadge({ className }: { className?: string }) {
  *  peeks it (`sidebar-peek.ts`); a click then docks it. */
 function SidebarToggle({ flush = false, className }: { flush?: boolean; className?: string } = {}) {
   const hint = useActionShortcut("workspace.toggleSidebar")?.label;
-  const sidebarOpen = useProjectStore.use.sidebarOpen();
-  const { toggleSidebar } = useProjectStore.use.actions();
+  const sidebarOpen = useProjectStore((s) => s.sidebarOpen);
+  const { toggleSidebar } = useProjectStore((s) => s.actions);
   const label = sidebarOpen ? "Hide sidebar" : "Show sidebar";
 
   return (
@@ -676,10 +676,10 @@ function ArcProgress({ value }: { value: number }) {
  * driven by the `atlas:update-*` events → updater store (fully non-blocking).
  */
 function useUpdateItem(): DockItem | null {
-  const checking = useUpdaterStore.use.checking();
-  const phase = useUpdaterStore.use.phase();
-  const progress = useUpdaterStore.use.progress();
-  const { openModal } = useUpdaterStore.use.actions();
+  const checking = useUpdaterStore((s) => s.checking);
+  const phase = useUpdaterStore((s) => s.phase);
+  const progress = useUpdaterStore((s) => s.progress);
+  const { openModal } = useUpdaterStore((s) => s.actions);
 
   const downloading = phase === "downloading";
   const ready = phase === "ready" || phase === "applying";

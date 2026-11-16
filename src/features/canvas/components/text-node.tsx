@@ -14,7 +14,7 @@ export interface TextNodeData extends Record<string, unknown> {
  *  on blur. Not editable while idle, so the node stays draggable. */
 export const TextNode = memo(function TextNode({ id, data, selected }: NodeProps) {
   const d = data as TextNodeData;
-  const { updateNote } = useCanvasStore.use.actions();
+  const { updateNote } = useCanvasStore((s) => s.actions);
   const ref = useRef<HTMLDivElement>(null);
   const [editing, setEditing] = useState(false);
 

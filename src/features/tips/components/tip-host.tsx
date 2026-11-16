@@ -62,10 +62,10 @@ function agentTurnRunning(): boolean {
 }
 
 export function TipHost() {
-  const loaded = useTipsStore.use.loaded();
+  const loaded = useTipsStore((s) => s.loaded);
   const queued = useTipsStore((s) => s.queue.length > 0 || s.forced !== null);
-  const active = useTipsStore.use.active();
-  const { load, applyRemote, start, anchorLost } = useTipsStore.use.actions();
+  const active = useTipsStore((s) => s.active);
+  const { load, applyRemote, start, anchorLost } = useTipsStore((s) => s.actions);
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
 
   useEffect(() => {
@@ -123,7 +123,7 @@ export function TipHost() {
 }
 
 function TipCard({ tip, step, anchor }: { tip: TipDef; step: number; anchor: HTMLElement }) {
-  const { nextStep, finish } = useTipsStore.use.actions();
+  const { nextStep, finish } = useTipsStore((s) => s.actions);
   const current = tip.steps[Math.min(step, tip.steps.length - 1)];
   const last = step >= tip.steps.length - 1;
 

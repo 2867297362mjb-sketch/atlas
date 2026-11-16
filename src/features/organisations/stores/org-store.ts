@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { createSelectors } from "@/lib/create-selectors";
 import { logEvent } from "@/features/log/lib/log";
 import { scheduleAppStateSave } from "@/features/app/stores/app-store";
 import { useProjectStore } from "@/features/projects/stores/project-store";
@@ -166,310 +165,306 @@ interface OrgState {
   };
 }
 
-export const useOrgStore = createSelectors(
-  create<OrgState>()((set, get) => ({
-    organisations: [],
-    activeOrganisationId: null,
-    orgSwitching: false,
-    actions: {
-      hydrate: (payload) => {
-        set({
-          organisations: payload.organisations ?? [],
-          activeOrganisationId: payload.activeOrganisationId ?? null,
-        });
-        // Boot attribution. Rust seeds the same value from `state.json` at
-        // startup, so this is usually a no-op — but a profile whose active org
-        // is decided during hydrate (a v2 migration, a repaired pointer) would
-        // otherwise report events against the pre-migration org for the rest of
-        // the session.
-        syncOrgTelemetry(payload.activeOrganisationId ?? null);
-      },
+export const useOrgStore = create<OrgState>()((set, get) => ({
+  organisations: [],
+  activeOrganisationId: null,
+  orgSwitching: false,
+  actions: {
+    hydrate: (payload) => {
+      set({
+        organisations: payload.organisations ?? [],
+        activeOrganisationId: payload.activeOrganisationId ?? null,
+      });
+      // Boot attribution. Rust seeds the same value from `state.json` at
+      // startup, so this is usually a no-op — but a profile whose active org
+      // is decided during hydrate (a v2 migration, a repaired pointer) would
+      // otherwise report events against the pre-migration org for the rest of
+      // the session.
+      syncOrgTelemetry(payload.activeOrganisationId ?? null);
+    },
 
-      createOrg: (name, slug) => {
-        const trimmed = name.trim() || "New organization";
-        const handle = slugify(slug || trimmed);
-        // GitHub-style: names are globally unique (case-insensitive). The slug
-        // is what the SERVER enforces globally; locally we only stop obvious
-        // self-collisions.
-        if (nameTaken(trimmed, get().organisations)) return null;
-        if (get().organisations.some((o) => o.slug === handle)) return null;
-        const org: Organisation = {
-          id: uuid(),
-          name: trimmed,
-          slug: handle,
-          createdAt: new Date().toISOString(),
-          syncEnabled: false,
-        };
-        set((s) => ({ organisations: [...s.organisations, org] }));
-        scheduleAppStateSave();
-        logEvent({
-          source: "project",
-          kind: "org-create",
-          summary: org.name,
-          payload: { orgId: org.id, slug: org.slug },
-        });
-        return org.id;
-      },
+    createOrg: (name, slug) => {
+      const trimmed = name.trim() || "New organization";
+      const handle = slugify(slug || trimmed);
+      // GitHub-style: names are globally unique (case-insensitive). The slug
+      // is what the SERVER enforces globally; locally we only stop obvious
+      // self-collisions.
+      if (nameTaken(trimmed, get().organisations)) return null;
+      if (get().organisations.some((o) => o.slug === handle)) return null;
+      const org: Organisation = {
+        id: uuid(),
+        name: trimmed,
+        slug: handle,
+        createdAt: new Date().toISOString(),
+        syncEnabled: false,
+      };
+      set((s) => ({ organisations: [...s.organisations, org] }));
+      scheduleAppStateSave();
+      logEvent({
+        source: "project",
+        kind: "org-create",
+        summary: org.name,
+        payload: { orgId: org.id, slug: org.slug },
+      });
+      return org.id;
+    },
 
-      createOrgSynced: async (name, slug, cloud) => {
-        const trimmed = name.trim();
-        const handle = slugify(slug || trimmed);
-        if (!trimmed) throw "Enter a name for the organization.";
-        if (!handle) throw "Enter a handle for the organization.";
-        if (nameTaken(trimmed, get().organisations)) {
-          throw `An organization named “${trimmed}” already exists.`;
-        }
-        if (get().organisations.some((o) => o.slug === handle)) {
-          throw `The handle “${handle}” is already used by another organization.`;
-        }
+    createOrgSynced: async (name, slug, cloud) => {
+      const trimmed = name.trim();
+      const handle = slugify(slug || trimmed);
+      if (!trimmed) throw "Enter a name for the organization.";
+      if (!handle) throw "Enter a handle for the organization.";
+      if (nameTaken(trimmed, get().organisations)) {
+        throw `An organization named “${trimmed}” already exists.`;
+      }
+      if (get().organisations.some((o) => o.slug === handle)) {
+        throw `The handle “${handle}” is already used by another organization.`;
+      }
 
-        // Server FIRST for a cloud org: the unique index on `organization.slug`
-        // is the real guard (the pre-check is advisory and can lose a race), so
-        // letting it reject before we touch local state is what keeps a failed
-        // create from leaving a stray unsynced org behind.
-        //
-        // A local org never calls out at all — that is the point of it — so its
-        // handle is only checked against the other local orgs above.
-        let remoteId: string | null = null;
-        if (cloud && useAuthStore.getState().snapshot.status === "signed-in") {
-          const created = await auth.createOrg(trimmed, handle);
-          remoteId = created.id;
-        }
+      // Server FIRST for a cloud org: the unique index on `organization.slug`
+      // is the real guard (the pre-check is advisory and can lose a race), so
+      // letting it reject before we touch local state is what keeps a failed
+      // create from leaving a stray unsynced org behind.
+      //
+      // A local org never calls out at all — that is the point of it — so its
+      // handle is only checked against the other local orgs above.
+      let remoteId: string | null = null;
+      if (cloud && useAuthStore.getState().snapshot.status === "signed-in") {
+        const created = await auth.createOrg(trimmed, handle);
+        remoteId = created.id;
+      }
 
-        // `auth.createOrg` broadcasts a refreshed snapshot on its way back, so
-        // `mergeServerOrgs` can have ALREADY added this org while we were
-        // awaiting — nothing local carried its `remoteId` yet, and the
-        // adopt-by-name path needs an existing unlinked org, which there wasn't.
-        // Appending blindly is what produced two identical rows. Adopt instead.
-        const raced = remoteId
-          ? get().organisations.find((o) => o.remoteId === remoteId)
-          : undefined;
-        if (raced) {
-          set((s) => ({
-            organisations: s.organisations.map((o) =>
-              o.id === raced.id ? { ...o, name: trimmed, slug: handle, syncEnabled: true } : o,
-            ),
-          }));
-          scheduleAppStateSave();
-          return raced.id;
-        }
-
-        const org: Organisation = {
-          id: uuid(),
-          name: trimmed,
-          slug: handle,
-          createdAt: new Date().toISOString(),
-          syncEnabled: !!remoteId,
-          ...(remoteId ? { remoteId } : {}),
-        };
-        set((s) => ({ organisations: [...s.organisations, org] }));
-        scheduleAppStateSave();
-        logEvent({
-          source: "project",
-          kind: "org-create",
-          summary: org.name,
-          payload: { orgId: org.id, slug: org.slug, remoteId },
-        });
-        return org.id;
-      },
-
-      rename: (id, name) => {
-        const trimmed = name.trim();
-        if (!trimmed) return false;
-        // Reject if ANOTHER org already has this name (case-insensitive).
-        if (nameTaken(trimmed, get().organisations, id)) return false;
-        set((s) => ({
-          organisations: s.organisations.map((o) => (o.id === id ? { ...o, name: trimmed } : o)),
-        }));
-        scheduleAppStateSave();
-        return true;
-      },
-
-      setColor: (id, color) => {
+      // `auth.createOrg` broadcasts a refreshed snapshot on its way back, so
+      // `mergeServerOrgs` can have ALREADY added this org while we were
+      // awaiting — nothing local carried its `remoteId` yet, and the
+      // adopt-by-name path needs an existing unlinked org, which there wasn't.
+      // Appending blindly is what produced two identical rows. Adopt instead.
+      const raced = remoteId ? get().organisations.find((o) => o.remoteId === remoteId) : undefined;
+      if (raced) {
         set((s) => ({
           organisations: s.organisations.map((o) =>
-            o.id === id ? { ...o, color: color ?? undefined } : o,
+            o.id === raced.id ? { ...o, name: trimmed, slug: handle, syncEnabled: true } : o,
           ),
         }));
         scheduleAppStateSave();
-      },
+        return raced.id;
+      }
 
-      deleteOrg: (id) => {
-        const { organisations } = get();
-        if (organisations.length <= 1) return false; // never delete the last org
-        // Cascade: wipe all app-state scoped to this org — its project/group
-        // references. (The user's actual project files + `.atlas/` data on
-        // disk are NOT touched; only Atlas's org-scoped tracking is removed.)
-        // The caller (deleteOrgAndData) must have already switched away if
-        // this is the active org.
-        useProjectStore.getState().actions.removeProjectsForOrg(id);
-        set((s) => ({
-          organisations: s.organisations.filter((o) => o.id !== id),
-        }));
-        scheduleAppStateSave();
-        return true;
-      },
+      const org: Organisation = {
+        id: uuid(),
+        name: trimmed,
+        slug: handle,
+        createdAt: new Date().toISOString(),
+        syncEnabled: !!remoteId,
+        ...(remoteId ? { remoteId } : {}),
+      };
+      set((s) => ({ organisations: [...s.organisations, org] }));
+      scheduleAppStateSave();
+      logEvent({
+        source: "project",
+        kind: "org-create",
+        summary: org.name,
+        payload: { orgId: org.id, slug: org.slug, remoteId },
+      });
+      return org.id;
+    },
 
-      unlinkOrg: (id) => {
-        if (!get().organisations.some((o) => o.id === id && (o.remoteId || o.syncEnabled))) return;
-        set((s) => ({
-          organisations: s.organisations.map((o) => {
-            if (o.id !== id) return o;
-            const { remoteId: _remoteId, ...rest } = o;
-            return { ...rest, syncEnabled: false };
-          }),
-        }));
-        scheduleAppStateSave();
-      },
+    rename: (id, name) => {
+      const trimmed = name.trim();
+      if (!trimmed) return false;
+      // Reject if ANOTHER org already has this name (case-insensitive).
+      if (nameTaken(trimmed, get().organisations, id)) return false;
+      set((s) => ({
+        organisations: s.organisations.map((o) => (o.id === id ? { ...o, name: trimmed } : o)),
+      }));
+      scheduleAppStateSave();
+      return true;
+    },
 
-      setActiveProjectForOrg: (orgId, projectId) => {
-        set((s) => ({
-          organisations: s.organisations.map((o) =>
-            o.id === orgId ? { ...o, activeProjectId: projectId ?? undefined } : o,
-          ),
-        }));
-        // Persisted via the switch's flushAppStateSave / scheduleAppStateSave.
-      },
+    setColor: (id, color) => {
+      set((s) => ({
+        organisations: s.organisations.map((o) =>
+          o.id === id ? { ...o, color: color ?? undefined } : o,
+        ),
+      }));
+      scheduleAppStateSave();
+    },
 
-      setSwitching: (v) => set({ orgSwitching: v }),
+    deleteOrg: (id) => {
+      const { organisations } = get();
+      if (organisations.length <= 1) return false; // never delete the last org
+      // Cascade: wipe all app-state scoped to this org — its project/group
+      // references. (The user's actual project files + `.atlas/` data on
+      // disk are NOT touched; only Atlas's org-scoped tracking is removed.)
+      // The caller (deleteOrgAndData) must have already switched away if
+      // this is the active org.
+      useProjectStore.getState().actions.removeProjectsForOrg(id);
+      set((s) => ({
+        organisations: s.organisations.filter((o) => o.id !== id),
+      }));
+      scheduleAppStateSave();
+      return true;
+    },
 
-      // The one place the active org changes, so the one place analytics
-      // attribution has to follow it.
-      setActiveOrganisation: (id) => {
-        set({ activeOrganisationId: id });
-        syncOrgTelemetry(id);
-      },
+    unlinkOrg: (id) => {
+      if (!get().organisations.some((o) => o.id === id && (o.remoteId || o.syncEnabled))) return;
+      set((s) => ({
+        organisations: s.organisations.map((o) => {
+          if (o.id !== id) return o;
+          const { remoteId: _remoteId, ...rest } = o;
+          return { ...rest, syncEnabled: false };
+        }),
+      }));
+      scheduleAppStateSave();
+    },
 
-      mergeServerOrgs: (serverOrgs) => {
-        // Repair first: earlier builds could append a local org for a server id
-        // that a racing merge had already added, leaving two identical rows in
-        // the switcher. Collapsing here (rather than only preventing new ones)
-        // is what cleans up state already on disk.
-        collapseDuplicateRemotes(set, get);
+    setActiveProjectForOrg: (orgId, projectId) => {
+      set((s) => ({
+        organisations: s.organisations.map((o) =>
+          o.id === orgId ? { ...o, activeProjectId: projectId ?? undefined } : o,
+        ),
+      }));
+      // Persisted via the switch's flushAppStateSave / scheduleAppStateSave.
+    },
 
-        const linked = new Set(
-          get()
-            .organisations.map((o) => o.remoteId)
-            .filter((x): x is string => !!x),
-        );
-        // Build the next list immutably; `next` grows as we go so slug/name
-        // disambiguation accounts for orgs added earlier in the same pass.
-        let next = get().organisations;
-        let changed = false;
+    setSwitching: (v) => set({ orgSwitching: v }),
 
-        for (const s of serverOrgs) {
-          if (linked.has(s.id)) {
-            // Already linked: the server owns a synced org's name, so a rename
-            // made on the web is taken here. This used to be a bare `continue`
-            // (add-only), which copied the name exactly once — at first link —
-            // and left every surface reading this store stale across refreshes
-            // and relaunches. Only the name is reconciled: the slug is a local
-            // handle that is kept stable (projects key off it), and the
-            // colour/active-project fields are local-only by design. The
-            // server's name is applied even if it collides with a local-only
-            // org's (`nameTaken` is a rule for local edits, not for the truth).
-            // At most one row matches: `collapseDuplicateRemotes` ran above.
-            const idx = next.findIndex((o) => o.remoteId === s.id);
-            if (idx !== -1 && next[idx].name !== s.name) {
-              next = next.map((o, i) => (i === idx ? { ...o, name: s.name } : o));
-              changed = true;
-            }
-            continue;
-          }
+    // The one place the active org changes, so the one place analytics
+    // attribution has to follow it.
+    setActiveOrganisation: (id) => {
+      set({ activeOrganisationId: id });
+      syncOrgTelemetry(id);
+    },
 
-          // Adopt a same-named, still-local org rather than duplicating it —
-          // covers an org created offline that later arrives from the server.
-          // Only genuinely local rows qualify (`!remoteId && !syncEnabled`);
-          // logged because adoption changes which server org owns the local
-          // org's projects, and a wrong name-match must be traceable.
-          const adoptIdx = next.findIndex(
-            (o) =>
-              !o.remoteId &&
-              !o.syncEnabled &&
-              o.name.trim().toLowerCase() === s.name.trim().toLowerCase(),
-          );
-          if (adoptIdx !== -1) {
-            const adopted = next[adoptIdx];
-            next = next.map((o, i) =>
-              i === adoptIdx ? { ...o, remoteId: s.id, syncEnabled: true } : o,
-            );
-            linked.add(s.id);
+    mergeServerOrgs: (serverOrgs) => {
+      // Repair first: earlier builds could append a local org for a server id
+      // that a racing merge had already added, leaving two identical rows in
+      // the switcher. Collapsing here (rather than only preventing new ones)
+      // is what cleans up state already on disk.
+      collapseDuplicateRemotes(set, get);
+
+      const linked = new Set(
+        get()
+          .organisations.map((o) => o.remoteId)
+          .filter((x): x is string => !!x),
+      );
+      // Build the next list immutably; `next` grows as we go so slug/name
+      // disambiguation accounts for orgs added earlier in the same pass.
+      let next = get().organisations;
+      let changed = false;
+
+      for (const s of serverOrgs) {
+        if (linked.has(s.id)) {
+          // Already linked: the server owns a synced org's name, so a rename
+          // made on the web is taken here. This used to be a bare `continue`
+          // (add-only), which copied the name exactly once — at first link —
+          // and left every surface reading this store stale across refreshes
+          // and relaunches. Only the name is reconciled: the slug is a local
+          // handle that is kept stable (projects key off it), and the
+          // colour/active-project fields are local-only by design. The
+          // server's name is applied even if it collides with a local-only
+          // org's (`nameTaken` is a rule for local edits, not for the truth).
+          // At most one row matches: `collapseDuplicateRemotes` ran above.
+          const idx = next.findIndex((o) => o.remoteId === s.id);
+          if (idx !== -1 && next[idx].name !== s.name) {
+            next = next.map((o, i) => (i === idx ? { ...o, name: s.name } : o));
             changed = true;
-            logEvent({
-              source: "project",
-              kind: "org-adopt",
-              summary: `linked local org "${adopted.name}" to server org`,
-              payload: { localOrgId: adopted.id, remoteOrgId: s.id },
-            });
-            continue;
           }
+          continue;
+        }
 
-          next = [
-            ...next,
-            {
-              id: uuid(),
-              name: s.name,
-              slug: uniqueSlug(slugify(s.name), next),
-              createdAt: new Date().toISOString(),
-              syncEnabled: true,
-              remoteId: s.id,
-            },
-          ];
+        // Adopt a same-named, still-local org rather than duplicating it —
+        // covers an org created offline that later arrives from the server.
+        // Only genuinely local rows qualify (`!remoteId && !syncEnabled`);
+        // logged because adoption changes which server org owns the local
+        // org's projects, and a wrong name-match must be traceable.
+        const adoptIdx = next.findIndex(
+          (o) =>
+            !o.remoteId &&
+            !o.syncEnabled &&
+            o.name.trim().toLowerCase() === s.name.trim().toLowerCase(),
+        );
+        if (adoptIdx !== -1) {
+          const adopted = next[adoptIdx];
+          next = next.map((o, i) =>
+            i === adoptIdx ? { ...o, remoteId: s.id, syncEnabled: true } : o,
+          );
           linked.add(s.id);
           changed = true;
-        }
-
-        if (!changed) return;
-        set({ organisations: next });
-        scheduleAppStateSave();
-      },
-
-      enableSync: async (id) => {
-        const org = get().organisations.find((o) => o.id === id);
-        if (!org) return;
-        if (isSyncedOrg(org)) return; // already linked
-
-        // No credential → send them through sign-in; syncing needs one, and the
-        // sign-in that follows re-merges the server list anyway.
-        if (useAuthStore.getState().snapshot.status !== "signed-in") {
-          void useAuthStore.getState().actions.beginSignIn();
-          return;
-        }
-
-        try {
-          const { id: remoteId } = await auth.createOrg(org.name, org.slug);
-          // Set `remoteId` from the command's own result, before the follow-up
-          // `atlas:auth-changed` broadcast lands — that is what stops
-          // `mergeServerOrgs` from re-adding this org (it matches on remoteId).
-          set((s) => ({
-            organisations: s.organisations.map((o) =>
-              o.id === id ? { ...o, remoteId, syncEnabled: true } : o,
-            ),
-          }));
-          scheduleAppStateSave();
-          // The org id did not change but its *kind* did — local→cloud — and
-          // with it what telemetry may say about it (a synced org has a
-          // server-side name worth defining on the group). Re-resolve.
-          if (get().activeOrganisationId === id) syncOrgTelemetry(id);
           logEvent({
             source: "project",
-            kind: "org-enable-sync",
-            summary: org.name,
-            payload: { orgId: id, remoteId },
+            kind: "org-adopt",
+            summary: `linked local org "${adopted.name}" to server org`,
+            payload: { localOrgId: adopted.id, remoteOrgId: s.id },
           });
-        } catch (e) {
-          toast.error(typeof e === "string" ? e : "Couldn't sync organization.");
+          continue;
         }
-      },
 
-      inviteMember: (orgId, email, role) => {
+        next = [
+          ...next,
+          {
+            id: uuid(),
+            name: s.name,
+            slug: uniqueSlug(slugify(s.name), next),
+            createdAt: new Date().toISOString(),
+            syncEnabled: true,
+            remoteId: s.id,
+          },
+        ];
+        linked.add(s.id);
+        changed = true;
+      }
+
+      if (!changed) return;
+      set({ organisations: next });
+      scheduleAppStateSave();
+    },
+
+    enableSync: async (id) => {
+      const org = get().organisations.find((o) => o.id === id);
+      if (!org) return;
+      if (isSyncedOrg(org)) return; // already linked
+
+      // No credential → send them through sign-in; syncing needs one, and the
+      // sign-in that follows re-merges the server list anyway.
+      if (useAuthStore.getState().snapshot.status !== "signed-in") {
+        void useAuthStore.getState().actions.beginSignIn();
+        return;
+      }
+
+      try {
+        const { id: remoteId } = await auth.createOrg(org.name, org.slug);
+        // Set `remoteId` from the command's own result, before the follow-up
+        // `atlas:auth-changed` broadcast lands — that is what stops
+        // `mergeServerOrgs` from re-adding this org (it matches on remoteId).
+        set((s) => ({
+          organisations: s.organisations.map((o) =>
+            o.id === id ? { ...o, remoteId, syncEnabled: true } : o,
+          ),
+        }));
+        scheduleAppStateSave();
+        // The org id did not change but its *kind* did — local→cloud — and
+        // with it what telemetry may say about it (a synced org has a
+        // server-side name worth defining on the group). Re-resolve.
+        if (get().activeOrganisationId === id) syncOrgTelemetry(id);
         logEvent({
           source: "project",
-          kind: "org-invite-member",
-          summary: "Invite requested (auth pending)",
-          payload: { orgId, email, role, deferred: "auth-branch" },
+          kind: "org-enable-sync",
+          summary: org.name,
+          payload: { orgId: id, remoteId },
         });
-      },
+      } catch (e) {
+        toast.error(typeof e === "string" ? e : "Couldn't sync organization.");
+      }
     },
-  })),
-);
+
+    inviteMember: (orgId, email, role) => {
+      logEvent({
+        source: "project",
+        kind: "org-invite-member",
+        summary: "Invite requested (auth pending)",
+        payload: { orgId, email, role, deferred: "auth-branch" },
+      });
+    },
+  },
+}));

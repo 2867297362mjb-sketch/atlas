@@ -1,6 +1,5 @@
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
-import { createSelectors } from "@/lib/create-selectors";
 import type { ThemeAppearance } from "@tryatlas/design/theme";
 
 /**
@@ -35,21 +34,19 @@ interface ThemeEditorState {
 
 let nextSessionId = 0;
 
-export const useThemeEditorStore = createSelectors(
-  create<ThemeEditorState>()(
-    immer((set) => ({
-      session: null,
-      actions: {
-        open: (session) =>
-          set((s) => {
-            nextSessionId += 1;
-            s.session = { ...session, id: nextSessionId };
-          }),
-        close: () =>
-          set((s) => {
-            s.session = null;
-          }),
-      },
-    })),
-  ),
+export const useThemeEditorStore = create<ThemeEditorState>()(
+  immer((set) => ({
+    session: null,
+    actions: {
+      open: (session) =>
+        set((s) => {
+          nextSessionId += 1;
+          s.session = { ...session, id: nextSessionId };
+        }),
+      close: () =>
+        set((s) => {
+          s.session = null;
+        }),
+    },
+  })),
 );

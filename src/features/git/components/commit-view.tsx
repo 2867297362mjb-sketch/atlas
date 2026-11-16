@@ -604,13 +604,13 @@ function CommitAsks({ detail }: { detail: CommitDetail }) {
  * was opened from.
  */
 function CommitActions({ repoPath, sha }: { repoPath: string; sha: string }) {
-  const activeRepo = useGitStore.use.repoPath();
-  const actions = useGitStore.use.actions();
+  const activeRepo = useGitStore((s) => s.repoPath);
+  const actions = useGitStore((s) => s.actions);
   const [tagging, setTagging] = useState(false);
   const [tagName, setTagName] = useState("");
   // A merge, rebase, cherry-pick or revert under way: each of these would be
   // refused by git, so they wait for it instead of surfacing git's error.
-  const busy = inProgressLabel(useGitStore.use.inProgress());
+  const busy = inProgressLabel(useGitStore((s) => s.inProgress));
 
   if (activeRepo !== repoPath) return null;
 
@@ -765,7 +765,7 @@ export interface CommitSession {
  * human work the link rule deliberately did not attribute to an agent.
  */
 function CommitSessions({ repoPath, sha }: { repoPath: string; sha: string }) {
-  const addTab = useLayoutStore.use.actions().addTab;
+  const addTab = useLayoutStore((s) => s.actions).addTab;
   const [sessions, setSessions] = useState<CommitSession[]>([]);
 
   useEffect(() => {

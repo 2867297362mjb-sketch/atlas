@@ -52,7 +52,7 @@ function capabilityLabels(info: ModelPrice | null): string[] {
 export function AgentModelsSection({ item }: { item: AgentItem }) {
   const catalog = item.catalog;
   const { favorites, toggle } = useModelFavorites();
-  const prices = useModelPricingStore.use.prices();
+  const prices = useModelPricingStore((s) => s.prices);
   const [filter, setFilter] = useState("");
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState("");

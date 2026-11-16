@@ -38,7 +38,7 @@ import { CommandPaletteContent } from "./command-palette-content";
 const DEBOUNCE_MS = 40;
 
 export function FileSearch(props: { onClose: () => void; escapeLabel: string }) {
-  const project = useAppStore.use.currentProject();
+  const project = useAppStore((s) => s.currentProject);
   const projectPath = project?.path ?? null;
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<FileMatch[]>(() =>
@@ -50,7 +50,7 @@ export function FileSearch(props: { onClose: () => void; escapeLabel: string }) 
   const searchSeq = useRef(0);
 
   const openFiles = useLayoutStore((s) => editorPaths(s.tabs));
-  const recentFiles = useRecentFilesStore.use.items();
+  const recentFiles = useRecentFilesStore((s) => s.items);
 
   const runSearch = (q: string) => {
     const seq = ++searchSeq.current;

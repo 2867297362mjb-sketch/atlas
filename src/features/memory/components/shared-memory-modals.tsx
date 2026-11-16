@@ -29,7 +29,7 @@ export function ExportAgentsModal({
   onOpenChange: (open: boolean) => void;
   onWritten: () => void;
 }) {
-  const projectPath = useSharedMemoryStore.use.projectPath();
+  const projectPath = useSharedMemoryStore((s) => s.projectPath);
   const [preview, setPreview] = useState<ExportPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [writing, setWriting] = useState(false);
@@ -176,7 +176,7 @@ export function ImportClaudeMemoryModal({
   onOpenChange: (open: boolean) => void;
   onImported: () => void;
 }) {
-  const { previewClaudeImport, importClaude } = useSharedMemoryStore.use.actions();
+  const { previewClaudeImport, importClaude } = useSharedMemoryStore((s) => s.actions);
   const [preview, setPreview] = useState<ClaudeImportPreview | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [importing, setImporting] = useState(false);

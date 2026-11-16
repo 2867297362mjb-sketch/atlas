@@ -89,8 +89,8 @@ export function onlineTeammates(online: ReadonlySet<string>, directory: OrgDirec
  * than calling this in every row.
  */
 export function useOnlineIds(): ReadonlySet<string> {
-  const byProject = useTeamPresenceStore.use.byProject();
-  const chatOnline = useCommsStore.use.online();
+  const byProject = useTeamPresenceStore((s) => s.byProject);
+  const chatOnline = useCommsStore((s) => s.online);
   return useMemo(() => onlineIds(byProject, chatOnline), [byProject, chatOnline]);
 }
 

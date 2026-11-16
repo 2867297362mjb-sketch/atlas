@@ -24,7 +24,7 @@ export function ImportProfileDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const { importProfile } = useKeybindingsStore.use.actions();
+  const { importProfile } = useKeybindingsStore((s) => s.actions);
   const [text, setText] = useState("");
   const [error, setError] = useState<string | null>(null);
 

@@ -26,10 +26,10 @@ import { GradualBlur, HintGroup, HintItem, IconButton } from "@tryatlas/design";
 
 export function OrgAgentSidePanel() {
   useTipOnMount("ask-atlas");
-  const activeId = useOrgAgentStore.use.activeId();
-  const floatingId = useOrgAgentStore.use.floatingId();
-  const pageId = useOrgAgentStore.use.pageId();
-  const { newChat } = useOrgAgentStore.use.actions();
+  const activeId = useOrgAgentStore((s) => s.activeId);
+  const floatingId = useOrgAgentStore((s) => s.floatingId);
+  const pageId = useOrgAgentStore((s) => s.pageId);
+  const { newChat } = useOrgAgentStore((s) => s.actions);
   const active = activeId;
 
   // Opened with nothing in it: a fresh conversation, so the panel never
@@ -82,12 +82,12 @@ export function OrgAgentSidePanel() {
  *  (`pane-tab.tsx`) — icon and title, the selected one filled — with New
  *  right after the last; Minimise and Full screen at the end, plain icons. */
 function TabStrip() {
-  const tabs = useOrgAgentStore.use.tabs();
-  const activeId = useOrgAgentStore.use.activeId();
-  const floatingId = useOrgAgentStore.use.floatingId();
-  const pageId = useOrgAgentStore.use.pageId();
-  const unread = useOrgAgentStore.use.unread();
-  const { activate, closeTab, newChat, minimise, fullScreen } = useOrgAgentStore.use.actions();
+  const tabs = useOrgAgentStore((s) => s.tabs);
+  const activeId = useOrgAgentStore((s) => s.activeId);
+  const floatingId = useOrgAgentStore((s) => s.floatingId);
+  const pageId = useOrgAgentStore((s) => s.pageId);
+  const unread = useOrgAgentStore((s) => s.unread);
+  const { activate, closeTab, newChat, minimise, fullScreen } = useOrgAgentStore((s) => s.actions);
   const stripRef = useRef<HTMLDivElement>(null);
   const edges = useStripEdges(stripRef);
   const mask = fadeMask(edges);
@@ -239,7 +239,7 @@ function TabTitle({
 /** What the panel shows for a conversation that is open somewhere else —
  *  never the conversation itself, which would then be on screen twice. */
 function Elsewhere({ id, where }: { id: string; where: "floating" | "page" }) {
-  const { restoreToPanel } = useOrgAgentStore.use.actions();
+  const { restoreToPanel } = useOrgAgentStore((s) => s.actions);
   const pageShown = useLayoutStore((s) => s.destinationShown && s.destination?.type === "agent");
   const floating = where === "floating";
   const Glyph = floating ? PictureInPicture2 : Maximize2;

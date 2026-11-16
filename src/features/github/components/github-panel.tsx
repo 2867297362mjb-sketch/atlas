@@ -44,7 +44,7 @@ export function GithubPanel() {
   const [cloning, setCloning] = useState<Set<string>>(new Set());
   const [cloned, setCloned] = useState<Set<string>>(new Set());
   const [rowBusy, setRowBusy] = useState<Record<string, RowBusy>>({});
-  const currentProject = useAppStore.use.currentProject();
+  const currentProject = useAppStore((s) => s.currentProject);
   const projectPath = currentProject?.path ?? null;
   // `.atlas`, or `.atlas-dev` for a dev-profile build — where Rust clones to.
   const atlasDir = useAppProfile().dirName;

@@ -19,7 +19,7 @@ export const TabContentContainer = memo(function TabContentContainer({
   /** Handed to terminal tabs so they can record their owner. */
   projectId: string;
 }) {
-  const { setActiveTab } = useLayoutStore.use.actions();
+  const { setActiveTab } = useLayoutStore((s) => s.actions);
   const ref = useRef<HTMLDivElement>(null);
   const [height, setHeight] = useState(0);
 

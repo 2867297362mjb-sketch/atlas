@@ -23,8 +23,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-import { createSelectors } from "@/lib/create-selectors";
-
 /** A drawer's terminal tab ids start with this; no layout tab does. */
 export const DRAWER_TAB_PREFIX = "session-drawer:";
 
@@ -70,70 +68,67 @@ interface SessionDrawerState {
   };
 }
 
-export const useSessionDrawerStore = createSelectors(
-  create<SessionDrawerState>()(
-    persist(
-      (set) => ({
-        open: {},
-        heights: {},
-        lastHeight: DEFAULT_DRAWER_HEIGHT,
-        focusedTab: null,
-        actions: {
-          setOpen: (scope, next) =>
-            set((s) => {
-              if (!!s.open[scope] === next) return s;
-              const open = { ...s.open };
-              if (next) open[scope] = true;
-              else delete open[scope];
-              return { open };
-            }),
-          setHeight: (scope, height) =>
-            set((s) => {
-              if (!Number.isFinite(height) || height <= 0) return s;
-              const h = Math.round(height);
-              if (s.heights[scope] === h && s.lastHeight === h) return s;
-              return { heights: { ...s.heights, [scope]: h }, lastHeight: h };
-            }),
-          setFocusedTab: (tabId) =>
-            set((s) => (s.focusedTab === tabId ? s : { focusedTab: tabId })),
-          adopt: (from, to) =>
-            set((s) => {
-              if (from === to) return s;
-              const patch: Partial<SessionDrawerState> = {};
-              if (s.open[from]) {
-                const open = { ...s.open, [to]: true as const };
-                delete open[from];
-                patch.open = open;
-              }
-              if (s.heights[from] !== undefined && s.heights[to] === undefined) {
-                const heights = { ...s.heights, [to]: s.heights[from] };
-                delete heights[from];
-                patch.heights = heights;
-              }
-              return Object.keys(patch).length ? patch : s;
-            }),
-          forget: (scope) =>
-            set((s) => {
-              if (!s.open[scope] && s.heights[scope] === undefined) return s;
-              const open = { ...s.open };
-              delete open[scope];
-              const heights = { ...s.heights };
-              delete heights[scope];
-              return { open, heights };
-            }),
-        },
-      }),
-      {
-        name: "atlas.session.terminal-drawer",
-        version: 1,
-        // `open` is deliberately NOT persisted. A drawer's shells do not
-        // survive a restart, so a drawer that reopened itself on launch would
-        // spawn a fresh shell for every session that once had one open — a
-        // process the user did not ask for in this run. The height is the
-        // remembered part.
-        partialize: (s) => ({ heights: s.heights, lastHeight: s.lastHeight }),
+export const useSessionDrawerStore = create<SessionDrawerState>()(
+  persist(
+    (set) => ({
+      open: {},
+      heights: {},
+      lastHeight: DEFAULT_DRAWER_HEIGHT,
+      focusedTab: null,
+      actions: {
+        setOpen: (scope, next) =>
+          set((s) => {
+            if (!!s.open[scope] === next) return s;
+            const open = { ...s.open };
+            if (next) open[scope] = true;
+            else delete open[scope];
+            return { open };
+          }),
+        setHeight: (scope, height) =>
+          set((s) => {
+            if (!Number.isFinite(height) || height <= 0) return s;
+            const h = Math.round(height);
+            if (s.heights[scope] === h && s.lastHeight === h) return s;
+            return { heights: { ...s.heights, [scope]: h }, lastHeight: h };
+          }),
+        setFocusedTab: (tabId) => set((s) => (s.focusedTab === tabId ? s : { focusedTab: tabId })),
+        adopt: (from, to) =>
+          set((s) => {
+            if (from === to) return s;
+            const patch: Partial<SessionDrawerState> = {};
+            if (s.open[from]) {
+              const open = { ...s.open, [to]: true as const };
+              delete open[from];
+              patch.open = open;
+            }
+            if (s.heights[from] !== undefined && s.heights[to] === undefined) {
+              const heights = { ...s.heights, [to]: s.heights[from] };
+              delete heights[from];
+              patch.heights = heights;
+            }
+            return Object.keys(patch).length ? patch : s;
+          }),
+        forget: (scope) =>
+          set((s) => {
+            if (!s.open[scope] && s.heights[scope] === undefined) return s;
+            const open = { ...s.open };
+            delete open[scope];
+            const heights = { ...s.heights };
+            delete heights[scope];
+            return { open, heights };
+          }),
       },
-    ),
+    }),
+    {
+      name: "atlas.session.terminal-drawer",
+      version: 1,
+      // `open` is deliberately NOT persisted. A drawer's shells do not
+      // survive a restart, so a drawer that reopened itself on launch would
+      // spawn a fresh shell for every session that once had one open — a
+      // process the user did not ask for in this run. The height is the
+      // remembered part.
+      partialize: (s) => ({ heights: s.heights, lastHeight: s.lastHeight }),
+    },
   ),
 );
 

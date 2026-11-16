@@ -19,10 +19,10 @@ import { PanelLoading } from "./views/panel-loading";
  * other tab untouched in the store for when a project opens.
  */
 export function ProjectlessCenter() {
-  const tabs = useLayoutStore.use.tabs();
-  const activeByGroup = useLayoutStore.use.activeByGroup();
-  const focusedGroupId = useLayoutStore.use.focusedGroupId();
-  const { setActiveTab } = useLayoutStore.use.actions();
+  const tabs = useLayoutStore((s) => s.tabs);
+  const activeByGroup = useLayoutStore((s) => s.activeByGroup);
+  const focusedGroupId = useLayoutStore((s) => s.focusedGroupId);
+  const { setActiveTab } = useLayoutStore((s) => s.actions);
   // The only column: the leftmost and the rightmost.
   const chrome = columnChrome(true, true);
   // Home is LOCAL state, not a store id: `setActiveTab` validates ids and

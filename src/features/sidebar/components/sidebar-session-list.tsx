@@ -90,10 +90,10 @@ export function SidebarSessions() {
   const live = useLiveSessions();
   const activeSessionId = useActiveSessionId();
   const settleShortcut = useActionShortcut("chat.settleSession")?.label ?? null;
-  const renamingThreadId = useSidebarStore.use.renamingThreadId();
+  const renamingThreadId = useSidebarStore((s) => s.renamingThreadId);
   // The empty list's "Import sessions" (the picker opens its own).
   const [importOpen, setImportOpen] = useState(false);
-  const sidebarActions = useSidebarStore.use.actions();
+  const sidebarActions = useSidebarStore((s) => s.actions);
 
   // ── What the handlers read at call time ─────────────────────────────────
   const listRef = useRef<SidebarListSnapshot>({

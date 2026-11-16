@@ -8,7 +8,6 @@
  */
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
-import { createSelectors } from "@/lib/create-selectors";
 import {
   securityProjectSessions,
   securitySessionCheckpoints,
@@ -65,81 +64,79 @@ interface SecurityState {
   };
 }
 
-export const useSecurityStore = createSelectors(
-  create<SecurityState>()(
-    immer((set, get) => ({
-      sessions: {},
-      checkpoints: {},
-      actions: {
-        loadProject: async (projectPath) => {
-          if (!projectPath) return;
-          const rows = await securityProjectSessions(projectPath).catch(() => null);
-          if (!rows) return;
-          const prevMap = get().sessions[projectPath];
-          const kept = keepUnchanged(
-            prevMap ? Object.values(prevMap) : undefined,
-            rows,
-            (r) => r.sessionId,
-          );
-          if (
-            prevMap &&
-            Object.keys(prevMap).length === kept.length &&
-            kept.every((r) => prevMap[r.sessionId] === r)
-          )
-            return;
-          set((s) => {
-            s.sessions[projectPath] = Object.fromEntries(kept.map((r) => [r.sessionId, r]));
-          });
-        },
-        loadSession: async (projectPath, sessionId) => {
-          if (!projectPath) return [];
-          const key = sessionKey(projectPath, sessionId);
-          const fresh = await securitySessionCheckpoints(projectPath, sessionId).catch(() => null);
-          const prev = get().checkpoints[key];
-          if (!fresh) return prev ?? [];
-          const cps = keepUnchanged(prev, fresh, (c) => c.commitSha);
-          if (cps !== prev)
-            set((s) => {
-              s.checkpoints[key] = cps;
-            });
-          return cps;
-        },
-        refreshProject: async (projectPath) => {
-          const prefix = sessionKey(projectPath, "");
-          const open = Object.keys(get().checkpoints)
-            .filter((k) => k.startsWith(prefix))
-            .map((k) => k.slice(prefix.length));
-          const { loadProject, loadSession } = get().actions;
-          await Promise.all([
-            loadProject(projectPath),
-            ...open.map((id) => loadSession(projectPath, id)),
-          ]);
-        },
-        setNotUseful: async (projectPath, sessionId, finding, notUseful) => {
-          const key = sessionKey(projectPath, sessionId);
-          const apply = (value: boolean) =>
-            set((s) => {
-              const cps = (s.checkpoints[key] ?? []).map((cp) =>
-                recount({
-                  ...cp,
-                  findings: cp.findings.map((f) =>
-                    f.fingerprint === finding.fingerprint ? { ...f, notUseful: value } : f,
-                  ),
-                }),
-              );
-              s.checkpoints[key] = cps;
-              (s.sessions[projectPath] ??= {})[sessionId] = summarize(sessionId, cps);
-            });
-          apply(notUseful);
-          try {
-            await securitySetNotUseful(projectPath, finding.fingerprint, finding.ruleId, notUseful);
-          } catch {
-            apply(!notUseful);
-          }
-        },
+export const useSecurityStore = create<SecurityState>()(
+  immer((set, get) => ({
+    sessions: {},
+    checkpoints: {},
+    actions: {
+      loadProject: async (projectPath) => {
+        if (!projectPath) return;
+        const rows = await securityProjectSessions(projectPath).catch(() => null);
+        if (!rows) return;
+        const prevMap = get().sessions[projectPath];
+        const kept = keepUnchanged(
+          prevMap ? Object.values(prevMap) : undefined,
+          rows,
+          (r) => r.sessionId,
+        );
+        if (
+          prevMap &&
+          Object.keys(prevMap).length === kept.length &&
+          kept.every((r) => prevMap[r.sessionId] === r)
+        )
+          return;
+        set((s) => {
+          s.sessions[projectPath] = Object.fromEntries(kept.map((r) => [r.sessionId, r]));
+        });
       },
-    })),
-  ),
+      loadSession: async (projectPath, sessionId) => {
+        if (!projectPath) return [];
+        const key = sessionKey(projectPath, sessionId);
+        const fresh = await securitySessionCheckpoints(projectPath, sessionId).catch(() => null);
+        const prev = get().checkpoints[key];
+        if (!fresh) return prev ?? [];
+        const cps = keepUnchanged(prev, fresh, (c) => c.commitSha);
+        if (cps !== prev)
+          set((s) => {
+            s.checkpoints[key] = cps;
+          });
+        return cps;
+      },
+      refreshProject: async (projectPath) => {
+        const prefix = sessionKey(projectPath, "");
+        const open = Object.keys(get().checkpoints)
+          .filter((k) => k.startsWith(prefix))
+          .map((k) => k.slice(prefix.length));
+        const { loadProject, loadSession } = get().actions;
+        await Promise.all([
+          loadProject(projectPath),
+          ...open.map((id) => loadSession(projectPath, id)),
+        ]);
+      },
+      setNotUseful: async (projectPath, sessionId, finding, notUseful) => {
+        const key = sessionKey(projectPath, sessionId);
+        const apply = (value: boolean) =>
+          set((s) => {
+            const cps = (s.checkpoints[key] ?? []).map((cp) =>
+              recount({
+                ...cp,
+                findings: cp.findings.map((f) =>
+                  f.fingerprint === finding.fingerprint ? { ...f, notUseful: value } : f,
+                ),
+              }),
+            );
+            s.checkpoints[key] = cps;
+            (s.sessions[projectPath] ??= {})[sessionId] = summarize(sessionId, cps);
+          });
+        apply(notUseful);
+        try {
+          await securitySetNotUseful(projectPath, finding.fingerprint, finding.ruleId, notUseful);
+        } catch {
+          apply(!notUseful);
+        }
+      },
+    },
+  })),
 );
 
 /** A session's checkpoint results, as last read. */

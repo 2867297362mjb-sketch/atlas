@@ -168,7 +168,7 @@ export function useSidebarSessions(): SidebarSessions {
     () => orgProjects.map((p) => ({ id: p.id, name: p.name, path: p.path })),
     [orgProjects],
   );
-  const storedScope = useSidebarStore.use.scopeProjectId();
+  const storedScope = useSidebarStore((s) => s.scopeProjectId);
   const scopeProjectId = resolveScopeProjectId(storedScope, projects);
   const sidebarSort = useSettingsStore((s) => s.settings.sidebarSort);
 

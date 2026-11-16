@@ -52,9 +52,9 @@ export function AccountMenu({
   extra?: ReactNode;
   children: ReactElement;
 }) {
-  const { signOut, beginSignIn } = useAuthStore.use.actions();
-  const settings = useSettingsStore.use.settings();
-  const { updateSettings } = useSettingsStore.use.actions();
+  const { signOut, beginSignIn } = useAuthStore((s) => s.actions);
+  const settings = useSettingsStore((s) => s.settings);
+  const { updateSettings } = useSettingsStore((s) => s.actions);
   const settingsKeys = useActionShortcut("app.settings")?.label;
   const signedIn = account.status === "signed-in";
   const user = signedIn ? account.user : null;

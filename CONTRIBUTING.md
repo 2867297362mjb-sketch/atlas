@@ -38,7 +38,7 @@ Open an issue first, or bring it to `#feature-requests` on [Discord](https://dis
 
 Most Atlas features cross three layers — React UI, a Tauri command, and a workspace crate — so agreeing the approach first saves you from building something that has to be restructured. [docs/architecture.md](docs/architecture.md) covers how those layers fit together.
 
-Match the patterns already in the codebase: feature folder under `src/features/<feature>/`, Zustand store wrapped in `createSelectors`, Tailwind composed through `cn()`, IPC verbs grouped into a single `commands/<domain>.rs`. If your change doesn't fit any of them, propose the structure in the issue.
+Match the patterns already in the codebase: feature folder under `src/features/<feature>/`, Zustand store read through a selector (`useXStore((s) => s.x)`), Tailwind composed through `cn()`, IPC verbs grouped into a single `commands/<domain>.rs`. If your change doesn't fit any of them, propose the structure in the issue.
 
 Split a new surface into a container and views. The container (`components/<name>.tsx`) reads stores, calls the `*-api.ts` wrappers and handles `atlas:*` events; the views (`components/views/<name>-view.tsx`) render from props and callbacks alone. A view that needs an agent's name or mark calls `useAgentMeta(id)` or takes it as a prop, never `agentMeta()`, which reads a store. `tests/view-purity-contract.test.ts` enforces this, because nothing else can see a view that quietly imports a store. [Containers and views](docs/architecture.md#containers-and-views) has the full rule.
 

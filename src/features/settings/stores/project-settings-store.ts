@@ -1,7 +1,6 @@
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
 import { toast } from "sonner";
-import { createSelectors } from "@/lib/create-selectors";
 import {
   getProjectSettings,
   updateProjectSettings,
@@ -29,41 +28,39 @@ interface ProjectSettingsState {
 
 const inFlight = new Map<string, Promise<void>>();
 
-export const useProjectSettingsStore = createSelectors(
-  create<ProjectSettingsState>()(
-    immer((set) => ({
-      byPath: {},
-      actions: {
-        load: (projectPath) => {
-          const pending = inFlight.get(projectPath);
-          if (pending) return pending;
-          const request = getProjectSettings(projectPath)
-            .then((info) => {
-              // An unmocked command resolves null in the browser dev backend.
-              if (!info) return;
-              set((s) => {
-                s.byPath[projectPath] = info;
-              });
-            })
-            .catch(() => {})
-            .finally(() => inFlight.delete(projectPath));
-          inFlight.set(projectPath, request);
-          return request;
-        },
-        update: async (projectPath, patch) => {
-          try {
-            const info = await updateProjectSettings(projectPath, patch);
+export const useProjectSettingsStore = create<ProjectSettingsState>()(
+  immer((set) => ({
+    byPath: {},
+    actions: {
+      load: (projectPath) => {
+        const pending = inFlight.get(projectPath);
+        if (pending) return pending;
+        const request = getProjectSettings(projectPath)
+          .then((info) => {
+            // An unmocked command resolves null in the browser dev backend.
             if (!info) return;
             set((s) => {
               s.byPath[projectPath] = info;
             });
-          } catch (e) {
-            toast.error(`Couldn't save project settings: ${e instanceof Error ? e.message : e}`);
-          }
-        },
+          })
+          .catch(() => {})
+          .finally(() => inFlight.delete(projectPath));
+        inFlight.set(projectPath, request);
+        return request;
       },
-    })),
-  ),
+      update: async (projectPath, patch) => {
+        try {
+          const info = await updateProjectSettings(projectPath, patch);
+          if (!info) return;
+          set((s) => {
+            s.byPath[projectPath] = info;
+          });
+        } catch (e) {
+          toast.error(`Couldn't save project settings: ${e instanceof Error ? e.message : e}`);
+        }
+      },
+    },
+  })),
 );
 
 /** The value of `key` inside `projectPath`: its override, else `global`. */

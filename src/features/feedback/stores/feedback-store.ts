@@ -7,7 +7,6 @@
 
 import { create } from "zustand";
 import { toast } from "sonner";
-import { createSelectors } from "@/lib/create-selectors";
 import { useLayoutStore } from "@/features/layout/stores/layout-store";
 import {
   feedback,
@@ -153,4 +152,4 @@ const useFeedbackStoreBase = create<FeedbackState>()((set, get) => ({
   },
 }));
 
-export const useFeedbackStore = createSelectors(useFeedbackStoreBase);
+export const useFeedbackStore = useFeedbackStoreBase;

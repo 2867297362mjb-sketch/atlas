@@ -21,11 +21,11 @@ export function MergeBranchDialog({
   open: boolean;
   onOpenChange: (o: boolean) => void;
 }) {
-  const branch = useGitStore.use.branch();
-  const branchesFull = useGitStore.use.branchesFull();
-  const detached = useGitStore.use.detached();
-  const opInProgress = inProgressLabel(useGitStore.use.inProgress());
-  const actions = useGitStore.use.actions();
+  const branch = useGitStore((s) => s.branch);
+  const branchesFull = useGitStore((s) => s.branchesFull);
+  const detached = useGitStore((s) => s.detached);
+  const opInProgress = inProgressLabel(useGitStore((s) => s.inProgress));
+  const actions = useGitStore((s) => s.actions);
 
   const listId = useId();
   const listRef = useRef<HTMLDivElement>(null);

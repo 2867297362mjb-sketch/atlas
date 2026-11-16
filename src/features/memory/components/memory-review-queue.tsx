@@ -51,11 +51,11 @@ function callFor(item: ReviewItem, choice: ReviewChoice): (pp: string) => Promis
 }
 
 export function MemoryReviewQueue() {
-  const review = useSharedMemoryStore.use.review();
-  const reviewError = useSharedMemoryStore.use.reviewError();
-  const loaded = useSharedMemoryStore.use.loaded();
-  const projectPath = useSharedMemoryStore.use.projectPath();
-  const { reviewAction, refresh, load } = useSharedMemoryStore.use.actions();
+  const review = useSharedMemoryStore((s) => s.review);
+  const reviewError = useSharedMemoryStore((s) => s.reviewError);
+  const loaded = useSharedMemoryStore((s) => s.loaded);
+  const projectPath = useSharedMemoryStore((s) => s.projectPath);
+  const { reviewAction, refresh, load } = useSharedMemoryStore((s) => s.actions);
   const [skipped, setSkipped] = useState<string[]>([]);
   const [pending, setPending] = useState(false);
 

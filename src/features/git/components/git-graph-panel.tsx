@@ -14,8 +14,8 @@ const DEFAULT_LIMIT = 1000;
 /** The commit graph's container: reads the repo, runs the graph queries, and
  *  hands `GitGraphView` plain props. */
 export function GitGraphPanel() {
-  const project = useAppStore.use.currentProject();
-  const isRepo = useGitStore.use.isRepo();
+  const project = useAppStore((s) => s.currentProject);
+  const isRepo = useGitStore((s) => s.isRepo);
   const path = project?.path ?? "";
 
   const [limit, setLimit] = useState(DEFAULT_LIMIT);

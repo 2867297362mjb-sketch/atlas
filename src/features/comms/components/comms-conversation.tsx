@@ -49,13 +49,13 @@ export const CommsConversation = memo(function CommsConversation({
    *  which is the way back. */
   showBack?: boolean;
 }) {
-  const me = useCommsStore.use.me();
-  const memberList = useCommsStore.use.members();
-  const online = useCommsStore.use.online();
+  const me = useCommsStore((s) => s.me);
+  const memberList = useCommsStore((s) => s.members);
+  const online = useCommsStore((s) => s.online);
   const messages = useCommsStore((s) => s.messages[conv.id]) ?? EMPTY_MESSAGES;
-  const pinned = useCommsStore.use.pinned();
+  const pinned = useCommsStore((s) => s.pinned);
   const typingRoom = useCommsStore((s) => s.typing[conv.id]);
-  const calls = useCommsStore.use.calls();
+  const calls = useCommsStore((s) => s.calls);
   const loading = useCommsStore((s) => s.loading[conv.id] === true);
   // "Loaded and empty" and "never loaded" look identical in a transcript, so
   // the intro copy is gated on the former — it used to appear over a fetch
@@ -63,7 +63,7 @@ export const CommsConversation = memo(function CommsConversation({
   const hydrated = useCommsStore((s) => s.hydrated[conv.id] === true);
   const loadError = useCommsStore((s) => s.loadError[conv.id]);
   const subTab = useCommsStore((s) => s.convTab[conv.id] ?? "messages");
-  const actions = useCommsStore.use.actions();
+  const actions = useCommsStore((s) => s.actions);
 
   const members = useMemo(() => new Map(memberList.map((m) => [m.id, m])), [memberList]);
 

@@ -24,7 +24,7 @@ export function ColourSchemeSection() {
   const themeMode = useSettingsStore((s) => s.settings.themeMode);
   const themeLight = useSettingsStore((s) => s.settings.themeLight);
   const themeDark = useSettingsStore((s) => s.settings.themeDark);
-  const { updateSettings } = useSettingsStore.use.actions();
+  const { updateSettings } = useSettingsStore((s) => s.actions);
   const lightTheme = useThemeStore((s) => s.loaded[themeLight]);
   const darkTheme = useThemeStore((s) => s.loaded[themeDark]);
   const light = lightTheme ? previewTheme(lightTheme, "light") : null;

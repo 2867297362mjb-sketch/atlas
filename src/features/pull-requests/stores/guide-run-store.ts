@@ -26,7 +26,6 @@
 // in memory only; an app quit ends it, and the next run prunes what it left.
 
 import { create } from "zustand";
-import { createSelectors } from "@/lib/create-selectors";
 import { agents, ensureAgent } from "@/features/chat/lib/agents-api";
 import { defaultAgentForNewSession } from "@/features/chat/lib/default-agent";
 import { useAgentRegistryStore } from "@/features/agents/stores/agent-registry-store";
@@ -104,7 +103,7 @@ const useGuideRunStoreBase = create<GuideRunState>()((set) => ({
     }),
 }));
 
-export const useGuideRunStore = createSelectors(useGuideRunStoreBase);
+export const useGuideRunStore = useGuideRunStoreBase;
 
 /**
  * The agent that writes `projectPath`'s guides: `pullRequestGuideAgent` when

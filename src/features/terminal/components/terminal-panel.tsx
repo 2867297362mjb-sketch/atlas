@@ -63,7 +63,7 @@ export function TerminalPanel({ tabId, projectId, visible, variant = "tab" }: Te
     splitPane,
     closePane,
     toggleZoom,
-  } = useTerminalStore.use.actions();
+  } = useTerminalStore((s) => s.actions);
   // Is this tab the one showing in its column? Mounted already implies the
   // active project (background projects unmount terminal panels); this is
   // what tells a hidden tab's terminals to stop rendering.
@@ -243,7 +243,7 @@ function SplitView({
   panelVisible: boolean;
   drawer: boolean;
 }) {
-  const { setSplitSizes } = useTerminalStore.use.actions();
+  const { setSplitSizes } = useTerminalStore((s) => s.actions);
   const horizontal = node.direction === "horizontal";
   return (
     <Group
@@ -344,7 +344,7 @@ function TerminalSlot({
   tabId: string;
   panelVisible: boolean;
 }) {
-  const { setActiveTerminalInPane, setActivePane } = useTerminalStore.use.actions();
+  const { setActiveTerminalInPane, setActivePane } = useTerminalStore((s) => s.actions);
   const isActiveInPane = ptyId === pane.activeTerminalId;
   const focused = useIsFocusedTerminal(ptyId);
   const onFocus = useCallback(() => {

@@ -37,7 +37,7 @@ export function ProjectScriptsRow({
   cwd?: string;
 }) {
   const scripts = useProjectScripts(projectPath).data ?? [];
-  const editScript = useSessionDetailsStore.use.actions().editScript;
+  const editScript = useSessionDetailsStore((s) => s.actions).editScript;
   const primary = primaryProjectScript(scripts, preferredProjectScriptId(projectPath));
 
   if (!primary) {

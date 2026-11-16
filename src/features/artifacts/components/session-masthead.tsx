@@ -38,8 +38,8 @@ export function Masthead({
   // Pricing is cached by Rust and refreshed in the background; a consumer has
   // to ask for it once. Cheap and idempotent — `load` is stable and the store
   // is shared, so opening ten Sessions reads the cache once.
-  const prices = useModelPricingStore.use.prices();
-  const { load: loadPrices } = useModelPricingStore.use.actions();
+  const prices = useModelPricingStore((s) => s.prices);
+  const { load: loadPrices } = useModelPricingStore((s) => s.actions);
   useEffect(() => {
     void loadPrices();
   }, [loadPrices]);

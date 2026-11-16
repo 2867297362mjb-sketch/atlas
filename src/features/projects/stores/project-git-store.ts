@@ -1,7 +1,6 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { createSelectors } from "@/lib/create-selectors";
 import type { GitChangedPayload } from "@/features/git/lib/git-changed-events";
 
 export interface GitSummary {
@@ -47,67 +46,65 @@ function scheduleRefresh(path: string, refresh: (p: string) => void) {
   );
 }
 
-export const useProjectGitStore = createSelectors(
-  create<State>((set, get) => {
-    function ensureListener() {
-      if (listenerReady) return;
-      listenerReady = true;
-      // One global listener for the app's lifetime: a git change to any project
-      // silently refreshes that project's cached summary in the background. The
-      // UI updates only if the sidebar happens to be mounted; otherwise the
-      // fresh value is simply ready for the next open.
-      //
-      // `atlas:git-changed` only fires on commit / checkout / branch / stage
-      // (the watcher watches .git/HEAD|refs|index, NOT the working tree), so a
-      // plain unstaged edit (+N/-M) would never reach us. We ALSO listen to the
-      // fs working-tree watcher (`atlas:explorer:changed`) so the live +/-
-      // counts track uncommitted edits, mirroring the source-control panel.
-      void listen<GitChangedPayload>("atlas:git-changed", (e) => {
-        const p = e.payload?.project;
-        if (p && fetched.has(p)) get().actions.refresh(p);
-      });
-      void listen<{ dirs?: string[]; fullRefresh?: boolean }>("atlas:explorer:changed", (e) => {
-        const refresh = get().actions.refresh;
-        // Opaque batch (rename, etc.): we can't pinpoint dirs — refresh every
-        // cached project.
-        if (e.payload?.fullRefresh || !e.payload?.dirs?.length) {
-          for (const p of fetched) scheduleRefresh(p, refresh);
-          return;
-        }
-        // Match each touched dir to the project whose root contains it.
-        for (const p of fetched) {
-          const hit = e.payload.dirs.some((d) => d === p || d.startsWith(p + "/"));
-          if (hit) scheduleRefresh(p, refresh);
-        }
-      });
-    }
-
-    async function load(path: string) {
-      if (inflight.has(path)) return;
-      inflight.add(path);
-      try {
-        const s = await invoke<GitSummary>("git_workspace_summary", { path });
-        fetched.add(path);
-        set((st) => ({ summaries: { ...st.summaries, [path]: s } }));
-      } catch {
-        // Leave it unfetched so a later `ensure` retries.
-      } finally {
-        inflight.delete(path);
+export const useProjectGitStore = create<State>((set, get) => {
+  function ensureListener() {
+    if (listenerReady) return;
+    listenerReady = true;
+    // One global listener for the app's lifetime: a git change to any project
+    // silently refreshes that project's cached summary in the background. The
+    // UI updates only if the sidebar happens to be mounted; otherwise the
+    // fresh value is simply ready for the next open.
+    //
+    // `atlas:git-changed` only fires on commit / checkout / branch / stage
+    // (the watcher watches .git/HEAD|refs|index, NOT the working tree), so a
+    // plain unstaged edit (+N/-M) would never reach us. We ALSO listen to the
+    // fs working-tree watcher (`atlas:explorer:changed`) so the live +/-
+    // counts track uncommitted edits, mirroring the source-control panel.
+    void listen<GitChangedPayload>("atlas:git-changed", (e) => {
+      const p = e.payload?.project;
+      if (p && fetched.has(p)) get().actions.refresh(p);
+    });
+    void listen<{ dirs?: string[]; fullRefresh?: boolean }>("atlas:explorer:changed", (e) => {
+      const refresh = get().actions.refresh;
+      // Opaque batch (rename, etc.): we can't pinpoint dirs — refresh every
+      // cached project.
+      if (e.payload?.fullRefresh || !e.payload?.dirs?.length) {
+        for (const p of fetched) scheduleRefresh(p, refresh);
+        return;
       }
-    }
+      // Match each touched dir to the project whose root contains it.
+      for (const p of fetched) {
+        const hit = e.payload.dirs.some((d) => d === p || d.startsWith(p + "/"));
+        if (hit) scheduleRefresh(p, refresh);
+      }
+    });
+  }
 
-    return {
-      summaries: {},
-      actions: {
-        ensure: (path) => {
-          ensureListener();
-          if (!fetched.has(path)) void load(path);
-        },
-        refresh: (path) => void load(path),
+  async function load(path: string) {
+    if (inflight.has(path)) return;
+    inflight.add(path);
+    try {
+      const s = await invoke<GitSummary>("git_workspace_summary", { path });
+      fetched.add(path);
+      set((st) => ({ summaries: { ...st.summaries, [path]: s } }));
+    } catch {
+      // Leave it unfetched so a later `ensure` retries.
+    } finally {
+      inflight.delete(path);
+    }
+  }
+
+  return {
+    summaries: {},
+    actions: {
+      ensure: (path) => {
+        ensureListener();
+        if (!fetched.has(path)) void load(path);
       },
-    };
-  }),
-);
+      refresh: (path) => void load(path),
+    },
+  };
+});
 
 /** Drop the fetched bookkeeping so the incoming org's paths refetch fresh on
  *  the next `ensure`. Called from `switchOrg()`. The `summaries` map itself is

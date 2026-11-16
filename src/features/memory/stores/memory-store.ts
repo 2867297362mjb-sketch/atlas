@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { createSelectors } from "@/lib/create-selectors";
 import type { AgentFilesView, MemorySubTab } from "../lib/memory-types";
 import { memoryPolicy, type Policy } from "../lib/memory-policy-api";
 
@@ -54,57 +53,55 @@ interface MemoryStoreState {
   };
 }
 
-export const useMemoryStore = createSelectors(
-  create<MemoryStoreState>()((set, get) => ({
-    subTab: "memories",
-    filesView: "preferences",
-    focusEntryId: null,
-    project: null,
-    policies: null,
-    policyPhase: "idle",
-    policyError: null,
-    actions: {
-      setSubTab: (t) => set({ subTab: t }),
-      setFilesView: (v) => set({ filesView: v }),
-      focusEntry: (id) => set({ subTab: "memories", focusEntryId: id }),
-      clearFocusEntry: () => set({ focusEntryId: null }),
+export const useMemoryStore = create<MemoryStoreState>()((set, get) => ({
+  subTab: "memories",
+  filesView: "preferences",
+  focusEntryId: null,
+  project: null,
+  policies: null,
+  policyPhase: "idle",
+  policyError: null,
+  actions: {
+    setSubTab: (t) => set({ subTab: t }),
+    setFilesView: (v) => set({ filesView: v }),
+    focusEntry: (id) => set({ subTab: "memories", focusEntryId: id }),
+    clearFocusEntry: () => set({ focusEntryId: null }),
 
-      ensureProject: (projectPath) => {
-        if (get().project === projectPath) return;
-        // New project → invalidate every cache.
-        set({
-          project: projectPath,
-          policies: null,
-          policyPhase: "idle",
-          policyError: null,
-        });
-      },
-
-      loadPolicies: async (projectPath, force = false) => {
-        const s = get();
-        if (!force && s.project === projectPath && s.policies && s.policyPhase === "ready") {
-          return; // cache hit — no re-index
-        }
-        set({ policyPhase: "loading", policyError: null });
-        try {
-          const rows = await memoryPolicy.list(projectPath);
-          set({ policies: rows, policyPhase: "ready", project: projectPath });
-        } catch (e) {
-          const msg = String(e);
-          if (msg.includes("model-not-downloaded")) {
-            set({ policyPhase: "not-downloaded" });
-          } else {
-            set({ policyError: msg, policyPhase: "error" });
-          }
-        }
-      },
-
-      setPolicyPhase: (phase, error = null) => set({ policyPhase: phase, policyError: error }),
-      setPolicies: (rows) => set({ policies: rows, policyPhase: "ready" }),
-      updatePolicyValue: (id, value) =>
-        set((st) => ({
-          policies: st.policies?.map((p) => (p.id === id ? { ...p, value } : p)) ?? null,
-        })),
+    ensureProject: (projectPath) => {
+      if (get().project === projectPath) return;
+      // New project → invalidate every cache.
+      set({
+        project: projectPath,
+        policies: null,
+        policyPhase: "idle",
+        policyError: null,
+      });
     },
-  })),
-);
+
+    loadPolicies: async (projectPath, force = false) => {
+      const s = get();
+      if (!force && s.project === projectPath && s.policies && s.policyPhase === "ready") {
+        return; // cache hit — no re-index
+      }
+      set({ policyPhase: "loading", policyError: null });
+      try {
+        const rows = await memoryPolicy.list(projectPath);
+        set({ policies: rows, policyPhase: "ready", project: projectPath });
+      } catch (e) {
+        const msg = String(e);
+        if (msg.includes("model-not-downloaded")) {
+          set({ policyPhase: "not-downloaded" });
+        } else {
+          set({ policyError: msg, policyPhase: "error" });
+        }
+      }
+    },
+
+    setPolicyPhase: (phase, error = null) => set({ policyPhase: phase, policyError: error }),
+    setPolicies: (rows) => set({ policies: rows, policyPhase: "ready" }),
+    updatePolicyValue: (id, value) =>
+      set((st) => ({
+        policies: st.policies?.map((p) => (p.id === id ? { ...p, value } : p)) ?? null,
+      })),
+  },
+}));

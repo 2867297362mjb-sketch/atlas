@@ -127,7 +127,7 @@ export const SessionRow = memo(function SessionRow(props: SessionRowProps) {
 
   // Closed while the list scrolls: the card is anchored to this row, and a
   // scroll carries the row out from under it (`session-list-scroll.ts`).
-  const listScrolling = useSessionListScroll.use.scrolling();
+  const listScrolling = useSessionListScroll((s) => s.scrolling);
   const hoverCardDisabled =
     snoozeMenuOpen || badgeOpen || props.isDragging || isRenaming || listScrolling;
 

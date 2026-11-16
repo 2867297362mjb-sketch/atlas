@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { createSelectors } from "@/lib/create-selectors";
 import { appearanceForMode, applyTheme } from "../apply-theme";
 import { getTheme, listThemes, onThemesChanged, type ThemeSummary } from "../lib/theme-api";
 import type { Theme, ThemeMode, ThemeWarning, ThemeOverride } from "@tryatlas/design/theme";
@@ -148,7 +147,7 @@ const baseStore = create<ThemeState>()((set, get) => ({
   },
 }));
 
-export const useThemeStore = createSelectors(baseStore);
+export const useThemeStore = baseStore;
 
 /** The OS appearance query, while `system` mode is following it. */
 let systemQuery: MediaQueryList | null = null;

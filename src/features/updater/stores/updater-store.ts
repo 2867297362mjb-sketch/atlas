@@ -6,7 +6,6 @@
 // a modal only once the update is staged and ready to restart).
 
 import { create } from "zustand";
-import { createSelectors } from "@/lib/create-selectors";
 
 /** Phase of the update pipeline as reflected in the UI. */
 export type UpdatePhase =
@@ -72,4 +71,4 @@ const useUpdaterStoreBase = create<UpdaterState>()((set) => ({
   },
 }));
 
-export const useUpdaterStore = createSelectors(useUpdaterStoreBase);
+export const useUpdaterStore = useUpdaterStoreBase;

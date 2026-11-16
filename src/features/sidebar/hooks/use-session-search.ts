@@ -23,9 +23,9 @@ export function useSessionSearch(lists: {
   settled: readonly SidebarSession[];
 }) {
   const { pinned, active, snoozed, settled } = lists;
-  const search = useSidebarStore.use.search();
-  const searchFocusRequest = useSidebarStore.use.searchFocusRequest();
-  const sidebarActions = useSidebarStore.use.actions();
+  const search = useSidebarStore((s) => s.search);
+  const searchFocusRequest = useSidebarStore((s) => s.searchFocusRequest);
+  const sidebarActions = useSidebarStore((s) => s.actions);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const deferredSearch = useDeferredValue(search);
   const isSearching = search.trim().length > 0;

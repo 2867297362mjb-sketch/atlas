@@ -1,7 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { immer } from "zustand/middleware/immer";
-import { createSelectors } from "@/lib/create-selectors";
 import { useTerminalStore, type TerminalTabState } from "@/features/terminal/stores/terminal-store";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -615,698 +614,695 @@ function removeColumnTab(s: LayoutState, id: string): void {
 export const KNOWLEDGE_SIDEBAR_WIDTH = { min: 180, max: 480 } as const;
 export const KNOWLEDGE_INSPECTOR_WIDTH = { min: 220, max: 520 } as const;
 
-export const useLayoutStore = createSelectors(
-  create<LayoutState & LayoutActions>()(
-    persist(
-      immer((set) => ({
-        ...initialState,
-        actions: {
-          toggleKnowledgeSidebar: () =>
-            set((s) => {
-              s.knowledgePanel.showSidebar = !s.knowledgePanel.showSidebar;
-            }),
-          toggleKnowledgeInspector: () =>
-            set((s) => {
-              s.knowledgePanel.showInspector = !s.knowledgePanel.showInspector;
-            }),
-          toggleTimelineSidebar: () =>
-            set((s) => {
-              s.timelinePanel.showSidebar = !s.timelinePanel.showSidebar;
-            }),
-          setTimelineView: (view) =>
-            set((s) => {
-              s.timelinePanel.view = view;
-            }),
-          setTimelineSidebarWidth: (width) =>
-            set((s) => {
-              s.timelinePanel.sidebarWidth = Math.max(220, Math.min(width, 480));
-            }),
-          setKnowledgeSidebarWidth: (width) =>
-            set((s) => {
-              s.knowledgePanel.sidebarWidth = Math.max(
-                KNOWLEDGE_SIDEBAR_WIDTH.min,
-                Math.min(width, KNOWLEDGE_SIDEBAR_WIDTH.max),
-              );
-            }),
-          setKnowledgeInspectorWidth: (width) =>
-            set((s) => {
-              s.knowledgePanel.inspectorWidth = Math.max(
-                KNOWLEDGE_INSPECTOR_WIDTH.min,
-                Math.min(width, KNOWLEDGE_INSPECTOR_WIDTH.max),
-              );
-            }),
-          setBashPanelWidth: (width) =>
-            set((s) => {
-              s.bashPanel.width = Math.max(200, Math.min(width, 480));
-            }),
-          setPlansPanelWidth: (width) =>
-            set((s) => {
-              s.plansPanel.width = Math.max(300, Math.min(width, 640));
-            }),
-          setSourceControlSection: (section) =>
-            set((s) => {
-              s.sourceControl.section = section;
-            }),
-          addTab: (tab, groupId) =>
-            set((s) => {
-              // A destination never enters a column (ADR-0024).
-              if (isDestinationOnly(tab.type)) {
-                enterDestination(s, tab);
-                return;
-              }
-              s.destinationShown = false;
-              // A `surface-or-destination` type opened as a tab is the surface
-              // form: it leaves the destination screen for the column, so the
-              // window still holds one.
-              if (isDualPlacement(tab.type)) {
-                if (s.destination?.type === tab.type) s.destination = null;
-                s.lastForm[tab.type] = "surface";
-              }
-              // How many of this type the window holds, which is how the open
-              // one is found (`Multiplicity`, in the tab registry).
-              const multiplicity = multiplicityOf(tab.type);
-              // `one`: one in the window (source control, team chat) or the
-              // project (Files, these tabs being the project's), wherever the
-              // open one is.
-              if (multiplicity === "one") {
-                const open = s.tabs.find((t) => t.type === tab.type);
-                if (open) {
-                  const grp = groupOf(open);
-                  s.focusedGroupId = grp;
-                  s.activeByGroup[grp] = open.id;
-                  revealGroup(s, grp);
-                  pushTabHistory(s, open.id);
-                  syncActiveMirror(s);
-                  return;
-                }
-              }
-              // `per-id`: the id names what the tab shows (a session, a file,
-              // a commit, a draft), so another id is always another tab.
-              // `one-per-column`, and a first `one`: a singleton in the target
-              // column (focus the instance already there, else open one).
-              const allowMultiple = multiplicity === "per-id";
-
-              let targetId = tab.id;
-              // Where the tab lands: caller-specified column, else the focused one.
-              let targetGroup = groupId ?? s.focusedGroupId;
-              if (!s.groupOrder.includes(targetGroup)) targetGroup = s.focusedGroupId;
-              // …unless that is the main column and this is not a session. And
-              // a session always opens in the main column, wherever the focus
-              // was (ADR-0024): a session in the surfaces pane gets the
-              // narrow column's cramped layout and no breadcrumb.
-              if (belongsInMain(tab.type)) targetGroup = s.groupOrder[0];
-              else if (targetGroup === s.groupOrder[0]) targetGroup = surfaceGroupFor(s);
-
-              if (!allowMultiple) {
-                const existingInGroup = s.tabs.find(
-                  (t) => t.type === tab.type && groupOf(t) === targetGroup,
-                );
-                if (existingInGroup) {
-                  targetId = existingInGroup.id; // focus the one already in this column
-                } else {
-                  // New instance in the target column; ensure a unique id since
-                  // callers may reuse a fixed id (e.g. "terminal", "settings").
-                  targetId = uniqueTabId(s, tab.id);
-                  s.tabs.push({ ...tab, id: targetId, groupId: targetGroup });
-                }
-              } else {
-                const existsById = s.tabs.find((t) => t.id === tab.id);
-                if (existsById) {
-                  targetGroup = groupOf(existsById);
-                } else {
-                  s.tabs.push({ ...tab, groupId: targetGroup });
-                }
-              }
-              s.focusedGroupId = targetGroup;
-              s.activeByGroup[targetGroup] = targetId;
-              revealGroup(s, targetGroup);
-              pushTabHistory(s, targetId);
-              syncActiveMirror(s);
-            }),
-          addBackgroundTab: (tab) =>
-            set((s) => {
-              if (tab.type !== "chat" || s.tabs.some((t) => t.id === tab.id)) return;
-              const grp = s.groupOrder[0];
-              s.tabs.push({ ...tab, groupId: grp });
-              const active = s.activeByGroup[grp];
-              if (!active || !s.tabs.some((t) => t.id === active)) {
-                s.activeByGroup[grp] = tab.id;
-                syncActiveMirror(s);
-              }
-            }),
-          closeTab: (id) =>
-            set((s) => {
-              if (s.destination?.id === id) {
-                s.destination = null;
-                s.destinationShown = false;
-                return;
-              }
-              const tab = s.tabs.find((t) => t.id === id);
-              if (!tab?.closable) return;
-              removeColumnTab(s, id);
-            }),
-          moveTab: (id, toIndex) =>
-            set((s) => {
-              const tab = s.tabs.find((t) => t.id === id);
-              if (!tab) return;
-              const grp = groupOf(tab);
-              const column = s.tabs.filter((t) => groupOf(t) === grp);
-              const from = column.indexOf(tab);
-              const to = Math.max(0, Math.min(toIndex, column.length - 1));
-              if (from === to) return;
-              column.splice(from, 1);
-              column.splice(to, 0, tab);
-              // Refill the column's own slots in `tabs`, in the new order, so
-              // the tabs of every other column stay exactly where they were.
-              let next = 0;
-              s.tabs = s.tabs.map((t) => (groupOf(t) === grp ? column[next++] : t));
-            }),
-          hideDestination: () =>
-            set((s) => {
-              s.destinationShown = false;
-            }),
-          showDestination: (tab) =>
-            set((s) => {
-              if (isDestinationOnly(tab.type) || isDualPlacement(tab.type))
-                enterDestination(s, tab);
-            }),
-          setActiveTab: (id) =>
-            set((s) => {
-              if (s.destination?.id === id) {
-                s.destinationShown = true;
-                return;
-              }
-              // Going to any session or surface leaves the destination.
-              s.destinationShown = false;
-              const tab = s.tabs.find((t) => t.id === id);
-              const target = tab ? id : (s.tabs[0]?.id ?? null);
-              if (target === null) return;
-              const grp = groupOf(s.tabs.find((t) => t.id === target));
-              s.focusedGroupId = grp;
-              s.activeByGroup[grp] = target;
-              revealGroup(s, grp);
-              pushTabHistory(s, target);
-              syncActiveMirror(s);
-            }),
-          navigateTabBack: () =>
-            set((s) => {
-              for (let i = s.tabHistoryIndex - 1; i >= 0; i--) {
-                const id = s.tabHistory[i];
-                const tab = s.tabs.find((t) => t.id === id);
-                if (tab) {
-                  s.tabHistoryIndex = i;
-                  s.focusedGroupId = groupOf(tab);
-                  s.activeByGroup[s.focusedGroupId] = id;
-                  syncActiveMirror(s);
-                  return;
-                }
-              }
-            }),
-          navigateTabForward: () =>
-            set((s) => {
-              for (let i = s.tabHistoryIndex + 1; i < s.tabHistory.length; i++) {
-                const id = s.tabHistory[i];
-                const tab = s.tabs.find((t) => t.id === id);
-                if (tab) {
-                  s.tabHistoryIndex = i;
-                  s.focusedGroupId = groupOf(tab);
-                  s.activeByGroup[s.focusedGroupId] = id;
-                  syncActiveMirror(s);
-                  return;
-                }
-              }
-            }),
-          // ⌘1–9 — select the i-th tab WITHIN the focused column.
-          activateTabByIndex: (i) =>
-            set((s) => {
-              const groupTabs = s.tabs.filter((t) => groupOf(t) === s.focusedGroupId);
-              const target = i < 0 ? groupTabs[groupTabs.length - 1] : groupTabs[i];
-              if (!target) return;
-              s.activeByGroup[s.focusedGroupId] = target.id;
-              pushTabHistory(s, target.id);
-              syncActiveMirror(s);
-            }),
-          cycleTab: (delta) =>
-            set((s) => {
-              const groupTabs = s.tabs.filter((t) => groupOf(t) === s.focusedGroupId);
-              if (groupTabs.length === 0) return;
-              const cur = s.activeByGroup[s.focusedGroupId];
-              const ci = Math.max(
-                0,
-                groupTabs.findIndex((t) => t.id === cur),
-              );
-              const next = groupTabs[(ci + delta + groupTabs.length) % groupTabs.length];
-              s.activeByGroup[s.focusedGroupId] = next.id;
-              pushTabHistory(s, next.id);
-              syncActiveMirror(s);
-            }),
-          setSurfaces: (mode) =>
-            set((s) => {
-              s.surfaces = s.groupOrder.length > 1 ? mode : "shown";
-              const main = s.groupOrder[0];
-              // Keyboard focus follows what is on screen: hidden surfaces hand
-              // it to the main pane, an expanded one takes it.
-              if (s.surfaces === "hidden") s.focusedGroupId = main;
-              else if (s.surfaces === "expanded" && s.focusedGroupId === main) {
-                s.focusedGroupId = s.groupOrder[1];
-              }
-              syncActiveMirror(s);
-            }),
-          setFocusedGroup: (groupId) =>
-            set((s) => {
-              if (!s.groupOrder.includes(groupId) || s.focusedGroupId === groupId) return;
-              s.focusedGroupId = groupId;
-              syncActiveMirror(s);
-            }),
-          focusAdjacentGroup: (delta) =>
-            set((s) => {
-              const i = s.groupOrder.indexOf(s.focusedGroupId);
-              const ni = i + delta;
-              if (ni < 0 || ni >= s.groupOrder.length) return;
-              s.focusedGroupId = s.groupOrder[ni];
-              syncActiveMirror(s);
-            }),
-          addGroup: () =>
-            set((s) => {
-              if (s.groupOrder.length >= MAX_GROUPS) return;
-              const gid = `split-${Date.now().toString(36)}-${Math.random()
-                .toString(36)
-                .slice(2, 5)}`;
-              const fi = s.groupOrder.indexOf(s.focusedGroupId);
-              s.groupOrder.splice(fi + 1, 0, gid);
-              s.activeByGroup[gid] = null;
-              s.focusedGroupId = gid;
-              if (s.surfaces === "hidden") s.surfaces = "shown";
-              syncActiveMirror(s);
-            }),
-          closeGroup: (groupId) =>
-            set((s) => {
-              if (s.groupOrder.length <= 1) return;
-              const gi = s.groupOrder.indexOf(groupId);
-              if (gi === -1) return;
-              const remaining = s.groupOrder.filter((g) => g !== groupId);
-              const main = remaining[0];
-              // The column's tabs move (and remount): sessions to the main
-              // column, tools to the nearest surfaces column left standing.
-              const toolHome =
-                [s.groupOrder[gi - 1], s.groupOrder[gi + 1]].find((g) => g && g !== main) ??
-                remaining.find((g) => g !== main);
-              const here = s.tabs.filter((t) => groupOf(t) === groupId);
-              if (!toolHome && here.some((t) => !belongsInMain(t.type))) {
-                // The only surfaces column, with tools in it: they have nowhere
-                // to go but the main column, which shows no tabs. Hide the
-                // pane instead; its tools keep running and come back with it.
-                s.surfaces = "hidden";
-                s.focusedGroupId = main;
+export const useLayoutStore = create<LayoutState & LayoutActions>()(
+  persist(
+    immer((set) => ({
+      ...initialState,
+      actions: {
+        toggleKnowledgeSidebar: () =>
+          set((s) => {
+            s.knowledgePanel.showSidebar = !s.knowledgePanel.showSidebar;
+          }),
+        toggleKnowledgeInspector: () =>
+          set((s) => {
+            s.knowledgePanel.showInspector = !s.knowledgePanel.showInspector;
+          }),
+        toggleTimelineSidebar: () =>
+          set((s) => {
+            s.timelinePanel.showSidebar = !s.timelinePanel.showSidebar;
+          }),
+        setTimelineView: (view) =>
+          set((s) => {
+            s.timelinePanel.view = view;
+          }),
+        setTimelineSidebarWidth: (width) =>
+          set((s) => {
+            s.timelinePanel.sidebarWidth = Math.max(220, Math.min(width, 480));
+          }),
+        setKnowledgeSidebarWidth: (width) =>
+          set((s) => {
+            s.knowledgePanel.sidebarWidth = Math.max(
+              KNOWLEDGE_SIDEBAR_WIDTH.min,
+              Math.min(width, KNOWLEDGE_SIDEBAR_WIDTH.max),
+            );
+          }),
+        setKnowledgeInspectorWidth: (width) =>
+          set((s) => {
+            s.knowledgePanel.inspectorWidth = Math.max(
+              KNOWLEDGE_INSPECTOR_WIDTH.min,
+              Math.min(width, KNOWLEDGE_INSPECTOR_WIDTH.max),
+            );
+          }),
+        setBashPanelWidth: (width) =>
+          set((s) => {
+            s.bashPanel.width = Math.max(200, Math.min(width, 480));
+          }),
+        setPlansPanelWidth: (width) =>
+          set((s) => {
+            s.plansPanel.width = Math.max(300, Math.min(width, 640));
+          }),
+        setSourceControlSection: (section) =>
+          set((s) => {
+            s.sourceControl.section = section;
+          }),
+        addTab: (tab, groupId) =>
+          set((s) => {
+            // A destination never enters a column (ADR-0024).
+            if (isDestinationOnly(tab.type)) {
+              enterDestination(s, tab);
+              return;
+            }
+            s.destinationShown = false;
+            // A `surface-or-destination` type opened as a tab is the surface
+            // form: it leaves the destination screen for the column, so the
+            // window still holds one.
+            if (isDualPlacement(tab.type)) {
+              if (s.destination?.type === tab.type) s.destination = null;
+              s.lastForm[tab.type] = "surface";
+            }
+            // How many of this type the window holds, which is how the open
+            // one is found (`Multiplicity`, in the tab registry).
+            const multiplicity = multiplicityOf(tab.type);
+            // `one`: one in the window (source control, team chat) or the
+            // project (Files, these tabs being the project's), wherever the
+            // open one is.
+            if (multiplicity === "one") {
+              const open = s.tabs.find((t) => t.type === tab.type);
+              if (open) {
+                const grp = groupOf(open);
+                s.focusedGroupId = grp;
+                s.activeByGroup[grp] = open.id;
+                revealGroup(s, grp);
+                pushTabHistory(s, open.id);
                 syncActiveMirror(s);
                 return;
               }
-              const moved = s.activeByGroup[groupId];
-              for (const t of here) t.groupId = belongsInMain(t.type) ? main : toolHome!;
-              s.groupOrder = remaining;
-              delete s.activeByGroup[groupId];
-              const movedTab = here.find((t) => t.id === moved);
-              if (movedTab) s.activeByGroup[groupOf(movedTab)] = movedTab.id;
-              s.focusedGroupId = movedTab ? groupOf(movedTab) : main;
-              if (s.groupOrder.length === 1) s.surfaces = "shown";
-              reconcileGroups(s);
-              keepMainForSessions(s);
-            }),
-          toggleZenMode: () =>
-            set((s) => {
-              // Exit: restore the snapshot.
-              if (s.zen && s.zenPrev) {
-                const p = s.zenPrev;
-                s.groupOrder = p.groupOrder.length ? [...p.groupOrder] : [DEFAULT_GROUP];
-                s.activeByGroup = { ...p.activeByGroup };
-                s.focusedGroupId = p.focusedGroupId;
-                for (const t of s.tabs) t.groupId = p.tabGroups[t.id] ?? s.groupOrder[0];
-                s.zen = false;
-                s.zenPrev = null;
-                reconcileGroups(s);
-                keepMainForSessions(s);
+            }
+            // `per-id`: the id names what the tab shows (a session, a file,
+            // a commit, a draft), so another id is always another tab.
+            // `one-per-column`, and a first `one`: a singleton in the target
+            // column (focus the instance already there, else open one).
+            const allowMultiple = multiplicity === "per-id";
+
+            let targetId = tab.id;
+            // Where the tab lands: caller-specified column, else the focused one.
+            let targetGroup = groupId ?? s.focusedGroupId;
+            if (!s.groupOrder.includes(targetGroup)) targetGroup = s.focusedGroupId;
+            // …unless that is the main column and this is not a session. And
+            // a session always opens in the main column, wherever the focus
+            // was (ADR-0024): a session in the surfaces pane gets the
+            // narrow column's cramped layout and no breadcrumb.
+            if (belongsInMain(tab.type)) targetGroup = s.groupOrder[0];
+            else if (targetGroup === s.groupOrder[0]) targetGroup = surfaceGroupFor(s);
+
+            if (!allowMultiple) {
+              const existingInGroup = s.tabs.find(
+                (t) => t.type === tab.type && groupOf(t) === targetGroup,
+              );
+              if (existingInGroup) {
+                targetId = existingInGroup.id; // focus the one already in this column
+              } else {
+                // New instance in the target column; ensure a unique id since
+                // callers may reuse a fixed id (e.g. "terminal", "settings").
+                targetId = uniqueTabId(s, tab.id);
+                s.tabs.push({ ...tab, id: targetId, groupId: targetGroup });
+              }
+            } else {
+              const existsById = s.tabs.find((t) => t.id === tab.id);
+              if (existsById) {
+                targetGroup = groupOf(existsById);
+              } else {
+                s.tabs.push({ ...tab, groupId: targetGroup });
+              }
+            }
+            s.focusedGroupId = targetGroup;
+            s.activeByGroup[targetGroup] = targetId;
+            revealGroup(s, targetGroup);
+            pushTabHistory(s, targetId);
+            syncActiveMirror(s);
+          }),
+        addBackgroundTab: (tab) =>
+          set((s) => {
+            if (tab.type !== "chat" || s.tabs.some((t) => t.id === tab.id)) return;
+            const grp = s.groupOrder[0];
+            s.tabs.push({ ...tab, groupId: grp });
+            const active = s.activeByGroup[grp];
+            if (!active || !s.tabs.some((t) => t.id === active)) {
+              s.activeByGroup[grp] = tab.id;
+              syncActiveMirror(s);
+            }
+          }),
+        closeTab: (id) =>
+          set((s) => {
+            if (s.destination?.id === id) {
+              s.destination = null;
+              s.destinationShown = false;
+              return;
+            }
+            const tab = s.tabs.find((t) => t.id === id);
+            if (!tab?.closable) return;
+            removeColumnTab(s, id);
+          }),
+        moveTab: (id, toIndex) =>
+          set((s) => {
+            const tab = s.tabs.find((t) => t.id === id);
+            if (!tab) return;
+            const grp = groupOf(tab);
+            const column = s.tabs.filter((t) => groupOf(t) === grp);
+            const from = column.indexOf(tab);
+            const to = Math.max(0, Math.min(toIndex, column.length - 1));
+            if (from === to) return;
+            column.splice(from, 1);
+            column.splice(to, 0, tab);
+            // Refill the column's own slots in `tabs`, in the new order, so
+            // the tabs of every other column stay exactly where they were.
+            let next = 0;
+            s.tabs = s.tabs.map((t) => (groupOf(t) === grp ? column[next++] : t));
+          }),
+        hideDestination: () =>
+          set((s) => {
+            s.destinationShown = false;
+          }),
+        showDestination: (tab) =>
+          set((s) => {
+            if (isDestinationOnly(tab.type) || isDualPlacement(tab.type)) enterDestination(s, tab);
+          }),
+        setActiveTab: (id) =>
+          set((s) => {
+            if (s.destination?.id === id) {
+              s.destinationShown = true;
+              return;
+            }
+            // Going to any session or surface leaves the destination.
+            s.destinationShown = false;
+            const tab = s.tabs.find((t) => t.id === id);
+            const target = tab ? id : (s.tabs[0]?.id ?? null);
+            if (target === null) return;
+            const grp = groupOf(s.tabs.find((t) => t.id === target));
+            s.focusedGroupId = grp;
+            s.activeByGroup[grp] = target;
+            revealGroup(s, grp);
+            pushTabHistory(s, target);
+            syncActiveMirror(s);
+          }),
+        navigateTabBack: () =>
+          set((s) => {
+            for (let i = s.tabHistoryIndex - 1; i >= 0; i--) {
+              const id = s.tabHistory[i];
+              const tab = s.tabs.find((t) => t.id === id);
+              if (tab) {
+                s.tabHistoryIndex = i;
+                s.focusedGroupId = groupOf(tab);
+                s.activeByGroup[s.focusedGroupId] = id;
+                syncActiveMirror(s);
                 return;
               }
-              // Enter: snapshot the current layout, then build Session │ Browser.
-              const tabGroups: Record<string, string> = {};
-              for (const t of s.tabs) tabGroups[t.id] = groupOf(t);
-              s.zenPrev = {
-                groupOrder: [...s.groupOrder],
-                activeByGroup: { ...s.activeByGroup },
-                focusedGroupId: s.focusedGroupId,
-                tabGroups,
-              };
-              const G_CHAT = "zen-chat";
-              const G_BROWSER = "zen-browser";
-              // Reuse the existing singleton tab if present, else create one.
-              const ensure = (type: TabType, title: string, gid: string): string => {
-                const existing = s.tabs.find((x) => x.type === type);
-                if (existing) {
-                  existing.groupId = gid;
-                  return existing.id;
-                }
-                const id = `${type}-zen`;
-                s.tabs.push({
-                  id,
-                  type,
-                  title,
-                  closable: true,
-                  dirty: false,
-                  data: {},
-                  groupId: gid,
-                });
-                return id;
-              };
-              // A chat tab always exists (welcome-chat is the non-closable baseline).
-              let chat = s.tabs.find((x) => x.type === "chat");
-              if (!chat) {
-                chat = {
-                  id: "chat-zen",
-                  type: "chat",
-                  title: "Session",
-                  closable: true,
-                  dirty: false,
-                  data: {},
-                  groupId: G_CHAT,
-                };
-                s.tabs.push(chat);
-              } else {
-                chat.groupId = G_CHAT;
+            }
+          }),
+        navigateTabForward: () =>
+          set((s) => {
+            for (let i = s.tabHistoryIndex + 1; i < s.tabHistory.length; i++) {
+              const id = s.tabHistory[i];
+              const tab = s.tabs.find((t) => t.id === id);
+              if (tab) {
+                s.tabHistoryIndex = i;
+                s.focusedGroupId = groupOf(tab);
+                s.activeByGroup[s.focusedGroupId] = id;
+                syncActiveMirror(s);
+                return;
               }
-              const browserId = ensure("browser", "Browser", G_BROWSER);
-              // The agent first: the main column holds the session.
-              s.groupOrder = [G_CHAT, G_BROWSER];
-              s.activeByGroup = { [G_CHAT]: chat.id, [G_BROWSER]: browserId };
-              s.focusedGroupId = G_CHAT;
-              // Team chat, like every tab outside the three, stays where it
-              // was and comes back on exit.
-              s.zen = true;
+            }
+          }),
+        // ⌘1–9 — select the i-th tab WITHIN the focused column.
+        activateTabByIndex: (i) =>
+          set((s) => {
+            const groupTabs = s.tabs.filter((t) => groupOf(t) === s.focusedGroupId);
+            const target = i < 0 ? groupTabs[groupTabs.length - 1] : groupTabs[i];
+            if (!target) return;
+            s.activeByGroup[s.focusedGroupId] = target.id;
+            pushTabHistory(s, target.id);
+            syncActiveMirror(s);
+          }),
+        cycleTab: (delta) =>
+          set((s) => {
+            const groupTabs = s.tabs.filter((t) => groupOf(t) === s.focusedGroupId);
+            if (groupTabs.length === 0) return;
+            const cur = s.activeByGroup[s.focusedGroupId];
+            const ci = Math.max(
+              0,
+              groupTabs.findIndex((t) => t.id === cur),
+            );
+            const next = groupTabs[(ci + delta + groupTabs.length) % groupTabs.length];
+            s.activeByGroup[s.focusedGroupId] = next.id;
+            pushTabHistory(s, next.id);
+            syncActiveMirror(s);
+          }),
+        setSurfaces: (mode) =>
+          set((s) => {
+            s.surfaces = s.groupOrder.length > 1 ? mode : "shown";
+            const main = s.groupOrder[0];
+            // Keyboard focus follows what is on screen: hidden surfaces hand
+            // it to the main pane, an expanded one takes it.
+            if (s.surfaces === "hidden") s.focusedGroupId = main;
+            else if (s.surfaces === "expanded" && s.focusedGroupId === main) {
+              s.focusedGroupId = s.groupOrder[1];
+            }
+            syncActiveMirror(s);
+          }),
+        setFocusedGroup: (groupId) =>
+          set((s) => {
+            if (!s.groupOrder.includes(groupId) || s.focusedGroupId === groupId) return;
+            s.focusedGroupId = groupId;
+            syncActiveMirror(s);
+          }),
+        focusAdjacentGroup: (delta) =>
+          set((s) => {
+            const i = s.groupOrder.indexOf(s.focusedGroupId);
+            const ni = i + delta;
+            if (ni < 0 || ni >= s.groupOrder.length) return;
+            s.focusedGroupId = s.groupOrder[ni];
+            syncActiveMirror(s);
+          }),
+        addGroup: () =>
+          set((s) => {
+            if (s.groupOrder.length >= MAX_GROUPS) return;
+            const gid = `split-${Date.now().toString(36)}-${Math.random()
+              .toString(36)
+              .slice(2, 5)}`;
+            const fi = s.groupOrder.indexOf(s.focusedGroupId);
+            s.groupOrder.splice(fi + 1, 0, gid);
+            s.activeByGroup[gid] = null;
+            s.focusedGroupId = gid;
+            if (s.surfaces === "hidden") s.surfaces = "shown";
+            syncActiveMirror(s);
+          }),
+        closeGroup: (groupId) =>
+          set((s) => {
+            if (s.groupOrder.length <= 1) return;
+            const gi = s.groupOrder.indexOf(groupId);
+            if (gi === -1) return;
+            const remaining = s.groupOrder.filter((g) => g !== groupId);
+            const main = remaining[0];
+            // The column's tabs move (and remount): sessions to the main
+            // column, tools to the nearest surfaces column left standing.
+            const toolHome =
+              [s.groupOrder[gi - 1], s.groupOrder[gi + 1]].find((g) => g && g !== main) ??
+              remaining.find((g) => g !== main);
+            const here = s.tabs.filter((t) => groupOf(t) === groupId);
+            if (!toolHome && here.some((t) => !belongsInMain(t.type))) {
+              // The only surfaces column, with tools in it: they have nowhere
+              // to go but the main column, which shows no tabs. Hide the
+              // pane instead; its tools keep running and come back with it.
+              s.surfaces = "hidden";
+              s.focusedGroupId = main;
               syncActiveMirror(s);
-            }),
-          applyLayoutTemplate: (template) =>
-            set((s) => {
-              // Leaving zen if we were in it.
+              return;
+            }
+            const moved = s.activeByGroup[groupId];
+            for (const t of here) t.groupId = belongsInMain(t.type) ? main : toolHome!;
+            s.groupOrder = remaining;
+            delete s.activeByGroup[groupId];
+            const movedTab = here.find((t) => t.id === moved);
+            if (movedTab) s.activeByGroup[groupOf(movedTab)] = movedTab.id;
+            s.focusedGroupId = movedTab ? groupOf(movedTab) : main;
+            if (s.groupOrder.length === 1) s.surfaces = "shown";
+            reconcileGroups(s);
+            keepMainForSessions(s);
+          }),
+        toggleZenMode: () =>
+          set((s) => {
+            // Exit: restore the snapshot.
+            if (s.zen && s.zenPrev) {
+              const p = s.zenPrev;
+              s.groupOrder = p.groupOrder.length ? [...p.groupOrder] : [DEFAULT_GROUP];
+              s.activeByGroup = { ...p.activeByGroup };
+              s.focusedGroupId = p.focusedGroupId;
+              for (const t of s.tabs) t.groupId = p.tabGroups[t.id] ?? s.groupOrder[0];
               s.zen = false;
               s.zenPrev = null;
+              reconcileGroups(s);
+              keepMainForSessions(s);
+              return;
+            }
+            // Enter: snapshot the current layout, then build Session │ Browser.
+            const tabGroups: Record<string, string> = {};
+            for (const t of s.tabs) tabGroups[t.id] = groupOf(t);
+            s.zenPrev = {
+              groupOrder: [...s.groupOrder],
+              activeByGroup: { ...s.activeByGroup },
+              focusedGroupId: s.focusedGroupId,
+              tabGroups,
+            };
+            const G_CHAT = "zen-chat";
+            const G_BROWSER = "zen-browser";
+            // Reuse the existing singleton tab if present, else create one.
+            const ensure = (type: TabType, title: string, gid: string): string => {
+              const existing = s.tabs.find((x) => x.type === type);
+              if (existing) {
+                existing.groupId = gid;
+                return existing.id;
+              }
+              const id = `${type}-zen`;
+              s.tabs.push({
+                id,
+                type,
+                title,
+                closable: true,
+                dirty: false,
+                data: {},
+                groupId: gid,
+              });
+              return id;
+            };
+            // A chat tab always exists (welcome-chat is the non-closable baseline).
+            let chat = s.tabs.find((x) => x.type === "chat");
+            if (!chat) {
+              chat = {
+                id: "chat-zen",
+                type: "chat",
+                title: "Session",
+                closable: true,
+                dirty: false,
+                data: {},
+                groupId: G_CHAT,
+              };
+              s.tabs.push(chat);
+            } else {
+              chat.groupId = G_CHAT;
+            }
+            const browserId = ensure("browser", "Browser", G_BROWSER);
+            // The agent first: the main column holds the session.
+            s.groupOrder = [G_CHAT, G_BROWSER];
+            s.activeByGroup = { [G_CHAT]: chat.id, [G_BROWSER]: browserId };
+            s.focusedGroupId = G_CHAT;
+            // Team chat, like every tab outside the three, stays where it
+            // was and comes back on exit.
+            s.zen = true;
+            syncActiveMirror(s);
+          }),
+        applyLayoutTemplate: (template) =>
+          set((s) => {
+            // Leaving zen if we were in it.
+            s.zen = false;
+            s.zenPrev = null;
 
-              // One column per template cell. Reuse an existing tab of the cell's
-              // type when present (preserve open work), else create one.
-              const order: string[] = [];
-              const active: Record<string, string | null> = {};
-              template.columns.forEach((col, i) => {
-                const gid = i === 0 ? DEFAULT_GROUP : `tpl-${i}`;
-                order.push(gid);
-                const existing = s.tabs.find((t) => t.type === col.type);
-                let id: string;
-                if (existing) {
-                  existing.groupId = gid;
-                  id = existing.id;
-                } else {
-                  const ts = Date.now().toString(36);
-                  id = `${col.type}-tpl-${i}-${ts}`;
-                  // A fresh editor needs a buffer key or it renders blank; seed an
-                  // untitled scratch buffer (same convention as ⌘N).
-                  const data = col.type === "editor" ? { filePath: `untitled:tpl-${i}-${ts}` } : {};
+            // One column per template cell. Reuse an existing tab of the cell's
+            // type when present (preserve open work), else create one.
+            const order: string[] = [];
+            const active: Record<string, string | null> = {};
+            template.columns.forEach((col, i) => {
+              const gid = i === 0 ? DEFAULT_GROUP : `tpl-${i}`;
+              order.push(gid);
+              const existing = s.tabs.find((t) => t.type === col.type);
+              let id: string;
+              if (existing) {
+                existing.groupId = gid;
+                id = existing.id;
+              } else {
+                const ts = Date.now().toString(36);
+                id = `${col.type}-tpl-${i}-${ts}`;
+                // A fresh editor needs a buffer key or it renders blank; seed an
+                // untitled scratch buffer (same convention as ⌘N).
+                const data = col.type === "editor" ? { filePath: `untitled:tpl-${i}-${ts}` } : {};
+                s.tabs.push({
+                  id,
+                  type: col.type,
+                  title: col.title,
+                  closable: col.type !== "chat",
+                  dirty: false,
+                  data,
+                  groupId: gid,
+                });
+              }
+              active[gid] = id;
+            });
+
+            s.groupOrder = order;
+            s.activeByGroup = active;
+            s.focusedGroupId =
+              order[Math.min(template.focus ?? order.length - 1, order.length - 1)];
+
+            // Park any OTHER open tabs in the first column (kept, not lost) and
+            // validate actives/focus — then move the tools among them out of
+            // it, since the main column shows no tabs.
+            reconcileGroups(s);
+            keepMainForSessions(s);
+            // A one-column template means the session alone: tools parked
+            // beside it stay open but out of sight.
+            if (template.columns.length === 1 && s.groupOrder.length > 1) s.surfaces = "hidden";
+          }),
+        setTabDirty: (id, dirty) =>
+          set((s) => {
+            const tab = s.tabs.find((t) => t.id === id);
+            if (tab) tab.dirty = dirty;
+          }),
+        setTabTitle: (id, title) =>
+          set((s) => {
+            const tab = s.tabs.find((t) => t.id === id);
+            if (tab && tab.title !== title) tab.title = title;
+          }),
+        setTabData: (id, patch) =>
+          set((s) => {
+            const tab = s.tabs.find((t) => t.id === id);
+            if (tab) tab.data = { ...tab.data, ...patch };
+          }),
+        // Persist the whole project layout (split columns + their tabs) per
+        // project so the AKB arrangement comes back on reopen. The Rust
+        // save/load commands store the JSON opaquely, so the shape is ours.
+        saveEditorState: (projectPath) => {
+          const data = buildEditorState(useLayoutStore.getState());
+          if (!data) return;
+          invoke("save_editor_state", {
+            projectPath,
+            stateJson: JSON.stringify(data),
+          }).catch(() => {});
+        },
+        flushEditorState: async (projectPath) => {
+          const data = buildEditorState(useLayoutStore.getState());
+          if (!data) return;
+          await invoke("save_editor_state", {
+            projectPath,
+            stateJson: JSON.stringify(data),
+          }).catch(() => {});
+        },
+        commitProjectView: (wsId) =>
+          set((s) => {
+            s.viewsByWs[wsId] = captureView(s);
+            s.currentViewWsId = wsId;
+          }),
+        loadProjectView: (wsId) =>
+          set((s) => {
+            const v = s.viewsByWs[wsId] ?? welcomeView(wsId);
+            applyViewKeepingWindowTabs(s, v);
+            keepMainForSessions(s);
+            s.currentViewWsId = wsId;
+          }),
+        removeProjectView: (wsId) =>
+          set((s) => {
+            delete s.viewsByWs[wsId];
+          }),
+        loadEditorState: async (projectPath) => {
+          try {
+            const raw = await invoke<string>("load_editor_state", { projectPath });
+            const data = JSON.parse(raw) as {
+              tabs?: Array<{
+                id: string;
+                type: string;
+                title: string;
+                data: Record<string, unknown>;
+                groupId?: string;
+              }>;
+              groupOrder?: string[];
+              activeByGroup?: Record<string, string | null>;
+              focusedGroupId?: string;
+              activeTabId?: string;
+              terminalTrees?: Record<string, TerminalTabState>;
+            };
+            if (data.tabs && data.tabs.length > 0) {
+              // Pane trees first, so `TerminalPanel`'s `initTab` (a no-op
+              // when the tree exists) finds the restored one. Only for tabs
+              // that are actually coming back.
+              if (data.terminalTrees) {
+                const restoredIds = new Set(data.tabs.map((t) => t.id));
+                const trees = Object.fromEntries(
+                  Object.entries(data.terminalTrees).filter(([id]) => restoredIds.has(id)),
+                );
+                useTerminalStore.getState().actions.importTrees(trees);
+              }
+              set((s) => {
+                // Restore the column structure (≤3). Falls back to the existing
+                // single "main" column for the legacy (v1) format.
+                if (data.groupOrder && data.groupOrder.length > 0) {
+                  s.groupOrder = data.groupOrder.slice(0, MAX_GROUPS);
+                  // If "main" (the welcome tab's column) was dropped, re-home it.
+                  if (!s.groupOrder.includes(DEFAULT_GROUP)) {
+                    const first = s.groupOrder[0];
+                    for (const t of s.tabs) if (groupOf(t) === DEFAULT_GROUP) t.groupId = first;
+                  }
+                }
+                // Add the saved tabs into their columns.
+                for (const saved of data.tabs!) {
+                  // Renamed types map forward; unknown and org-scoped
+                  // types are dropped (see `restoredTabType`).
+                  const type = restoredTabType(saved.type);
+                  if (type === null || isRetiredTab(saved)) continue;
+                  const id = saved.id in LEGACY_TAB_TYPES ? LEGACY_TAB_TYPES[saved.id] : saved.id;
+                  if (s.tabs.find((t) => t.id === id)) continue;
+                  let gid = saved.groupId ?? DEFAULT_GROUP;
+                  if (!s.groupOrder.includes(gid)) gid = s.groupOrder[0];
                   s.tabs.push({
                     id,
-                    type: col.type,
-                    title: col.title,
-                    closable: col.type !== "chat",
+                    type,
+                    title: saved.title,
+                    closable: true,
                     dirty: false,
-                    data,
+                    data: saved.data,
                     groupId: gid,
                   });
                 }
-                active[gid] = id;
-              });
-
-              s.groupOrder = order;
-              s.activeByGroup = active;
-              s.focusedGroupId =
-                order[Math.min(template.focus ?? order.length - 1, order.length - 1)];
-
-              // Park any OTHER open tabs in the first column (kept, not lost) and
-              // validate actives/focus — then move the tools among them out of
-              // it, since the main column shows no tabs.
-              reconcileGroups(s);
-              keepMainForSessions(s);
-              // A one-column template means the session alone: tools parked
-              // beside it stay open but out of sight.
-              if (template.columns.length === 1 && s.groupOrder.length > 1) s.surfaces = "hidden";
-            }),
-          setTabDirty: (id, dirty) =>
-            set((s) => {
-              const tab = s.tabs.find((t) => t.id === id);
-              if (tab) tab.dirty = dirty;
-            }),
-          setTabTitle: (id, title) =>
-            set((s) => {
-              const tab = s.tabs.find((t) => t.id === id);
-              if (tab && tab.title !== title) tab.title = title;
-            }),
-          setTabData: (id, patch) =>
-            set((s) => {
-              const tab = s.tabs.find((t) => t.id === id);
-              if (tab) tab.data = { ...tab.data, ...patch };
-            }),
-          // Persist the whole project layout (split columns + their tabs) per
-          // project so the AKB arrangement comes back on reopen. The Rust
-          // save/load commands store the JSON opaquely, so the shape is ours.
-          saveEditorState: (projectPath) => {
-            const data = buildEditorState(useLayoutStore.getState());
-            if (!data) return;
-            invoke("save_editor_state", {
-              projectPath,
-              stateJson: JSON.stringify(data),
-            }).catch(() => {});
-          },
-          flushEditorState: async (projectPath) => {
-            const data = buildEditorState(useLayoutStore.getState());
-            if (!data) return;
-            await invoke("save_editor_state", {
-              projectPath,
-              stateJson: JSON.stringify(data),
-            }).catch(() => {});
-          },
-          commitProjectView: (wsId) =>
-            set((s) => {
-              s.viewsByWs[wsId] = captureView(s);
-              s.currentViewWsId = wsId;
-            }),
-          loadProjectView: (wsId) =>
-            set((s) => {
-              const v = s.viewsByWs[wsId] ?? welcomeView(wsId);
-              applyViewKeepingWindowTabs(s, v);
-              keepMainForSessions(s);
-              s.currentViewWsId = wsId;
-            }),
-          removeProjectView: (wsId) =>
-            set((s) => {
-              delete s.viewsByWs[wsId];
-            }),
-          loadEditorState: async (projectPath) => {
-            try {
-              const raw = await invoke<string>("load_editor_state", { projectPath });
-              const data = JSON.parse(raw) as {
-                tabs?: Array<{
-                  id: string;
-                  type: string;
-                  title: string;
-                  data: Record<string, unknown>;
-                  groupId?: string;
-                }>;
-                groupOrder?: string[];
-                activeByGroup?: Record<string, string | null>;
-                focusedGroupId?: string;
-                activeTabId?: string;
-                terminalTrees?: Record<string, TerminalTabState>;
-              };
-              if (data.tabs && data.tabs.length > 0) {
-                // Pane trees first, so `TerminalPanel`'s `initTab` (a no-op
-                // when the tree exists) finds the restored one. Only for tabs
-                // that are actually coming back.
-                if (data.terminalTrees) {
-                  const restoredIds = new Set(data.tabs.map((t) => t.id));
-                  const trees = Object.fromEntries(
-                    Object.entries(data.terminalTrees).filter(([id]) => restoredIds.has(id)),
-                  );
-                  useTerminalStore.getState().actions.importTrees(trees);
-                }
-                set((s) => {
-                  // Restore the column structure (≤3). Falls back to the existing
-                  // single "main" column for the legacy (v1) format.
-                  if (data.groupOrder && data.groupOrder.length > 0) {
-                    s.groupOrder = data.groupOrder.slice(0, MAX_GROUPS);
-                    // If "main" (the welcome tab's column) was dropped, re-home it.
-                    if (!s.groupOrder.includes(DEFAULT_GROUP)) {
-                      const first = s.groupOrder[0];
-                      for (const t of s.tabs) if (groupOf(t) === DEFAULT_GROUP) t.groupId = first;
-                    }
-                  }
-                  // Add the saved tabs into their columns.
-                  for (const saved of data.tabs!) {
-                    // Renamed types map forward; unknown and org-scoped
-                    // types are dropped (see `restoredTabType`).
-                    const type = restoredTabType(saved.type);
-                    if (type === null || isRetiredTab(saved)) continue;
-                    const id = saved.id in LEGACY_TAB_TYPES ? LEGACY_TAB_TYPES[saved.id] : saved.id;
-                    if (s.tabs.find((t) => t.id === id)) continue;
-                    let gid = saved.groupId ?? DEFAULT_GROUP;
-                    if (!s.groupOrder.includes(gid)) gid = s.groupOrder[0];
-                    s.tabs.push({
-                      id,
-                      type,
-                      title: saved.title,
-                      closable: true,
-                      dirty: false,
-                      data: saved.data,
-                      groupId: gid,
-                    });
-                  }
-                  // Reconcile: every tab in a live column; every column with a
-                  // valid active tab; restore focus.
-                  for (const t of s.tabs)
-                    if (!s.groupOrder.includes(groupOf(t))) t.groupId = s.groupOrder[0];
-                  const saved = data.activeByGroup ?? {};
-                  for (const g of s.groupOrder) {
-                    const want = saved[g];
-                    const valid = want && s.tabs.find((t) => t.id === want && groupOf(t) === g);
-                    if (valid) s.activeByGroup[g] = want!;
-                    else if (
-                      !s.activeByGroup[g] ||
-                      !s.tabs.find((t) => t.id === s.activeByGroup[g] && groupOf(t) === g)
-                    ) {
-                      s.activeByGroup[g] = s.tabs.find((t) => groupOf(t) === g)?.id ?? null;
-                    }
-                  }
-                  // Legacy: no per-group active map — fall back to activeTabId.
-                  if (
-                    !data.activeByGroup &&
-                    data.activeTabId &&
-                    s.tabs.find((t) => t.id === data.activeTabId)
+                // Reconcile: every tab in a live column; every column with a
+                // valid active tab; restore focus.
+                for (const t of s.tabs)
+                  if (!s.groupOrder.includes(groupOf(t))) t.groupId = s.groupOrder[0];
+                const saved = data.activeByGroup ?? {};
+                for (const g of s.groupOrder) {
+                  const want = saved[g];
+                  const valid = want && s.tabs.find((t) => t.id === want && groupOf(t) === g);
+                  if (valid) s.activeByGroup[g] = want!;
+                  else if (
+                    !s.activeByGroup[g] ||
+                    !s.tabs.find((t) => t.id === s.activeByGroup[g] && groupOf(t) === g)
                   ) {
-                    s.activeByGroup[DEFAULT_GROUP] = data.activeTabId;
+                    s.activeByGroup[g] = s.tabs.find((t) => groupOf(t) === g)?.id ?? null;
                   }
-                  s.focusedGroupId =
-                    data.focusedGroupId && s.groupOrder.includes(data.focusedGroupId)
-                      ? data.focusedGroupId
-                      : s.groupOrder[0];
-                  syncActiveMirror(s);
-                  keepMainForSessions(s);
-                });
-              }
-            } catch {
-              // no saved state
+                }
+                // Legacy: no per-group active map — fall back to activeTabId.
+                if (
+                  !data.activeByGroup &&
+                  data.activeTabId &&
+                  s.tabs.find((t) => t.id === data.activeTabId)
+                ) {
+                  s.activeByGroup[DEFAULT_GROUP] = data.activeTabId;
+                }
+                s.focusedGroupId =
+                  data.focusedGroupId && s.groupOrder.includes(data.focusedGroupId)
+                    ? data.focusedGroupId
+                    : s.groupOrder[0];
+                syncActiveMirror(s);
+                keepMainForSessions(s);
+              });
             }
-          },
-        },
-      })),
-      {
-        // Persist only durable UI layout preferences across app
-        // restarts — panel visibility/widths, the KB panel layout, etc.
-        // Tabs/history/actions are session- or project-scoped and are
-        // restored separately (saveEditorState / project bootstrap), so
-        // they're deliberately excluded.
-        name: "atlas-layout-prefs",
-        version: 2,
-        partialize: (s) => ({
-          // Derived, not a field: the tab is the truth while the app runs.
-          teamChat: { open: s.tabs.some((t) => t.type === "team-chat") },
-          agent: { open: s.tabs.some((t) => t.type === "agent-panel") },
-          sourceControl: s.sourceControl,
-          knowledgePanel: s.knowledgePanel,
-          bashPanel: s.bashPanel,
-          plansPanel: s.plansPanel,
-          timelinePanel: s.timelinePanel,
-          lastForm: s.lastForm,
-        }),
-        // One-level-deep merge so persisted slices overlay the defaults
-        // without dropping any fields added in newer versions (the
-        // default shallow merge would replace whole slices).
-        merge: (persisted, current) => {
-          const p = (persisted ?? {}) as Partial<LayoutState>;
-          // Team chat open at quit reopens. A save from before it was a tab
-          // says so as the right slot showing chat (`rightPanel`, which source
-          // control shared before that, with `mode`).
-          const persisted_ = (persisted ?? {}) as {
-            teamChat?: { open?: boolean };
-            agent?: { open?: boolean };
-            rightPanel?: { visible?: boolean; mode?: string };
-          };
-          const legacyRight = persisted_.rightPanel;
-          const teamChatOpen =
-            persisted_.teamChat?.open ??
-            (!!legacyRight?.visible &&
-              (legacyRight.mode === undefined || legacyRight.mode === "chat"));
-          const sourceControl = { ...current.sourceControl, ...p.sourceControl };
-          // Coerce a section id that no longer belongs to this panel (e.g. a
-          // pre-move `state.json` with "analysis") back to a valid default so
-          // the panel isn't blank.
-          if (!(SOURCE_CONTROL_SECTIONS as readonly string[]).includes(sourceControl.section)) {
-            sourceControl.section = "changes";
+          } catch {
+            // no saved state
           }
-          // Tabs whose feature has since been removed (pomodoro, model-chat,
-          // research…) still sit in persisted state.json; restoring them
-          // yields a permanent placeholder tab. Drop them, and repoint
-          // activeTabId if it pointed at one.
-          const validTypes = new Set<string>(TAB_TYPES);
-          const tabs = (p.tabs ?? current.tabs)
-            .map((t) => {
-              // Renamed types map forward (mission-control → usage) so the
-              // tab survives the rename instead of reading as removed.
-              const type = migrateTabType(t.type);
-              if (type === null || type === t.type) return t;
-              const id = t.id in LEGACY_TAB_TYPES ? LEGACY_TAB_TYPES[t.id] : t.id;
-              return { ...t, id, type };
-            })
-            .filter(
-              (t) =>
-                validTypes.has(t.type) && !isRetiredTab(t) && !isDestinationOnly(t.type as TabType),
-            );
-          // Seeded into the tab set here so the first `loadProjectView` (or the
-          // projectless shell) carries it like any open team chat.
-          if (teamChatOpen && !tabs.some((t) => t.type === "team-chat")) {
-            tabs.push({ ...TEAM_CHAT_TAB });
-          }
-          if (persisted_.agent?.open && !tabs.some((t) => t.type === "agent-panel")) {
-            tabs.push({ ...AGENT_PANEL_TAB });
-          }
-          let activeTabId = p.activeTabId ?? current.activeTabId;
-          if (activeTabId !== null && !tabs.some((t) => t.id === activeTabId)) {
-            activeTabId = tabs[0]?.id ?? null;
-          }
-          // `chatSidebar` is the per-chat session column the app sidebar
-          // replaced; a save from before carries it, and nothing reads it.
-          const {
-            rightPanel: _legacy,
-            teamChat: _derived,
-            chatSidebar: _retired,
-            ...rest
-          } = p as Partial<LayoutState> & {
-            rightPanel?: unknown;
-            teamChat?: unknown;
-            chatSidebar?: unknown;
-          };
-          return {
-            ...current,
-            ...rest,
-            lastForm: { ...rest.lastForm },
-            tabs,
-            activeTabId,
-            sourceControl,
-            knowledgePanel: { ...current.knowledgePanel, ...p.knowledgePanel },
-            bashPanel: { ...current.bashPanel, ...p.bashPanel },
-            plansPanel: { ...current.plansPanel, ...p.plansPanel },
-            // Deep, so a save from before `view` existed gains the default —
-            // and a value this build does not know falls back to the list.
-            timelinePanel: {
-              ...current.timelinePanel,
-              ...p.timelinePanel,
-              view: p.timelinePanel?.view === "trace" ? "trace" : "list",
-            },
-          };
         },
       },
-    ),
+    })),
+    {
+      // Persist only durable UI layout preferences across app
+      // restarts — panel visibility/widths, the KB panel layout, etc.
+      // Tabs/history/actions are session- or project-scoped and are
+      // restored separately (saveEditorState / project bootstrap), so
+      // they're deliberately excluded.
+      name: "atlas-layout-prefs",
+      version: 2,
+      partialize: (s) => ({
+        // Derived, not a field: the tab is the truth while the app runs.
+        teamChat: { open: s.tabs.some((t) => t.type === "team-chat") },
+        agent: { open: s.tabs.some((t) => t.type === "agent-panel") },
+        sourceControl: s.sourceControl,
+        knowledgePanel: s.knowledgePanel,
+        bashPanel: s.bashPanel,
+        plansPanel: s.plansPanel,
+        timelinePanel: s.timelinePanel,
+        lastForm: s.lastForm,
+      }),
+      // One-level-deep merge so persisted slices overlay the defaults
+      // without dropping any fields added in newer versions (the
+      // default shallow merge would replace whole slices).
+      merge: (persisted, current) => {
+        const p = (persisted ?? {}) as Partial<LayoutState>;
+        // Team chat open at quit reopens. A save from before it was a tab
+        // says so as the right slot showing chat (`rightPanel`, which source
+        // control shared before that, with `mode`).
+        const persisted_ = (persisted ?? {}) as {
+          teamChat?: { open?: boolean };
+          agent?: { open?: boolean };
+          rightPanel?: { visible?: boolean; mode?: string };
+        };
+        const legacyRight = persisted_.rightPanel;
+        const teamChatOpen =
+          persisted_.teamChat?.open ??
+          (!!legacyRight?.visible &&
+            (legacyRight.mode === undefined || legacyRight.mode === "chat"));
+        const sourceControl = { ...current.sourceControl, ...p.sourceControl };
+        // Coerce a section id that no longer belongs to this panel (e.g. a
+        // pre-move `state.json` with "analysis") back to a valid default so
+        // the panel isn't blank.
+        if (!(SOURCE_CONTROL_SECTIONS as readonly string[]).includes(sourceControl.section)) {
+          sourceControl.section = "changes";
+        }
+        // Tabs whose feature has since been removed (pomodoro, model-chat,
+        // research…) still sit in persisted state.json; restoring them
+        // yields a permanent placeholder tab. Drop them, and repoint
+        // activeTabId if it pointed at one.
+        const validTypes = new Set<string>(TAB_TYPES);
+        const tabs = (p.tabs ?? current.tabs)
+          .map((t) => {
+            // Renamed types map forward (mission-control → usage) so the
+            // tab survives the rename instead of reading as removed.
+            const type = migrateTabType(t.type);
+            if (type === null || type === t.type) return t;
+            const id = t.id in LEGACY_TAB_TYPES ? LEGACY_TAB_TYPES[t.id] : t.id;
+            return { ...t, id, type };
+          })
+          .filter(
+            (t) =>
+              validTypes.has(t.type) && !isRetiredTab(t) && !isDestinationOnly(t.type as TabType),
+          );
+        // Seeded into the tab set here so the first `loadProjectView` (or the
+        // projectless shell) carries it like any open team chat.
+        if (teamChatOpen && !tabs.some((t) => t.type === "team-chat")) {
+          tabs.push({ ...TEAM_CHAT_TAB });
+        }
+        if (persisted_.agent?.open && !tabs.some((t) => t.type === "agent-panel")) {
+          tabs.push({ ...AGENT_PANEL_TAB });
+        }
+        let activeTabId = p.activeTabId ?? current.activeTabId;
+        if (activeTabId !== null && !tabs.some((t) => t.id === activeTabId)) {
+          activeTabId = tabs[0]?.id ?? null;
+        }
+        // `chatSidebar` is the per-chat session column the app sidebar
+        // replaced; a save from before carries it, and nothing reads it.
+        const {
+          rightPanel: _legacy,
+          teamChat: _derived,
+          chatSidebar: _retired,
+          ...rest
+        } = p as Partial<LayoutState> & {
+          rightPanel?: unknown;
+          teamChat?: unknown;
+          chatSidebar?: unknown;
+        };
+        return {
+          ...current,
+          ...rest,
+          lastForm: { ...rest.lastForm },
+          tabs,
+          activeTabId,
+          sourceControl,
+          knowledgePanel: { ...current.knowledgePanel, ...p.knowledgePanel },
+          bashPanel: { ...current.bashPanel, ...p.bashPanel },
+          plansPanel: { ...current.plansPanel, ...p.plansPanel },
+          // Deep, so a save from before `view` existed gains the default —
+          // and a value this build does not know falls back to the list.
+          timelinePanel: {
+            ...current.timelinePanel,
+            ...p.timelinePanel,
+            view: p.timelinePanel?.view === "trace" ? "trace" : "list",
+          },
+        };
+      },
+    },
   ),
 );

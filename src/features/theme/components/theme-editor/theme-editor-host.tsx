@@ -15,8 +15,8 @@ const ThemeEditorPanel = lazy(() =>
 );
 
 export function ThemeEditorHost() {
-  const session = useThemeEditorStore.use.session();
-  const { close } = useThemeEditorStore.use.actions();
+  const session = useThemeEditorStore((s) => s.session);
+  const { close } = useThemeEditorStore((s) => s.actions);
   const [source, setSource] = useState<{ session: number; theme: Theme } | null>(null);
 
   const sessionId = session?.id;

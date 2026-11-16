@@ -13,8 +13,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-import { createSelectors } from "@/lib/create-selectors";
-
 import type { PrReviewCommentDraft } from "../lib/pull-requests-types";
 
 export interface PendingReviewComment extends PrReviewCommentDraft {
@@ -89,30 +87,28 @@ export function restoreDrafts(stored: unknown): Record<string, readonly PendingR
   return out;
 }
 
-export const usePullRequestReviewStore = createSelectors(
-  create<PullRequestReviewState>()(
-    persist(
-      (set) => ({
-        drafts: {},
-        actions: {
-          add: (key, comment) =>
-            set((s) => ({
-              drafts: { ...s.drafts, [key]: [...(s.drafts[key] ?? NO_PENDING), comment] },
-            })),
-          remove: (key, id) => set((s) => without(s.drafts, key, (c) => c.id === id)),
-          removeMany: (key, ids) => {
-            const sent = new Set(ids);
-            set((s) => without(s.drafts, key, (c) => sent.has(c.id)));
-          },
+export const usePullRequestReviewStore = create<PullRequestReviewState>()(
+  persist(
+    (set) => ({
+      drafts: {},
+      actions: {
+        add: (key, comment) =>
+          set((s) => ({
+            drafts: { ...s.drafts, [key]: [...(s.drafts[key] ?? NO_PENDING), comment] },
+          })),
+        remove: (key, id) => set((s) => without(s.drafts, key, (c) => c.id === id)),
+        removeMany: (key, ids) => {
+          const sent = new Set(ids);
+          set((s) => without(s.drafts, key, (c) => sent.has(c.id)));
         },
-      }),
-      {
-        name: "atlas-pull-request-review-drafts",
-        version: 1,
-        partialize: (s) => ({ drafts: s.drafts }),
-        merge: (stored, current) => ({ ...current, drafts: restoreDrafts(stored) }),
       },
-    ),
+    }),
+    {
+      name: "atlas-pull-request-review-drafts",
+      version: 1,
+      partialize: (s) => ({ drafts: s.drafts }),
+      merge: (stored, current) => ({ ...current, drafts: restoreDrafts(stored) }),
+    },
   ),
 );
 

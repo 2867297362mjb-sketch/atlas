@@ -263,8 +263,8 @@ export function CodeMirrorFileView({
 
   // Re-skin in place when the theme changes, so the document and its undo
   // history survive.
-  const themeLight = useSettingsStore.use.settings().themeLight;
-  const themeDark = useSettingsStore.use.settings().themeDark;
+  const themeLight = useSettingsStore((s) => s.settings).themeLight;
+  const themeDark = useSettingsStore((s) => s.settings).themeDark;
   useEffect(() => {
     const refresh = () =>
       viewRef.current?.dispatch({

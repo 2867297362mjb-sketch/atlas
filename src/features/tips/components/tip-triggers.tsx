@@ -32,12 +32,12 @@ const STAR_AFTER_DAYS = 3;
 const REPO_URL = "https://github.com/tryatlas/atlas";
 
 export function TipTriggers() {
-  const loaded = useTipsStore.use.loaded();
+  const loaded = useTipsStore((s) => s.loaded);
   const checkpointDone = useTipsStore((s) => s.checklist.includes("checkpoint"));
   const signedIn = useAuthStore((s) => s.snapshot.status === "signed-in");
   const hasProject = useProjectStore((s) => s.projects.length > 0);
-  const hydrated = useAppStore.use.hydrated();
-  const skipped = useTipsStore.use.getStartedSkipped();
+  const hydrated = useAppStore((s) => s.hydrated);
+  const skipped = useTipsStore((s) => s.getStartedSkipped);
   const projectPath = useAppStore((s) => s.currentProject?.path ?? null);
   const capturing = useProjectFacts(projectPath)?.binding?.enabled ?? false;
 

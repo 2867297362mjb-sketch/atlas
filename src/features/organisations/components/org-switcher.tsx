@@ -50,11 +50,11 @@ export function useOrgMenu(): {
   reset: () => void;
   dialogs: ReactNode;
 } {
-  const organisations = useOrgStore.use.organisations();
-  const activeOrganisationId = useOrgStore.use.activeOrganisationId();
-  const { rename, enableSync } = useOrgStore.use.actions();
-  const projects = useProjectStore.use.projects();
-  const snapshot = useAuthStore.use.snapshot();
+  const organisations = useOrgStore((s) => s.organisations);
+  const activeOrganisationId = useOrgStore((s) => s.activeOrganisationId);
+  const { rename, enableSync } = useOrgStore((s) => s.actions);
+  const projects = useProjectStore((s) => s.projects);
+  const snapshot = useAuthStore((s) => s.snapshot);
   const signedIn = snapshot.status === "signed-in";
   /** The server orgs THIS account belongs to. `null` = signed out OR never
    *  listed on this machine (offline). */

@@ -15,7 +15,6 @@
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
 import { toast } from "sonner";
-import { createSelectors } from "@/lib/create-selectors";
 import {
   markSessionUnread,
   markSessionViewed,
@@ -72,71 +71,68 @@ function reason(err: unknown): string {
   return String(err);
 }
 
-export const useSessionLifecycleStore = createSelectors(
-  create<SessionLifecycleState>()(
-    immer((set) => {
-      /** Run one lifecycle write for `threadId`, marking it pending throughout. */
-      const run = async (
-        threadId: string,
-        what: string,
-        write: () => Promise<boolean>,
-      ): Promise<boolean> => {
+export const useSessionLifecycleStore = create<SessionLifecycleState>()(
+  immer((set) => {
+    /** Run one lifecycle write for `threadId`, marking it pending throughout. */
+    const run = async (
+      threadId: string,
+      what: string,
+      write: () => Promise<boolean>,
+    ): Promise<boolean> => {
+      set((s) => {
+        s.pending[threadId] = true;
+      });
+      try {
+        return await write();
+      } catch (err) {
+        toast.error(`Couldn't ${what}: ${reason(err)}`);
+        return false;
+      } finally {
         set((s) => {
-          s.pending[threadId] = true;
+          delete s.pending[threadId];
         });
-        try {
-          return await write();
-        } catch (err) {
-          toast.error(`Couldn't ${what}: ${reason(err)}`);
-          return false;
-        } finally {
-          set((s) => {
-            delete s.pending[threadId];
-          });
-        }
-      };
+      }
+    };
 
-      return {
-        pending: {},
-        actions: {
-          pin: (threadId, orderKey) => run(threadId, "pin", () => pinSession(threadId, orderKey)),
-          unpin: (threadId) => run(threadId, "unpin", () => unpinSession(threadId)),
-          reorderPin: (threadId, orderKey) =>
-            run(threadId, "move the pin", () => reorderPinnedSession(threadId, orderKey)),
-          snooze: (threadId, until) =>
-            run(threadId, "snooze", () => snoozeSession(threadId, until)),
-          wake: (threadId) => run(threadId, "wake", () => wakeSession(threadId)),
-          unsnooze: (threadId) => run(threadId, "undo the snooze", () => unsnoozeSession(threadId)),
-          settle: (threadId) => run(threadId, "settle", () => settleThread(threadId)),
-          unsettle: (threadId) => run(threadId, "un-settle", () => unsettleThread(threadId)),
-          markUnread: (threadId) => run(threadId, "mark unread", () => markSessionUnread(threadId)),
-          rename: (threadId, title) =>
-            run(threadId, "rename", async () => {
-              await renameThread(threadId, title);
-              return true;
-            }),
-          noteViewed: (sessionId) => {
-            const previous = viewedTimers.get(sessionId);
-            if (previous !== undefined) clearTimeout(previous);
-            viewedTimers.set(
-              sessionId,
-              setTimeout(() => {
-                viewedTimers.delete(sessionId);
-                // Quiet on failure: a missed "viewed" leaves a dot, not a loss.
-                markSessionViewed(sessionId).catch((err) =>
-                  console.warn("Couldn't mark the session viewed:", err),
-                );
-              }, VIEWED_DEBOUNCE_MS),
-            );
-          },
-          cancelViewed: (sessionId) => {
-            const pending = viewedTimers.get(sessionId);
-            if (pending === undefined) return;
-            clearTimeout(pending);
-            viewedTimers.delete(sessionId);
-          },
+    return {
+      pending: {},
+      actions: {
+        pin: (threadId, orderKey) => run(threadId, "pin", () => pinSession(threadId, orderKey)),
+        unpin: (threadId) => run(threadId, "unpin", () => unpinSession(threadId)),
+        reorderPin: (threadId, orderKey) =>
+          run(threadId, "move the pin", () => reorderPinnedSession(threadId, orderKey)),
+        snooze: (threadId, until) => run(threadId, "snooze", () => snoozeSession(threadId, until)),
+        wake: (threadId) => run(threadId, "wake", () => wakeSession(threadId)),
+        unsnooze: (threadId) => run(threadId, "undo the snooze", () => unsnoozeSession(threadId)),
+        settle: (threadId) => run(threadId, "settle", () => settleThread(threadId)),
+        unsettle: (threadId) => run(threadId, "un-settle", () => unsettleThread(threadId)),
+        markUnread: (threadId) => run(threadId, "mark unread", () => markSessionUnread(threadId)),
+        rename: (threadId, title) =>
+          run(threadId, "rename", async () => {
+            await renameThread(threadId, title);
+            return true;
+          }),
+        noteViewed: (sessionId) => {
+          const previous = viewedTimers.get(sessionId);
+          if (previous !== undefined) clearTimeout(previous);
+          viewedTimers.set(
+            sessionId,
+            setTimeout(() => {
+              viewedTimers.delete(sessionId);
+              // Quiet on failure: a missed "viewed" leaves a dot, not a loss.
+              markSessionViewed(sessionId).catch((err) =>
+                console.warn("Couldn't mark the session viewed:", err),
+              );
+            }, VIEWED_DEBOUNCE_MS),
+          );
         },
-      };
-    }),
-  ),
+        cancelViewed: (sessionId) => {
+          const pending = viewedTimers.get(sessionId);
+          if (pending === undefined) return;
+          clearTimeout(pending);
+          viewedTimers.delete(sessionId);
+        },
+      },
+    };
+  }),
 );

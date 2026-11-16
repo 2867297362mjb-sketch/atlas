@@ -66,7 +66,7 @@ export function workingTreeChanges(
 
 export function useWorkingTreeChanges(repoPath: string | null): WorkingTreeChanges {
   const baseRef = useDiffPanelStore((s) => (repoPath ? (s.baseRef[repoPath] ?? null) : null));
-  const storedWhitespace = useDiffPanelStore.use.ignoreWhitespace();
+  const storedWhitespace = useDiffPanelStore((s) => s.ignoreWhitespace);
   const settingWhitespace = useSettingsStore((s) => s.settings.diffIgnoreWhitespace);
   const ignoreWhitespace = storedWhitespace ?? settingWhitespace;
 

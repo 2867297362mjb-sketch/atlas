@@ -16,8 +16,8 @@ import { clampScale } from "../lib/ui-scale";
  * only restates the setting's own.
  */
 export function UiScalePanel() {
-  const uiScale = useSettingsStore.use.settings().uiScale;
-  const { updateSettings } = useSettingsStore.use.actions();
+  const uiScale = useSettingsStore((s) => s.settings).uiScale;
+  const { updateSettings } = useSettingsStore((s) => s.actions);
   const decrease = useActionShortcut("view.zoomOut")?.label;
   const increase = useActionShortcut("view.zoomIn")?.label;
 

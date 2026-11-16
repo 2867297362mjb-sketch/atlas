@@ -39,15 +39,15 @@ export function MemoryEntries({
   /** The search field's ⌘↵: the typed words, as a memory instruction. */
   onAsk: (text: string, anchor: HTMLElement) => void;
 }) {
-  const entries = useSharedMemoryStore.use.entries();
-  const loaded = useSharedMemoryStore.use.loaded();
-  const error = useSharedMemoryStore.use.error();
-  const review = useSharedMemoryStore.use.review();
-  const projectPath = useSharedMemoryStore.use.projectPath();
-  const { load } = useSharedMemoryStore.use.actions();
-  const sharingEnabled = useMemorySharingStore.use.enabled();
-  const { setSubTab, clearFocusEntry } = useMemoryStore.use.actions();
-  const focusEntryId = useMemoryStore.use.focusEntryId();
+  const entries = useSharedMemoryStore((s) => s.entries);
+  const loaded = useSharedMemoryStore((s) => s.loaded);
+  const error = useSharedMemoryStore((s) => s.error);
+  const review = useSharedMemoryStore((s) => s.review);
+  const projectPath = useSharedMemoryStore((s) => s.projectPath);
+  const { load } = useSharedMemoryStore((s) => s.actions);
+  const sharingEnabled = useMemorySharingStore((s) => s.enabled);
+  const { setSubTab, clearFocusEntry } = useMemoryStore((s) => s.actions);
+  const focusEntryId = useMemoryStore((s) => s.focusEntryId);
 
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<EntryScope>("current");

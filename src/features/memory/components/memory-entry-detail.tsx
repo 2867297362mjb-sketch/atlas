@@ -23,9 +23,10 @@ export function MemoryEntryDetail({
   entry: MemoryEntry;
   onClose: () => void;
 }) {
-  const { editEntry, forgetEntry, purgeEntry, feedback, reviewAction } =
-    useSharedMemoryStore.use.actions();
-  const projectPath = useSharedMemoryStore.use.projectPath();
+  const { editEntry, forgetEntry, purgeEntry, feedback, reviewAction } = useSharedMemoryStore(
+    (s) => s.actions,
+  );
+  const projectPath = useSharedMemoryStore((s) => s.projectPath);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(e.content);
   const [saving, setSaving] = useState(false);

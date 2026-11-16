@@ -35,9 +35,9 @@ export function ConflictsView({
   op: InProgressOp;
   onOpenFile: (path: string) => void;
 }) {
-  const repoPath = useGitStore.use.repoPath();
-  const files = useGitStore.use.files();
-  const actions = useGitStore.use.actions();
+  const repoPath = useGitStore((s) => s.repoPath);
+  const files = useGitStore((s) => s.files);
+  const actions = useGitStore((s) => s.actions);
   const [state, setState] = useState<ConflictState | null>(null);
 
   const load = useCallback(() => {

@@ -28,15 +28,16 @@ import {
 import { Hint, IconButton, Switch } from "@tryatlas/design";
 
 export function MemorySharingControls({ projectPath }: { projectPath: string | null }) {
-  const enabled = useMemorySharingStore.use.enabled();
-  const pref = useMemorySharingStore.use.pref();
-  const fromExternalSessions = useMemorySharingStore.use.fromExternalSessions();
-  const { load, setEnabled, setFromExternalSessions, setPref } =
-    useMemorySharingStore.use.actions();
+  const enabled = useMemorySharingStore((s) => s.enabled);
+  const pref = useMemorySharingStore((s) => s.pref);
+  const fromExternalSessions = useMemorySharingStore((s) => s.fromExternalSessions);
+  const { load, setEnabled, setFromExternalSessions, setPref } = useMemorySharingStore(
+    (s) => s.actions,
+  );
 
-  const byokKeys = useByokStore.use.keys();
-  const byokLoaded = useByokStore.use.loaded();
-  const loadByok = useByokStore.use.actions().load;
+  const byokKeys = useByokStore((s) => s.keys);
+  const byokLoaded = useByokStore((s) => s.loaded);
+  const loadByok = useByokStore((s) => s.actions).load;
 
   useEffect(() => {
     if (projectPath) void load(projectPath);

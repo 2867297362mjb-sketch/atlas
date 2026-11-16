@@ -7,7 +7,6 @@
 
 import { useEffect } from "react";
 import { create } from "zustand";
-import { createSelectors } from "@/lib/create-selectors";
 import { inbox } from "../lib/inbox-api";
 
 /** The web's own cadence (`INBOX_UNREAD_POLL_MS`). */
@@ -24,24 +23,22 @@ interface InboxState {
   };
 }
 
-export const useInboxStore = createSelectors(
-  create<InboxState>((set) => ({
-    unread: null,
-    actions: {
-      setUnread: (unread) => set({ unread }),
-      decrement: (by = 1) =>
-        set((s) => ({ unread: s.unread === null ? null : Math.max(0, s.unread - by) })),
-      refresh: async () => {
-        try {
-          set({ unread: await inbox.unread() });
-        } catch {
-          // Signed out, or a local-only Organisation: no inbox, no dot.
-          set({ unread: null });
-        }
-      },
+export const useInboxStore = create<InboxState>((set) => ({
+  unread: null,
+  actions: {
+    setUnread: (unread) => set({ unread }),
+    decrement: (by = 1) =>
+      set((s) => ({ unread: s.unread === null ? null : Math.max(0, s.unread - by) })),
+    refresh: async () => {
+      try {
+        set({ unread: await inbox.unread() });
+      } catch {
+        // Signed out, or a local-only Organisation: no inbox, no dot.
+        set({ unread: null });
+      }
     },
-  })),
-);
+  },
+}));
 
 /** Keep the count current while mounted: on mount, every minute while the
  *  window is in front, and on coming back to it. `key` (the Organisation)

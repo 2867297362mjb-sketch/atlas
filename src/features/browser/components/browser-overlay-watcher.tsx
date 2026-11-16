@@ -27,8 +27,8 @@ const OVERLAY_SELECTOR =
   '[role="dialog"], [role="menu"], [role="listbox"], [data-hint-overlay], [data-browser-suppress], [data-overlay], [data-modal], [data-open][data-side]';
 
 export function BrowserOverlayWatcher() {
-  const embedCount = useBrowserOverlayStore.use.embedCount();
-  const { setOverlayOpen } = useBrowserOverlayStore.use.actions();
+  const embedCount = useBrowserOverlayStore((s) => s.embedCount);
+  const { setOverlayOpen } = useBrowserOverlayStore((s) => s.actions);
 
   useEffect(() => {
     if (embedCount <= 0) return;

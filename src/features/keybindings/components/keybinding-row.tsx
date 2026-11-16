@@ -59,7 +59,7 @@ export function KeybindingRow({
   onRecord: (which: Recording | null) => void;
   onShowSame: (combo: Combo) => void;
 }) {
-  const { resetBinding, removeBinding, setWhen } = useKeybindingsStore.use.actions();
+  const { resetBinding, removeBinding, setWhen } = useKeybindingsStore((s) => s.actions);
   const clash = rowClash(row, conflicts);
   const phrase = WHEN_PHRASES[row.def.when];
   const first = row.bindings[0]?.combo ?? null;
@@ -290,8 +290,9 @@ function ShortcutCapture({
   replace?: string;
   onDone: () => void;
 }) {
-  const { setRecording, setBinding, addBinding, removeBinding, resetChords } =
-    useKeybindingsStore.use.actions();
+  const { setRecording, setBinding, addBinding, removeBinding, resetChords } = useKeybindingsStore(
+    (s) => s.actions,
+  );
   const [held, setHeld] = useState<string[]>([]);
   const ref = useRef<HTMLSpanElement>(null);
   const done = useRef(onDone);

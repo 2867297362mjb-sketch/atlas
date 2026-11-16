@@ -9,7 +9,6 @@
 
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { createSelectors } from "@/lib/create-selectors";
 
 interface SidebarState {
   /** The project the list is filtered to (an Atlas project id), or `null`
@@ -40,39 +39,37 @@ interface SidebarState {
   };
 }
 
-export const useSidebarStore = createSelectors(
-  create<SidebarState>()(
-    persist(
-      (set) => ({
-        scopeProjectId: null,
-        snoozedExpanded: false,
-        settledExpanded: false,
-        renamingThreadId: null,
-        search: "",
-        settledSearch: "",
-        searchFocusRequest: 0,
-        actions: {
-          setScopeProjectId: (scopeProjectId) => set({ scopeProjectId }),
-          toggleScopeProjectId: (id) =>
-            set((s) => ({ scopeProjectId: s.scopeProjectId === id ? null : id })),
-          setSnoozedExpanded: (snoozedExpanded) => set({ snoozedExpanded }),
-          setSettledExpanded: (settledExpanded) => set({ settledExpanded }),
-          beginRename: (renamingThreadId) => set({ renamingThreadId }),
-          endRename: () => set({ renamingThreadId: null }),
-          setSearch: (search) => set({ search }),
-          setSettledSearch: (settledSearch) => set({ settledSearch }),
-          requestSearchFocus: () => set((s) => ({ searchFocusRequest: s.searchFocusRequest + 1 })),
-        },
-      }),
-      {
-        name: "atlas-sidebar",
-        version: 1,
-        partialize: (s) => ({
-          scopeProjectId: s.scopeProjectId,
-          snoozedExpanded: s.snoozedExpanded,
-          settledExpanded: s.settledExpanded,
-        }),
+export const useSidebarStore = create<SidebarState>()(
+  persist(
+    (set) => ({
+      scopeProjectId: null,
+      snoozedExpanded: false,
+      settledExpanded: false,
+      renamingThreadId: null,
+      search: "",
+      settledSearch: "",
+      searchFocusRequest: 0,
+      actions: {
+        setScopeProjectId: (scopeProjectId) => set({ scopeProjectId }),
+        toggleScopeProjectId: (id) =>
+          set((s) => ({ scopeProjectId: s.scopeProjectId === id ? null : id })),
+        setSnoozedExpanded: (snoozedExpanded) => set({ snoozedExpanded }),
+        setSettledExpanded: (settledExpanded) => set({ settledExpanded }),
+        beginRename: (renamingThreadId) => set({ renamingThreadId }),
+        endRename: () => set({ renamingThreadId: null }),
+        setSearch: (search) => set({ search }),
+        setSettledSearch: (settledSearch) => set({ settledSearch }),
+        requestSearchFocus: () => set((s) => ({ searchFocusRequest: s.searchFocusRequest + 1 })),
       },
-    ),
+    }),
+    {
+      name: "atlas-sidebar",
+      version: 1,
+      partialize: (s) => ({
+        scopeProjectId: s.scopeProjectId,
+        snoozedExpanded: s.snoozedExpanded,
+        settledExpanded: s.settledExpanded,
+      }),
+    },
   ),
 );

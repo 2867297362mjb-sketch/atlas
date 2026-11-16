@@ -446,7 +446,7 @@ export function ModelPicker({
   };
   useScopedHotkeys({ handlers });
 
-  const byAction = useKeybindingsStore.use.resolved().byAction;
+  const byAction = useKeybindingsStore((s) => s.resolved).byAction;
   const chordLabel = (id: ActionId) => {
     const first = byAction.get(id)?.[0];
     return first ? displayLabel(first.combo) : null;

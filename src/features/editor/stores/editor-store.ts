@@ -1,6 +1,5 @@
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
-import { createSelectors } from "@/lib/create-selectors";
 import type { RevealTarget } from "../lib/reveal";
 
 /**
@@ -57,83 +56,81 @@ interface EditorActions {
 
 let revealNonce = 0;
 
-export const useEditorStore = createSelectors(
-  create<EditorState & EditorActions>()(
-    immer((set) => ({
-      buffers: {},
-      activeBufferPath: null,
-      pendingReveals: {},
-      actions: {
-        openBuffer: (path, content, mtimeMs = 0) =>
-          set((s) => {
-            if (!s.buffers[path]) {
-              s.buffers[path] = {
-                path,
-                originalContent: content,
-                dirty: false,
-                diskMtimeMs: mtimeMs,
-                externallyChanged: false,
-              };
-            }
-            s.activeBufferPath = path;
-          }),
-        setDirty: (path, dirty) =>
-          set((s) => {
-            const buf = s.buffers[path];
-            if (buf && buf.dirty !== dirty) {
-              buf.dirty = dirty;
-            }
-          }),
-        markSaved: (path, content, mtimeMs) =>
-          set((s) => {
-            const buf = s.buffers[path];
-            if (buf) {
-              buf.originalContent = content;
-              buf.dirty = false;
-              buf.externallyChanged = false;
-              if (mtimeMs !== undefined) buf.diskMtimeMs = mtimeMs;
-            }
-          }),
-        reloadBuffer: (path, content, mtimeMs) =>
-          set((s) => {
-            const buf = s.buffers[path];
-            if (buf) {
-              buf.originalContent = content;
-              buf.dirty = false;
-              buf.externallyChanged = false;
-              buf.diskMtimeMs = mtimeMs;
-            }
-          }),
-        markExternallyChanged: (path, mtimeMs) =>
-          set((s) => {
-            const buf = s.buffers[path];
-            if (buf) {
-              buf.externallyChanged = true;
-              buf.diskMtimeMs = mtimeMs;
-            }
-          }),
-        closeBuffer: (path) =>
-          set((s) => {
-            delete s.buffers[path];
-            delete s.pendingReveals[path];
-            if (s.activeBufferPath === path) {
-              const keys = Object.keys(s.buffers);
-              s.activeBufferPath = keys.length > 0 ? keys[keys.length - 1] : null;
-            }
-          }),
-        setActive: (path) =>
-          set((s) => {
-            s.activeBufferPath = path;
-          }),
-        requestReveal: (path, target) =>
-          set((s) => {
-            s.pendingReveals[path] = { ...target, nonce: ++revealNonce };
-          }),
-        consumeReveal: (path, nonce) =>
-          set((s) => {
-            if (s.pendingReveals[path]?.nonce === nonce) delete s.pendingReveals[path];
-          }),
-      },
-    })),
-  ),
+export const useEditorStore = create<EditorState & EditorActions>()(
+  immer((set) => ({
+    buffers: {},
+    activeBufferPath: null,
+    pendingReveals: {},
+    actions: {
+      openBuffer: (path, content, mtimeMs = 0) =>
+        set((s) => {
+          if (!s.buffers[path]) {
+            s.buffers[path] = {
+              path,
+              originalContent: content,
+              dirty: false,
+              diskMtimeMs: mtimeMs,
+              externallyChanged: false,
+            };
+          }
+          s.activeBufferPath = path;
+        }),
+      setDirty: (path, dirty) =>
+        set((s) => {
+          const buf = s.buffers[path];
+          if (buf && buf.dirty !== dirty) {
+            buf.dirty = dirty;
+          }
+        }),
+      markSaved: (path, content, mtimeMs) =>
+        set((s) => {
+          const buf = s.buffers[path];
+          if (buf) {
+            buf.originalContent = content;
+            buf.dirty = false;
+            buf.externallyChanged = false;
+            if (mtimeMs !== undefined) buf.diskMtimeMs = mtimeMs;
+          }
+        }),
+      reloadBuffer: (path, content, mtimeMs) =>
+        set((s) => {
+          const buf = s.buffers[path];
+          if (buf) {
+            buf.originalContent = content;
+            buf.dirty = false;
+            buf.externallyChanged = false;
+            buf.diskMtimeMs = mtimeMs;
+          }
+        }),
+      markExternallyChanged: (path, mtimeMs) =>
+        set((s) => {
+          const buf = s.buffers[path];
+          if (buf) {
+            buf.externallyChanged = true;
+            buf.diskMtimeMs = mtimeMs;
+          }
+        }),
+      closeBuffer: (path) =>
+        set((s) => {
+          delete s.buffers[path];
+          delete s.pendingReveals[path];
+          if (s.activeBufferPath === path) {
+            const keys = Object.keys(s.buffers);
+            s.activeBufferPath = keys.length > 0 ? keys[keys.length - 1] : null;
+          }
+        }),
+      setActive: (path) =>
+        set((s) => {
+          s.activeBufferPath = path;
+        }),
+      requestReveal: (path, target) =>
+        set((s) => {
+          s.pendingReveals[path] = { ...target, nonce: ++revealNonce };
+        }),
+      consumeReveal: (path, nonce) =>
+        set((s) => {
+          if (s.pendingReveals[path]?.nonce === nonce) delete s.pendingReveals[path];
+        }),
+    },
+  })),
 );

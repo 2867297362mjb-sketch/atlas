@@ -18,9 +18,9 @@ import { FixWithAgentButton } from "@/features/ask-agent/components/ask-agent-bu
  * backend runs with `--force-with-lease --force-if-includes`.
  */
 export function GitErrorDialog({ onForcePush }: { onForcePush?: () => void }) {
-  const payload = useGitStore.use.errorDialog();
-  const actions = useGitStore.use.actions();
-  const repoPath = useGitStore.use.repoPath();
+  const payload = useGitStore((s) => s.errorDialog);
+  const actions = useGitStore((s) => s.actions);
+  const repoPath = useGitStore((s) => s.repoPath);
   // Feedback for the copy button — without it a clipboard failure and a
   // success were indistinguishable (both looked like "nothing happened").
   const [copied, setCopied] = useState(false);

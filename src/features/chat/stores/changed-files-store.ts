@@ -11,7 +11,6 @@
 
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { createSelectors } from "@/lib/create-selectors";
 
 /** Turns remembered. Insertion order is recency; the oldest go past this. */
 export const MAX_REMEMBERED_TURNS = 200;
@@ -27,26 +26,24 @@ interface ChangedFilesState {
   };
 }
 
-export const useChangedFilesStore = createSelectors(
-  create<ChangedFilesState>()(
-    persist(
-      (set) => ({
-        expanded: {},
-        actions: {
-          setExpanded: (turnKey, expanded) =>
-            set((s) => {
-              const entries = Object.entries(s.expanded).filter(([key]) => key !== turnKey);
-              if (expanded) entries.push([turnKey, true]);
-              return { expanded: Object.fromEntries(entries.slice(-MAX_REMEMBERED_TURNS)) };
-            }),
-        },
-      }),
-      {
-        name: "atlas.chat.changed-files",
-        partialize: (s) => ({
-          expanded: Object.fromEntries(Object.entries(s.expanded).filter(([k]) => isStableKey(k))),
-        }),
+export const useChangedFilesStore = create<ChangedFilesState>()(
+  persist(
+    (set) => ({
+      expanded: {},
+      actions: {
+        setExpanded: (turnKey, expanded) =>
+          set((s) => {
+            const entries = Object.entries(s.expanded).filter(([key]) => key !== turnKey);
+            if (expanded) entries.push([turnKey, true]);
+            return { expanded: Object.fromEntries(entries.slice(-MAX_REMEMBERED_TURNS)) };
+          }),
       },
-    ),
+    }),
+    {
+      name: "atlas.chat.changed-files",
+      partialize: (s) => ({
+        expanded: Object.fromEntries(Object.entries(s.expanded).filter(([k]) => isStableKey(k))),
+      }),
+    },
   ),
 );

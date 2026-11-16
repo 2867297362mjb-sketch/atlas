@@ -7,7 +7,6 @@
 // search button and the menu bar can all reach the one overlay.
 
 import { create } from "zustand";
-import { createSelectors } from "@/lib/create-selectors";
 import {
   INITIAL_COMMAND_PALETTE_UI_STATE,
   reduceCommandPaletteUiState,
@@ -31,20 +30,18 @@ interface CommandPaletteStoreState {
   };
 }
 
-export const useCommandPaletteStore = createSelectors(
-  create<CommandPaletteStoreState>()((set, get) => {
-    const dispatch = (action: CommandPaletteUiAction) =>
-      set({ ui: reduceCommandPaletteUiState(get().ui, action) });
-    return {
-      ui: INITIAL_COMMAND_PALETTE_UI_STATE,
-      actions: {
-        dispatch,
-        toggleCommands: () => dispatch({ _tag: "ToggleMode", mode: "command" }),
-        toggleFiles: () => dispatch({ _tag: "ToggleMode", mode: "files" }),
-        openProjectPicker: () => dispatch({ _tag: "OpenView", view: "new-session-in" }),
-        openAddProject: () => dispatch({ _tag: "OpenView", view: "add-project" }),
-        setOpen: (open) => dispatch({ _tag: "SetOpen", open }),
-      },
-    };
-  }),
-);
+export const useCommandPaletteStore = create<CommandPaletteStoreState>()((set, get) => {
+  const dispatch = (action: CommandPaletteUiAction) =>
+    set({ ui: reduceCommandPaletteUiState(get().ui, action) });
+  return {
+    ui: INITIAL_COMMAND_PALETTE_UI_STATE,
+    actions: {
+      dispatch,
+      toggleCommands: () => dispatch({ _tag: "ToggleMode", mode: "command" }),
+      toggleFiles: () => dispatch({ _tag: "ToggleMode", mode: "files" }),
+      openProjectPicker: () => dispatch({ _tag: "OpenView", view: "new-session-in" }),
+      openAddProject: () => dispatch({ _tag: "OpenView", view: "add-project" }),
+      setOpen: (open) => dispatch({ _tag: "SetOpen", open }),
+    },
+  };
+});

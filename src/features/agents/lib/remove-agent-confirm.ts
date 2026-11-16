@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { createSelectors } from "@/lib/create-selectors";
 
 /**
  * Confirm-before-removing-an-agent, driven the same way as the stop-agents
@@ -44,4 +43,4 @@ const useRemoveAgentConfirmStoreBase = create<RemoveAgentConfirmState>((set, get
   },
 }));
 
-export const useRemoveAgentConfirmStore = createSelectors(useRemoveAgentConfirmStoreBase);
+export const useRemoveAgentConfirmStore = useRemoveAgentConfirmStoreBase;

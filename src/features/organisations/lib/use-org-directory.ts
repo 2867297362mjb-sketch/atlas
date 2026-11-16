@@ -52,18 +52,18 @@ export const EMPTY_ORG_DIRECTORY: OrgDirectory = { byId: new Map(), currentUserI
 const EMPTY_MEMBERS: OrgMember[] = [];
 
 export function useOrgDirectory(): OrgDirectory {
-  const authSnapshot = useAuthStore.use.snapshot();
+  const authSnapshot = useAuthStore((s) => s.snapshot);
   const currentUserId =
     authSnapshot.status === "signed-in" ? (authSnapshot.user?.id ?? null) : null;
 
-  const organisations = useOrgStore.use.organisations();
-  const activeOrganisationId = useOrgStore.use.activeOrganisationId();
+  const organisations = useOrgStore((s) => s.organisations);
+  const activeOrganisationId = useOrgStore((s) => s.activeOrganisationId);
   // The **server** org id. A local-only Organisation has none and no roster to
   // fetch — everything in it belongs to this account anyway.
   const remoteOrgId = organisations.find((o) => o.id === activeOrganisationId)?.remoteId ?? null;
 
-  const byOrg = useMembersStore.use.byOrg();
-  const { load } = useMembersStore.use.actions();
+  const byOrg = useMembersStore((s) => s.byOrg);
+  const { load } = useMembersStore((s) => s.actions);
   useEffect(() => {
     if (remoteOrgId) void load(remoteOrgId);
   }, [remoteOrgId, load]);

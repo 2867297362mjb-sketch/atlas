@@ -23,13 +23,13 @@ const POLL_MS = 10_000;
  */
 export function DraftsTab({ conv }: { conv: ChatConversation }) {
   const convId = conv.id;
-  const memberList = useCommsStore.use.members();
+  const memberList = useCommsStore((s) => s.members);
   const members = useMemo(() => new Map(memberList.map((m) => [m.id, m])), [memberList]);
   // From the STORE, so returning to this tab paints the last list on the
   // first frame. `undefined` means never fetched (skeleton); an empty array
   // is a real answer (empty state).
   const drafts = useCommsStore((s) => s.drafts[convId]);
-  const actions = useCommsStore.use.actions();
+  const actions = useCommsStore((s) => s.actions);
 
   const [title, setTitle] = useState("");
   const [creating, setCreating] = useState(false);

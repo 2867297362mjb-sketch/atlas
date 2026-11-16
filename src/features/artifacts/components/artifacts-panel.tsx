@@ -70,7 +70,7 @@ export function ArtifactsPanel() {
   // answers "what has been happening in our code", which does not stop at the
   // folder that happens to be focused.
   const projects = useActiveOrgProjects();
-  const activeOrganisationId = useOrgStore.use.activeOrganisationId();
+  const activeOrganisationId = useOrgStore((s) => s.activeOrganisationId);
   // A stable key, so the read effect does not re-fire on unrelated project
   // mutations (a rename, a pin) that leave the set of paths unchanged.
   const projectPaths = useMemo(() => projects.map((w) => w.path).sort(), [projects]);
@@ -81,9 +81,9 @@ export function ArtifactsPanel() {
 
   // Held in the store, not here: this panel unmounts on every tab switch, and
   // neither the open Session nor the filter may be lost to that.
-  const open = useArtifactsStore.use.open();
-  const projectFilter = useArtifactsStore.use.projectFilter();
-  const { openSession, setProjectFilter } = useArtifactsStore.use.actions();
+  const open = useArtifactsStore((s) => s.open);
+  const projectFilter = useArtifactsStore((s) => s.projectFilter);
+  const { openSession, setProjectFilter } = useArtifactsStore((s) => s.actions);
 
   // Comments on the open Session, or `null` when it is not shared — which is
   // what hides every comment affordance rather than showing empty threads. The
@@ -95,7 +95,7 @@ export function ArtifactsPanel() {
    *  is still wide next launch — `showSidebar` is the same two-state choice
    *  under its original name. */
   const wideByChoice = !useLayoutStore((s) => s.timelinePanel.showSidebar);
-  const { toggleTimelineSidebar, setTimelineView } = useLayoutStore.use.actions();
+  const { toggleTimelineSidebar, setTimelineView } = useLayoutStore((s) => s.actions);
   /** List or Trace — kept with the panel's layout, so it survives a restart. */
   const view = useLayoutStore((s) => s.timelinePanel.view);
   /** How wide the dock is, in pixels, so it can be animated.

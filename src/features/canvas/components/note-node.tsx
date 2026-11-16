@@ -17,7 +17,7 @@ export interface NoteNodeData extends Record<string, unknown> {
 export const NoteNode = memo(function NoteNode({ data, selected }: NodeProps) {
   const d = data as NoteNodeData;
   const isEmpty = !d.body.trim();
-  const projectPath = useAppStore.use.currentProject()?.path ?? null;
+  const projectPath = useAppStore((s) => s.currentProject)?.path ?? null;
 
   return (
     // The note sizes to its content between these bounds and xyflow measures

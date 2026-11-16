@@ -64,7 +64,7 @@ export function useSessionUsage(tabId: string, open: boolean): SessionUsageView 
     return m ? `${m.length}:${assistantTurns(m)}` : "0:0";
   });
 
-  const prices = useModelPricingStore.use.prices();
+  const prices = useModelPricingStore((s) => s.prices);
   const price = useMemo(() => priceForModel(prices, model), [prices, model]);
 
   // ── The persisted record, while the popup is open ─────────────────────

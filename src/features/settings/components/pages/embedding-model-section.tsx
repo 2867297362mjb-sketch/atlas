@@ -37,12 +37,12 @@ const fmtSize = (mb: number) => (mb >= 1000 ? `${(mb / 1000).toFixed(1)} GB` : `
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export function EmbeddingModelSection() {
-  const loaded = useModelsStore.use.loaded();
-  const list = useModelsStore.use.list();
-  const downloading = useModelsStore.use.downloading();
-  const pending = useModelsStore.use.pending();
-  const actions = useModelsStore.use.actions();
-  const projectPath = useAppStore.use.currentProject()?.path ?? null;
+  const loaded = useModelsStore((s) => s.loaded);
+  const list = useModelsStore((s) => s.list);
+  const downloading = useModelsStore((s) => s.downloading);
+  const pending = useModelsStore((s) => s.pending);
+  const actions = useModelsStore((s) => s.actions);
+  const projectPath = useAppStore((s) => s.currentProject)?.path ?? null;
   const [confirm, setConfirm] = useState<ModelStatus | null>(null);
 
   useEffect(() => {

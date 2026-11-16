@@ -6,7 +6,7 @@ import { agents } from "../lib/agents-api";
 /** The composer's ACP mode picker: seeds the modes when the session-bind path
  *  missed them, and settles a pending pill whose boot hung. */
 export function useComposerModesSelfHeal(tabId: string): void {
-  const { setAcpModes, setAcpModesPending } = useChatStore.use.actions();
+  const { setAcpModes, setAcpModesPending } = useChatStore((s) => s.actions);
   // Show the picker as soon as the agent is non-Claude — even before its modes
   // load — so the composer can render a loading pill instead of nothing during
   // the agent spawn + new_session boot.

@@ -4,11 +4,11 @@ import { ConnectDialogView } from "./views/connect-dialog-view";
 /** The connecting dialog's container (see `ConnectDialogView` for why the
  *  device code is the content). Mounted once, in `App.tsx`. */
 export function ConnectDialog() {
-  const open = useAuthStore.use.dialogOpen();
-  const snapshot = useAuthStore.use.snapshot();
-  const error = useAuthStore.use.error();
-  const starting = useAuthStore.use.starting();
-  const { cancelSignIn, closeDialog, beginSignIn } = useAuthStore.use.actions();
+  const open = useAuthStore((s) => s.dialogOpen);
+  const snapshot = useAuthStore((s) => s.snapshot);
+  const error = useAuthStore((s) => s.error);
+  const starting = useAuthStore((s) => s.starting);
+  const { cancelSignIn, closeDialog, beginSignIn } = useAuthStore((s) => s.actions);
 
   const connecting = snapshot.status === "connecting" ? snapshot : null;
 

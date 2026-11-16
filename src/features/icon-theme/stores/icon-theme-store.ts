@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { createSelectors } from "@/lib/create-selectors";
 import {
   getIconThemeAssets,
   getIconThemeFonts,
@@ -167,7 +166,7 @@ const baseStore = create<IconThemeState>()((set, get) => ({
   },
 }));
 
-export const useIconThemeStore = createSelectors(baseStore);
+export const useIconThemeStore = baseStore;
 
 // ---------------------------------------------------------------------------
 // Batching

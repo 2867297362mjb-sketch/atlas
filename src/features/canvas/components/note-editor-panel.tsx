@@ -25,8 +25,8 @@ interface NoteEditorPanelProps {
  * flush on close / blur / unmount — never on a store-content baseline.
  */
 export function NoteEditorPanel({ noteId, projectPath, onClose }: NoteEditorPanelProps) {
-  const nodes = useCanvasStore.use.nodes();
-  const { updateNote, deleteNote } = useCanvasStore.use.actions();
+  const nodes = useCanvasStore((s) => s.nodes);
+  const { updateNote, deleteNote } = useCanvasStore((s) => s.actions);
   const note = nodes.find((n) => n.id === noteId) ?? null;
 
   const editorRef = useRef<TiptapEditorHandle>(null);

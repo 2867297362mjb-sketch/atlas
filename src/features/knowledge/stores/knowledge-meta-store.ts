@@ -1,7 +1,6 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { createSelectors } from "@/lib/create-selectors";
 
 export interface PageMeta {
   icon?: string | null;
@@ -207,11 +206,11 @@ function toRustPatch(p: PageMetaPatch): Record<string, unknown> {
   return out;
 }
 
-export const useKnowledgeMetaStore = createSelectors(store);
+export const useKnowledgeMetaStore = store;
 
 /** Convenience hook for a single page's meta with safe defaults. */
 export function usePageMeta(entryId: string | null | undefined): PageMeta {
-  const pages = useKnowledgeMetaStore.use.pages();
+  const pages = useKnowledgeMetaStore((s) => s.pages);
   if (!entryId) return { tags: [] };
   return pages[entryId] ?? { tags: [] };
 }

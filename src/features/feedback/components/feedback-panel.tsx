@@ -9,19 +9,19 @@ import { FeedbackPanelView } from "./views/feedback-panel-view";
 
 /** The feedback panel's wiring; `FeedbackPanelView` says how it looks and why. */
 export function FeedbackPanel() {
-  const open = useFeedbackStore.use.open();
-  const capturing = useFeedbackStore.use.capturing();
-  const category = useFeedbackStore.use.category();
-  const message = useFeedbackStore.use.message();
-  const shot = useFeedbackStore.use.shot();
-  const anonymous = useFeedbackStore.use.anonymous();
-  const submitting = useFeedbackStore.use.submitting();
-  const sent = useFeedbackStore.use.sent();
-  const error = useFeedbackStore.use.error();
-  const a = useFeedbackStore.use.actions();
+  const open = useFeedbackStore((s) => s.open);
+  const capturing = useFeedbackStore((s) => s.capturing);
+  const category = useFeedbackStore((s) => s.category);
+  const message = useFeedbackStore((s) => s.message);
+  const shot = useFeedbackStore((s) => s.shot);
+  const anonymous = useFeedbackStore((s) => s.anonymous);
+  const submitting = useFeedbackStore((s) => s.submitting);
+  const sent = useFeedbackStore((s) => s.sent);
+  const error = useFeedbackStore((s) => s.error);
+  const a = useFeedbackStore((s) => s.actions);
 
-  const snapshot = useAuthStore.use.snapshot();
-  const settings = useSettingsStore.use.settings();
+  const snapshot = useAuthStore((s) => s.snapshot);
+  const settings = useSettingsStore((s) => s.settings);
 
   const user = snapshot.status === "signed-in" ? snapshot.user : null;
 

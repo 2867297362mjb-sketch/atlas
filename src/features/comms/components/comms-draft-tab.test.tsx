@@ -12,8 +12,9 @@ const drafts = {
 };
 
 vi.mock("../stores/comms-store", () => {
-  const useCommsStore = (select: (s: { drafts: typeof drafts }) => unknown) => select({ drafts });
-  useCommsStore.use = { conversations: () => conversations };
+  const useCommsStore = (
+    select: (s: { drafts: typeof drafts; conversations: typeof conversations }) => unknown,
+  ) => select({ drafts, conversations });
   return { useCommsStore };
 });
 

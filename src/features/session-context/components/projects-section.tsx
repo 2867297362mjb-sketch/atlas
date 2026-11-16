@@ -153,7 +153,7 @@ function AttachedProjectRow({
   project: AttachedProject;
   onChanged: (r: { resumeOnly: boolean }) => void;
 }) {
-  const ensure = useProjectGitStore.use.actions().ensure;
+  const ensure = useProjectGitStore((s) => s.actions).ensure;
   useEffect(() => ensure(project.path), [ensure, project.path]);
   const git = useProjectGitStore((s) => s.summaries[project.path]);
   const writable = project.access === "read_write";

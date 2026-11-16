@@ -21,8 +21,8 @@ import type { ChatAttachment, CommsMessage, OrgMemberProfile } from "../types";
  */
 export function FilesTab({ convId }: { convId: string }) {
   const messages = useCommsStore((s) => s.messages[convId]);
-  const memberList = useCommsStore.use.members();
-  const actions = useCommsStore.use.actions();
+  const memberList = useCommsStore((s) => s.members);
+  const actions = useCommsStore((s) => s.actions);
   const members = useMemo(() => new Map(memberList.map((m) => [m.id, m])), [memberList]);
   const [loadingOlder, setLoadingOlder] = useState(false);
 

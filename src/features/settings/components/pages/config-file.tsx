@@ -22,8 +22,8 @@ import {
 
 /** Shown at the top of General while `config.toml` failed to load. */
 export function ConfigErrorBanner() {
-  const configError = useSettingsStore.use.configError();
-  const { clearConfigError } = useSettingsStore.use.actions();
+  const configError = useSettingsStore((s) => s.configError);
+  const { clearConfigError } = useSettingsStore((s) => s.actions);
   if (!configError) return null;
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-warning/40 bg-warning-muted p-3">
@@ -50,7 +50,7 @@ export function ConfigErrorBanner() {
 
 /** Privacy › Settings file. */
 export function ConfigFileSection() {
-  const generation = useSettingsStore.use.configGeneration();
+  const generation = useSettingsStore((s) => s.configGeneration);
   const [info, setInfo] = useState<ConfigInfo | null>(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
@@ -139,7 +139,7 @@ export function ConfigFileSection() {
 }
 
 function RecreateDefaults({ trigger }: { trigger: ReactNode }) {
-  const { resetConfig } = useSettingsStore.use.actions();
+  const { resetConfig } = useSettingsStore((s) => s.actions);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const run = async () => {
