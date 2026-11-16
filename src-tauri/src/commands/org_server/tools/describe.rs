@@ -7,7 +7,7 @@ use super::comments::ReplyArgs;
 use super::mentions::named_mentions;
 use super::messages::{Recipient, SendArgs};
 use super::{roster_name, OrgTools};
-use crate::commands::memory_server::Grant;
+use crate::commands::tool_servers::Grant;
 use atlas_agent_servers::CallDescription;
 impl OrgTools {
     /// What the approval card says about a waiting outward call, for the

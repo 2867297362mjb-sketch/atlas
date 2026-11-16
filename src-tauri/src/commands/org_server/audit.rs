@@ -18,7 +18,7 @@ use rmcp::model::{CallToolRequestParams, CallToolResult};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::commands::memory_server::Grant;
+use crate::commands::tool_servers::Grant;
 
 /// Rust → window: one organisation call was answered. Written to the Logs
 /// panel by the window that shows the calling session.

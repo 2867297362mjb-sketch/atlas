@@ -17,7 +17,7 @@ use super::{
     ambiguous, conversation_json, member_json, roster_name, string_in, strings_in, tool_error,
     tool_json, NamedSession, OrgTools,
 };
-use crate::commands::memory_server::Grant;
+use crate::commands::tool_servers::Grant;
 
 /// `org_send`'s arguments, read once for the call and for its approval card
 /// alike, so the card's body is the body that is sent: strings trimmed,
