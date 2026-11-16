@@ -88,7 +88,7 @@ fn broadcast(app: &AppHandle, snapshot: AuthSnapshot) {
 ///
 /// [`sync_identity`] only ever runs on an auth transition, but that setting
 /// gates it from the settings side and can flip with no transition at all —
-/// so `commands::atlas_config::notify_settings_changed` calls this on every
+/// so `settings_effects::apply` calls this on every
 /// committed settings change. The flag is passed in rather than read here
 /// because that caller already holds the freshly committed snapshot, and
 /// reaching back into the config mutex from a path that may be running under

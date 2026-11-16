@@ -2299,7 +2299,7 @@ pub fn read(app: &AppHandle) -> AppSettings {
 ///
 /// Returns the committed snapshot (settings + generation) rather than just
 /// `AppSettings` so the caller can hand both to
-/// `commands::atlas_config::notify_settings_changed` — without that, an
+/// `settings_effects::apply` (as `When::Changed`) — without that, an
 /// internal write bumps `ConfigManager`'s generation on disk but the
 /// frontend's mirrored `configGeneration` goes stale, and the live telemetry
 /// gate (`TelemetryClient::enabled`) never re-syncs to a changed
