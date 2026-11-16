@@ -667,16 +667,43 @@ async fn an_agent_killed_while_a_session_is_opening_on_it() {
     opens.notify_one();
     let opened = opening.await.expect("joined");
 
-    assert!(opened.is_ok());
+    assert!(opened.is_err(), "the session opened on a killed agent");
+    assert_eq!(residue(&host, SESSION), Residue::default());
+    assert!(
+        ended.lock().unwrap().is_empty(),
+        "nothing was told it began, so nothing is told it ended"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn a_session_closed_while_it_is_loading_does_not_come_back() {
+    let opens = Arc::new(tokio::sync::Notify::new());
+    let closes: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+    let (host, dir, _deltas, ended, _watchdog) = observed_host(Advertised {
+        hold_opens: Some(opens.clone()),
+        load: true,
+        closes: Some(closes.clone()),
+        ..Advertised::default()
+    });
+    let agent_id = host.spawn(ATLAS_AGENT_ID).await.expect("spawn").agent_id;
+    let loading = tokio::spawn({
+        let (host, dir) = (host.clone(), dir.clone());
+        async move { host.load_session(agent_id, SESSION.into(), dir).await }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+    // The tab closes before the agent has answered the load.
+    host.drop_session(SESSION).await.expect("drop");
+    opens.notify_one();
+    let loaded = loading.await.expect("joined");
+
+    assert!(loaded.is_err(), "the session bound with no tab to show it");
+    assert_eq!(residue(&host, SESSION), Residue::default());
     assert_eq!(
-        residue(&host, SESSION),
-        Residue {
-            record: true,
-            manager_handle: true,
-            projection: true,
-            history_row: true,
-            ..Residue::default()
-        }
+        *closes.lock().unwrap(),
+        [SESSION],
+        "the agent is told to let go of what it loaded"
     );
     assert!(ended.lock().unwrap().is_empty());
     let _ = std::fs::remove_dir_all(&dir);

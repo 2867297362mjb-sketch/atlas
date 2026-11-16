@@ -1285,6 +1285,9 @@ impl AgentHost {
         let plugin_id = record.plugin_id.as_str();
         let started = std::time::Instant::now();
         tracing::info!(plugin_id, cwd = %cwd.display(), "session/new requested");
+        // Before the open, so an end that happens while the agent is still
+        // answering refuses the bind (see `bind`).
+        let ticket = self.sessions.begin_bind(&record.agent, None);
         let thread = match self
             .manager
             .new_session(record.agent.clone(), work_dirs)
@@ -1301,7 +1304,7 @@ impl AgentHost {
             elapsed_ms = started.elapsed().as_millis() as u64,
             "session/new opened"
         );
-        self.bind(agent_id, &record, cwd, thread).await
+        self.bind(ticket, agent_id, &record, cwd, thread).await
     }
 
     /// Reopen a stored session, letting the agent replay it.
@@ -1339,13 +1342,17 @@ impl AgentHost {
         if let Some(row) = row.as_ref() {
             work_dirs.extend(Self::attached_work_dirs(row));
         }
+        // Named, so closing this session while it loads refuses the bind.
+        let ticket = self
+            .sessions
+            .begin_bind(&record.agent, Some(session_id.as_str()));
         let thread = self
             .manager
             .load_session(record.agent.clone(), acp_id, work_dirs, None)
             .await
             .map_err(HostError::from)?;
         lock_thread(&thread).set_attached_roots(session_roots(&attached));
-        self.bind(agent_id, &record, cwd, thread).await?;
+        self.bind(ticket, agent_id, &record, cwd, thread).await?;
         if !attached.is_empty() {
             self.apply_session_roots(&session_id, &attached).await;
         }
@@ -1360,17 +1367,20 @@ impl AgentHost {
     /// there, and dropping it is the replay-loss bug this fixes.
     ///
     /// The registry comes last, and may refuse: the session was ended while
-    /// it was opening. What was set up for it above is then undone, by the
-    /// same follow-ups an end hands over.
+    /// it was opening (its agent was stopped, or the window closed the
+    /// session being loaded). `ticket` is what tells it so, which is why the
+    /// caller takes it before asking the agent to open anything. What was set
+    /// up for the session above is then undone, by the same follow-ups an end
+    /// hands over.
     async fn bind(
         &self,
+        ticket: BindTicket,
         agent_id: AgentId,
         record: &AgentRecord,
         cwd: PathBuf,
         thread: AcpThreadHandle,
     ) -> Result<SessionInit> {
         let session_id = lock_thread(&thread).session_id().clone();
-        let ticket: BindTicket = self.sessions.begin_bind(&record.agent, None);
 
         // History first, then the projector. The conversation exists, so
         // history knows about it before anything has been typed into it —
@@ -2174,6 +2184,10 @@ impl AgentHost {
         // may edit.
         work_dirs.extend(Self::attached_work_dirs(&thread));
 
+        let ticket = self.sessions.begin_bind(
+            &record.agent,
+            thread.session_id.as_ref().map(|id| id.0.as_ref()),
+        );
         let (opened, resumed_without_history) = match thread.session_id.clone() {
             // A draft: there is no stored conversation to reopen, so this is a
             // new one. The row is bound to it first, or the live feed would
@@ -2217,7 +2231,9 @@ impl AgentHost {
         // Before `bind`, whose history write reads the thread's own folders:
         // the attached projects must already be known as attached.
         lock_thread(&opened).set_attached_roots(session_roots(&thread.attached_projects));
-        let init = self.bind(agent.agent_id, &record, cwd, opened).await?;
+        let init = self
+            .bind(ticket, agent.agent_id, &record, cwd, opened)
+            .await?;
         if !thread.attached_projects.is_empty() {
             self.apply_session_roots(&init.key.session_id, &thread.attached_projects)
                 .await;
