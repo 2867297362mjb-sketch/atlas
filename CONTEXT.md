@@ -116,6 +116,11 @@ The **injected-context envelope** — `<atlas-memory>` … `</atlas-memory>` —
   control, beside the memory tool server (ADR-0010). Its tools are the only way an agent acts on the
   window. Auto-approved because Atlas itself offers it; switched off for everyone by the user's
   "Let Atlas Agent navigate the app" setting.
+- **Tool server host** — the one module that serves and offers Atlas's in-process tool servers
+  (memory, UI, organisation, code). It owns what they share: the loopback listener, the session's
+  one token, the session policy, the transport and the offer. Each server is a **tenant** of it,
+  supplying only its name and path, its tools, the connections it is for and the setting that turns
+  it on.
 - **UI control** — what a _connection_ carries to be offered the UI tool server: that its agent runs
   inside the Atlas process, so Atlas vouches for what its tool calls may do. Today only the native
   connection carries it. Like every other per-agent behaviour it is never decided by agent identity;

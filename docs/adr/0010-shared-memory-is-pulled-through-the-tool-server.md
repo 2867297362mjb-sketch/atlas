@@ -35,7 +35,7 @@ The runtime check #79 left open is answered: both agents in use advertise HTTP M
 
 **The per-session clock moves into the server** (`SessionClocks`, keyed by session id, the newest `updated_at` the session has seen), set by a briefing or a changes call and dropped when the session ends through the same lifecycle hook that revokes the token.
 
-**The module is split by concern:** `memory_server/{mod, tokens, host, offers, tools, briefing, tests}.rs`. The first-look extras stay app-owned (`agents.rs::build_bootstrap`, within an 8 s budget) and reach the server through a `Sources::bootstrap` seam, like the index already did.
+**The module is split by concern:** `memory_server/{mod, tools, briefing, tests}.rs`, with the listener, the tokens and the offer in `tool_servers/`, which the memory server shares with Atlas's other tool servers. The first-look extras stay app-owned (`agents.rs::build_bootstrap`, within an 8 s budget) and reach the server through a `Sources::bootstrap` seam, like the index already did.
 
 ## Consequences
 

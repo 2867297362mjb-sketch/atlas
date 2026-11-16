@@ -2,7 +2,7 @@
 
 **Status:** Accepted (2026-10-09). Amends ADR-0019 (the bridge now carries every ACP agent, and its token moves from `ATLAS_MCP_TOKEN` to a file) and ADR-0010 / ADR-0015 (an ACP agent that advertises HTTP MCP no longer gets the servers over HTTP).
 
-**For agents:** the rule is `SessionMcpRequest::in_process` in `crates/atlas-agent-servers/src/session_mcp.rs`; the offer is `MemorySessionOffers::offer` in `src-tauri/src/commands/memory_server/offers.rs`; the token files are `TokenFiles` in `src-tauri/src/commands/memory_bridge.rs`; the guarding test is `no_entry_offered_to_another_process_carries_the_token` in `src-tauri/src/commands/memory_server/tests.rs`.
+**For agents:** the rule is `SessionMcpRequest::in_process` in `crates/atlas-agent-servers/src/session_mcp.rs`; the offer is `SessionOffers::offer` in `src-tauri/src/commands/tool_servers/offers.rs`; the token files are `TokenFiles` in `src-tauri/src/commands/memory_bridge.rs`; the guarding test is `no_entry_offered_to_another_process_carries_the_token` in `src-tauri/src/commands/memory_server/tests.rs`.
 
 ## Context
 
