@@ -169,7 +169,9 @@ pub enum FollowUp {
     CloseProjection,
     /// Ask the agent to close its side (`session/close`). Only present when
     /// the agent advertised it.
-    CloseOnAgent { connection: Arc<dyn AgentConnection> },
+    CloseOnAgent {
+        connection: Arc<dyn AgentConnection>,
+    },
 }
 
 impl std::fmt::Debug for FollowUp {

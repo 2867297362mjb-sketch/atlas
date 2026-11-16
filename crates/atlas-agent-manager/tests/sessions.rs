@@ -243,7 +243,11 @@ async fn a_held_session_is_only_marked_and_the_last_release_ends_it() {
     let Released::LastAndEnded(closed) = f.registry.release(&id, "b") else {
         panic!("the last hold going finishes the close");
     };
-    assert_eq!(steps(&closed), CLOSE_STEPS, "exactly what a close hands over");
+    assert_eq!(
+        steps(&closed),
+        CLOSE_STEPS,
+        "exactly what a close hands over"
+    );
     assert_eq!(f.residue(&id), Residue::default());
     assert!(matches!(f.registry.release(&id, "b"), Released::NotHeld));
 }
@@ -254,7 +258,10 @@ async fn a_hold_released_while_the_window_has_the_session_keeps_it() {
     let id = f.open().await;
     f.registry.hold(&id, "a");
 
-    assert!(matches!(f.registry.release(&id, "nobody"), Released::NotHeld));
+    assert!(matches!(
+        f.registry.release(&id, "nobody"),
+        Released::NotHeld
+    ));
     assert!(matches!(f.registry.release(&id, "a"), Released::Last));
 
     assert_eq!(f.residue(&id), open_residue());
@@ -285,14 +292,15 @@ async fn stopping_an_agent_ends_every_session_on_it_and_drops_the_connection() {
     let elsewhere = f.open_on(&Agent::Native).await;
     f.registry.hold(&first, "a");
 
-    let mut gone = f.registry.end_agent(
-        &f.agent,
-        AgentEnd::stopping().with_notice("turned off"),
-    );
+    let mut gone = f
+        .registry
+        .end_agent(&f.agent, AgentEnd::stopping().with_notice("turned off"));
     gone.sort_by(|a, b| a.session_id.cmp(&b.session_id));
 
     assert_eq!(
-        gone.iter().map(|e| e.session_id.clone()).collect::<Vec<_>>(),
+        gone.iter()
+            .map(|e| e.session_id.clone())
+            .collect::<Vec<_>>(),
         [first.clone(), second.clone()]
     );
     for one in &gone {
@@ -314,7 +322,10 @@ async fn stopping_an_agent_ends_every_session_on_it_and_drops_the_connection() {
         .await
         .expect("nothing pins the connection");
 
-    assert!(f.registry.end_agent(&f.agent, AgentEnd::stopping()).is_empty());
+    assert!(f
+        .registry
+        .end_agent(&f.agent, AgentEnd::stopping())
+        .is_empty());
     assert!(matches!(f.registry.release(&first, "a"), Released::NotHeld));
 }
 
@@ -387,7 +398,10 @@ async fn quitting_ends_everything() {
     assert_eq!(f.residue(&second), Residue::default());
     assert!(f.manager.sessions().is_empty());
     assert!(f.manager.connections().is_empty());
-    assert!(f.registry.end_all().is_empty(), "a second quit ends nothing");
+    assert!(
+        f.registry.end_all().is_empty(),
+        "a second quit ends nothing"
+    );
 
     let refused = f
         .registry
@@ -410,7 +424,10 @@ async fn a_bind_that_lands_after_its_agent_was_stopped_is_refused() {
         .await
         .expect("opened");
     let id = thread.lock().unwrap().session_id().clone();
-    assert!(f.registry.end_agent(&f.agent, AgentEnd::exited()).is_empty());
+    assert!(f
+        .registry
+        .end_agent(&f.agent, AgentEnd::exited())
+        .is_empty());
 
     let refused = f
         .registry
@@ -499,14 +516,23 @@ async fn a_session_is_looked_up_with_what_it_was_bound_with() {
 
     let info = f.registry.info(&id).expect("bound");
     assert_eq!(info.agent, f.agent);
-    assert_eq!((info.plugin_id.as_str(), info.cwd.as_str()), ("plugin", "/project"));
-    assert_eq!((info.turn_seq, info.current_model, info.held), (0, None, false));
+    assert_eq!(
+        (info.plugin_id.as_str(), info.cwd.as_str()),
+        ("plugin", "/project")
+    );
+    assert_eq!(
+        (info.turn_seq, info.current_model, info.held),
+        (0, None, false)
+    );
 
     assert_eq!(f.registry.next_turn_seq(&id), Some(1));
     assert_eq!(f.registry.next_turn_seq(&id), Some(2));
     assert!(f.registry.set_current_model(&id, "model-a".into()));
     let info = f.registry.info(&id).expect("bound");
-    assert_eq!((info.turn_seq, info.current_model.as_deref()), (2, Some("model-a")));
+    assert_eq!(
+        (info.turn_seq, info.current_model.as_deref()),
+        (2, Some("model-a"))
+    );
 
     ended(f.registry.close(&id));
     assert!(f.registry.info(&id).is_none());

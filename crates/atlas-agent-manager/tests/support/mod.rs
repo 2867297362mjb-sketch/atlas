@@ -502,7 +502,10 @@ impl AgentConnection for TestConnection {
         self.closes.lock().unwrap().is_some()
     }
 
-    fn close_session(self: Arc<Self>, session_id: acp::SessionId) -> BoxFuture<'static, Result<()>> {
+    fn close_session(
+        self: Arc<Self>,
+        session_id: acp::SessionId,
+    ) -> BoxFuture<'static, Result<()>> {
         if let Some(closes) = self.closes.lock().unwrap().as_mut() {
             closes.push(session_id.to_string());
         }
