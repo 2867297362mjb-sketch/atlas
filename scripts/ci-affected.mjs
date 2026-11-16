@@ -115,6 +115,11 @@ export const EXTRA_INPUTS = [
     why: "config_default_file_matches_the_committed_copy in src-tauri/src/state/atlas_config.rs",
   },
   {
+    path: "src-tauri/resources/skills/",
+    packages: ["atlas-skills"],
+    why: "include_str! in src/bundled.rs: the skills the binary ships",
+  },
+  {
     path: "crates/atlas-kb-server/",
     packages: ["atlas"],
     why: "commands/knowledge_export.rs locates and compiles it at runtime",

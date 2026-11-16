@@ -233,7 +233,7 @@ pub(crate) fn tool_skills_dir(tool: &ToolDef, scope: &str, root: &Path) -> PathB
 pub(crate) const ATLAS_TOOL_ID: &str = "atlas";
 
 /// True if `<root>/<tool.config_dir>` exists.
-fn tool_detected(root: &Path, def: &ToolDef) -> bool {
+pub(crate) fn tool_detected(root: &Path, def: &ToolDef) -> bool {
     // The native "Atlas" agent is in-process — always available, regardless of
     // whether any `.atlas` dir exists yet at this scope.
     if def.id == ATLAS_TOOL_ID {
@@ -249,7 +249,7 @@ pub(crate) fn tool_link_path(root: &Path, def: &ToolDef, scope: &str, safe_name:
 }
 
 /// Whether any entry (symlink or copy) for this skill exists in the tool dir.
-fn tool_has_entry(root: &Path, def: &ToolDef, scope: &str, safe_name: &str) -> bool {
+pub(crate) fn tool_has_entry(root: &Path, def: &ToolDef, scope: &str, safe_name: &str) -> bool {
     tool_link_path(root, def, scope, safe_name)
         .symlink_metadata()
         .is_ok()

@@ -9,7 +9,7 @@ use std::path::{Component, Path, PathBuf};
 
 /// Resolve `<root>` for a scope. Global → home dir; project → the given path.
 /// `home` is the caller's: this crate never looks the home directory up.
-fn root_for(
+pub(crate) fn root_for(
     home: Option<&Path>,
     scope: &str,
     project_path: Option<&str>,
@@ -48,7 +48,7 @@ pub(crate) fn skills_base(root: &Path) -> PathBuf {
 /// `<root>/.atlas/skills` — the pre-convergence canonical store. Superseded by
 /// [`skills_base`]; only consulted by [`migrate_legacy_skills`] to move any
 /// leftover content from an Atlas install that predates the store convergence.
-fn legacy_skills_base(root: &Path) -> PathBuf {
+pub(crate) fn legacy_skills_base(root: &Path) -> PathBuf {
     atlas_profile::dir_in(root).join("skills")
 }
 
@@ -60,7 +60,7 @@ fn legacy_skills_base(root: &Path) -> PathBuf {
 /// skills through Atlas before the convergence do. A skill name already present
 /// in the new store wins; the legacy copy is left in place rather than
 /// clobbered. Renames when possible (same volume), copies as a fallback.
-fn migrate_legacy_skills(root: &Path) {
+pub(crate) fn migrate_legacy_skills(root: &Path) {
     let legacy = legacy_skills_base(root);
     let Ok(entries) = fs::read_dir(&legacy) else {
         return;

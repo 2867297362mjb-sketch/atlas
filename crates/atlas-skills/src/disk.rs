@@ -49,7 +49,12 @@ pub(crate) fn clear_entry(link: &Path) -> Result<(), String> {
 
 /// Create a relative symlink from the tool skills dir to the canonical skill.
 /// Idempotent: a stale entry is removed first, then recreated.
-fn create_symlink(root: &Path, def: &ToolDef, scope: &str, safe_name: &str) -> Result<(), String> {
+pub(crate) fn create_symlink(
+    root: &Path,
+    def: &ToolDef,
+    scope: &str,
+    safe_name: &str,
+) -> Result<(), String> {
     let link = tool_link_path(root, def, scope, safe_name);
     if let Some(parent) = link.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -60,7 +65,12 @@ fn create_symlink(root: &Path, def: &ToolDef, scope: &str, safe_name: &str) -> R
 }
 
 /// Materialize a copy projection: recursively copy canonical → tool dir.
-fn create_copy(root: &Path, def: &ToolDef, scope: &str, safe_name: &str) -> Result<(), String> {
+pub(crate) fn create_copy(
+    root: &Path,
+    def: &ToolDef,
+    scope: &str,
+    safe_name: &str,
+) -> Result<(), String> {
     let canonical = canonical_skill_dir(&skills_base(root), safe_name)?;
     if !canonical.join("SKILL.md").is_file() {
         return Err(format!("canonical skill not found: {safe_name}"));
@@ -74,7 +84,12 @@ fn create_copy(root: &Path, def: &ToolDef, scope: &str, safe_name: &str) -> Resu
 }
 
 /// Remove a tool's projection for a skill (symlink or copy). Best-effort.
-fn remove_symlink(root: &Path, def: &ToolDef, scope: &str, safe_name: &str) -> Result<(), String> {
+pub(crate) fn remove_symlink(
+    root: &Path,
+    def: &ToolDef,
+    scope: &str,
+    safe_name: &str,
+) -> Result<(), String> {
     let link = tool_link_path(root, def, scope, safe_name);
     clear_entry(&link)
 }

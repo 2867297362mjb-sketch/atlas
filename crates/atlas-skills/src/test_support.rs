@@ -1,9 +1,12 @@
 //! Fixtures shared by the in-module unit tests.
 
-use crate::disk::symlink;
-use crate::model::{ComponentKind, Pack};
+use crate::disk::{atomic_write, create_copy, hash_skill_dir, symlink};
+use crate::ledger::{ledger_record, read_ledger, write_ledger};
+use crate::model::{ComponentKind, Pack, SkillMeta};
 use crate::packs::install::install_pack_from_dir;
-use crate::registry::TOOL_REGISTRY;
+use crate::paths::{canonical_skill_dir, sanitize_name, skills_base};
+use crate::projection::project;
+use crate::registry::{tool_def, tool_link_path, TOOL_REGISTRY};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -147,4 +150,107 @@ pub(crate) fn installed_root(src: &Path) -> PathBuf {
     fs::create_dir_all(root.join(".codex")).unwrap();
     install_pack_from_dir(&root, src, "owner/repo", "c1", false).unwrap();
     root
+}
+
+/// A detected root with `demo-pack` (ships skill `foo`) installed.
+pub(crate) fn root_with_installed_pack() -> PathBuf {
+    let root = tmp_root();
+    let src = make_src_pack("v1");
+    install_pack_from_dir(&root, &src, "o/r", "c1", false).unwrap();
+    fs::remove_dir_all(&src).ok();
+    root
+}
+
+/// Render a `SKILL.md` with frontmatter for the given fields. Only used by the
+/// test-only `create_skill` helper now that manual authoring is removed.
+pub(crate) fn render_skill_md(name: &str, description: &str, body: &str) -> String {
+    // Keep values single-line; frontmatter is scalar-only here.
+    let desc = description.replace(['\n', '\r'], " ");
+    format!(
+        "---\nname: {name}\ndescription: {desc}\n---\n\n{}\n",
+        body.trim_end()
+    )
+}
+
+// Manual skill authoring (the `skills_create` IPC command) was removed; skills
+// now come from packs. `create_skill` is retained only as a test setup helper.
+pub(crate) fn create_skill(
+    root: &Path,
+    scope: &str,
+    name: &str,
+    description: &str,
+    body: &str,
+    agents: &[String],
+) -> Result<SkillMeta, String> {
+    let safe = sanitize_name(name)?;
+    let dir = canonical_skill_dir(&skills_base(root), &safe)?;
+    let skill_md = dir.join("SKILL.md");
+
+    let existed = skill_md.is_file();
+    let contents = render_skill_md(&safe, description, body);
+    atomic_write(&skill_md, &contents)?;
+
+    // Enable for each requested registry tool (symlink/copy via the engine).
+    let mut enabled_agents = Vec::new();
+    for agent in agents {
+        if let Some(def) = tool_def(agent) {
+            project(root, def, scope, &safe, false)?;
+            enabled_agents.push(def.id.to_string());
+        }
+    }
+    enabled_agents.sort();
+    enabled_agents.dedup();
+
+    // Edit-propagation: if this was an edit of an existing canonical skill,
+    // re-push copy projections (symlinks read through the link for free). A copy
+    // that is currently drifted is left untouched for explicit resolution.
+    if existed {
+        propagate_edit(root, scope, &safe)?;
+    }
+
+    Ok(SkillMeta {
+        name: safe,
+        description: description.replace(['\n', '\r'], " "),
+        scope: scope.to_string(),
+        enabled_agents,
+        path: skill_md.to_string_lossy().to_string(),
+        delivery: "native-dir".to_string(),
+        managed: true,
+        pack: None,
+    })
+}
+
+// ── Edit propagation (CP.3) ──────────────────────────────────────────────────────
+
+/// Re-push copy projections after a canonical edit. Symlinks read through the
+/// link, so nothing to do for them. A copy whose on-disk hash already differs
+/// from its ledger-recorded hash is *drifted* (edited out-of-band) → leave it
+/// for explicit resolution, never silently overwrite.
+pub(crate) fn propagate_edit(root: &Path, scope: &str, safe_name: &str) -> Result<(), String> {
+    let canonical = canonical_skill_dir(&skills_base(root), safe_name)?;
+    let canonical_hash = hash_skill_dir(&canonical);
+    let mut ledger = read_ledger(root);
+    let Some(tools) = ledger.projections.get(safe_name).cloned() else {
+        return Ok(());
+    };
+    for (tool_id, entry) in tools {
+        if entry.mode != "copy" {
+            continue;
+        }
+        let Some(def) = tool_def(&tool_id) else {
+            continue;
+        };
+        let link = tool_link_path(root, def, scope, safe_name);
+        let on_disk = hash_skill_dir(&link);
+        // Drifted: the copy diverged from what we last pushed → block silent push.
+        if !on_disk.is_empty() && on_disk != entry.hash {
+            continue;
+        }
+        if on_disk == canonical_hash {
+            continue; // already in sync
+        }
+        create_copy(root, def, scope, safe_name)?;
+        ledger_record(&mut ledger, safe_name, &tool_id, "copy", &canonical_hash);
+    }
+    write_ledger(root, &ledger)
 }

@@ -118,7 +118,7 @@ fn comp_leaf(rel_path: &str, name: &str) -> String {
 }
 
 /// `p` relative to `root` as a `/`-joined string (for ledger storage).
-fn rel_to_root(root: &Path, p: &Path) -> String {
+pub(crate) fn rel_to_root(root: &Path, p: &Path) -> String {
     p.strip_prefix(root)
         .map(|r| r.to_string_lossy().replace('\\', "/"))
         .unwrap_or_else(|_| p.to_string_lossy().to_string())
@@ -414,7 +414,7 @@ fn is_foreign_conflict(
 
 /// Project all (or a kind-filtered subset of) an installed pack's components into
 /// `tool_id`. Records each projection in the pack-projection ledger.
-fn project_pack(
+pub(crate) fn project_pack(
     root: &Path,
     scope: &str,
     pack: &str,
@@ -598,7 +598,10 @@ pub(crate) fn unproject_pack(root: &Path, pack: &str, tool_id: &str) -> Result<(
 }
 
 /// Flatten the ledger for one pack into a UI view (across tools).
-fn list_pack_projections(root: &Path, pack: &str) -> Result<Vec<PackProjectionView>, String> {
+pub(crate) fn list_pack_projections(
+    root: &Path,
+    pack: &str,
+) -> Result<Vec<PackProjectionView>, String> {
     let safe = sanitize_name(pack)?;
     let proj = read_pack_proj(root);
     let mut out = Vec::new();
@@ -651,7 +654,7 @@ fn is_invokable_component(kind: ComponentKind) -> bool {
 
 /// Every invokable component (command/agent/rule) shipped by an installed pack,
 /// read-only from the pack store. Reused by the Skills list and the `#` picker.
-fn pack_components(root: &Path) -> Vec<PackComponentMeta> {
+pub(crate) fn pack_components(root: &Path) -> Vec<PackComponentMeta> {
     let mut out = Vec::new();
     // Per-agent gating data: the pack projection ledger records which tools
     // (agents) each pack component is projected to. Read once for the whole scan.
@@ -701,7 +704,7 @@ fn pack_components(root: &Path) -> Vec<PackComponentMeta> {
 
 /// [`project_pack`] with the kind filter as the tags the UI sends (`"agent"`,
 /// `"skill"`, …). An unknown tag is dropped, as it always was.
-fn project_pack_tagged(
+pub(crate) fn project_pack_tagged(
     root: &Path,
     scope: &str,
     pack: &str,

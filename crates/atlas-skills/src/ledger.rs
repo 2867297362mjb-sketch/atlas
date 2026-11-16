@@ -14,17 +14,17 @@ use std::path::{Path, PathBuf};
 /// One recorded projection of a skill into a tool: how it was materialized and
 /// the canonical hash at push time (for drift detection on copies).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct LedgerEntry {
+pub(crate) struct LedgerEntry {
     /// `"symlink"` | `"copy"` | `"native"` (the tool's own skills dir IS the
     /// canonical store at this scope — see [`project`]'s native-location guard).
-    mode: String,
+    pub(crate) mode: String,
     /// Canonical content hash at the moment of projection.
-    hash: String,
+    pub(crate) hash: String,
     /// Which component kind this entry projected. Defaults to `Skill` and is
     /// omitted from JSON when it *is* `Skill`, so pre-existing skill-only ledgers
     /// round-trip byte-identically.
     #[serde(default, skip_serializing_if = "is_skill_kind")]
-    component_kind: ComponentKind,
+    pub(crate) component_kind: ComponentKind,
 }
 
 /// `skip_serializing_if` predicate: a `Skill` kind is the implicit default and is
@@ -45,13 +45,13 @@ fn is_skill_kind(kind: &ComponentKind) -> bool {
 /// and carries the installed Atlas's row through untouched
 /// ([`ledger_after_read`], [`ledger_for_write`]).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct Ledger {
-    version: u32,
-    projections: BTreeMap<String, BTreeMap<String, LedgerEntry>>,
+pub(crate) struct Ledger {
+    pub(crate) version: u32,
+    pub(crate) projections: BTreeMap<String, BTreeMap<String, LedgerEntry>>,
     /// The other profile's native-agent rows, set aside on read and written
     /// back as they were. Never serialized under this name.
     #[serde(skip)]
-    other_profile: BTreeMap<String, LedgerEntry>,
+    pub(crate) other_profile: BTreeMap<String, LedgerEntry>,
 }
 
 impl Default for Ledger {
@@ -115,7 +115,7 @@ fn ledger_path(root: &Path) -> PathBuf {
 }
 
 /// Read the ledger, tolerating a missing or garbage file (→ default empty).
-fn read_ledger(root: &Path) -> Ledger {
+pub(crate) fn read_ledger(root: &Path) -> Ledger {
     let path = ledger_path(root);
     let ledger = match fs::read_to_string(&path) {
         Ok(raw) => serde_json::from_str(&raw).unwrap_or_default(),
@@ -125,13 +125,19 @@ fn read_ledger(root: &Path) -> Ledger {
 }
 
 /// Atomically persist the ledger (reuses [`atomic_write`]).
-fn write_ledger(root: &Path, ledger: &Ledger) -> Result<(), String> {
+pub(crate) fn write_ledger(root: &Path, ledger: &Ledger) -> Result<(), String> {
     let on_disk = ledger_for_write(ledger, atlas_profile::current());
     let payload = serde_json::to_string_pretty(&on_disk).map_err(|e| e.to_string())?;
     atomic_write(&ledger_path(root), &payload)
 }
 
-fn ledger_record(ledger: &mut Ledger, safe_name: &str, tool_id: &str, mode: &str, hash: &str) {
+pub(crate) fn ledger_record(
+    ledger: &mut Ledger,
+    safe_name: &str,
+    tool_id: &str,
+    mode: &str,
+    hash: &str,
+) {
     ledger
         .projections
         .entry(safe_name.to_string())
@@ -146,7 +152,7 @@ fn ledger_record(ledger: &mut Ledger, safe_name: &str, tool_id: &str, mode: &str
         );
 }
 
-fn ledger_remove(ledger: &mut Ledger, safe_name: &str, tool_id: &str) {
+pub(crate) fn ledger_remove(ledger: &mut Ledger, safe_name: &str, tool_id: &str) {
     if let Some(tools) = ledger.projections.get_mut(safe_name) {
         tools.remove(tool_id);
         if tools.is_empty() {

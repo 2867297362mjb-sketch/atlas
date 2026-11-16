@@ -21,7 +21,7 @@ use std::path::Path;
 // component, store it under `<root>/.atlas/packs/<repo>/`. NOTHING is executed at
 // install — scripts are only placed. Projection into tool homes is Phase 3.
 
-const SKILLS_SEARCH_URL: &str = "https://www.skills.sh/api/search";
+pub(crate) const SKILLS_SEARCH_URL: &str = "https://www.skills.sh/api/search";
 
 /// One hit from the skills.sh search index. `source` is a GitHub `owner/repo`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,7 +87,7 @@ pub struct InstalledPack {
     pub updated_at: u64,
 }
 
-fn now_unix_secs() -> u64 {
+pub(crate) fn now_unix_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -214,7 +214,7 @@ pub(crate) fn install_pack_from_dir(
 
 /// Fetch a pack's source and parse it WITHOUT installing — for the
 /// install-preview UI (shows every component the pack ships).
-fn preview_pack(from: &dyn PackSource, source: &str) -> Result<Pack, String> {
+pub(crate) fn preview_pack(from: &dyn PackSource, source: &str) -> Result<Pack, String> {
     let (owner, repo) = parse_owner_repo(source)?;
     let (tmp, _commit) = from.fetch(&owner, &repo)?;
     let result = pack_parse(&tmp);
@@ -225,7 +225,7 @@ fn preview_pack(from: &dyn PackSource, source: &str) -> Result<Pack, String> {
 /// Install a pack from its source into the store. Fetches the whole repo,
 /// dedups against the lock, writes `skills-lock.json`. No projection and no
 /// script execution.
-fn install_pack_from_source(
+pub(crate) fn install_pack_from_source(
     root: &Path,
     from: &dyn PackSource,
     source: &str,
@@ -242,7 +242,7 @@ fn install_pack_from_source(
 /// Cheaply check whether an installed pack is behind its source: compares the
 /// source's HEAD commit (no content fetch) to the commit in the lock.
 /// Read-only — applying the update is an install.
-fn check_pack_update(
+pub(crate) fn check_pack_update(
     root: &Path,
     from: &dyn PackSource,
     pack: &str,
@@ -264,7 +264,7 @@ fn check_pack_update(
 /// Fully remove an installed pack: unproject it from every tool it's recorded
 /// in (clears the tool homes), delete its store dir, and drop its lock entry.
 /// Idempotent — uninstalling a pack that isn't present is a no-op success.
-fn uninstall_pack(root: &Path, pack: &str) -> Result<(), String> {
+pub(crate) fn uninstall_pack(root: &Path, pack: &str) -> Result<(), String> {
     let safe = sanitize_name(pack)?;
     // 1. Unproject from every tool it's recorded in.
     let tool_ids: Vec<String> = read_pack_proj(root)
