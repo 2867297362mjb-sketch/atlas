@@ -5,7 +5,7 @@ import { useProjectStore } from "@/features/projects/stores/project-store";
 import { resetGitSummariesForOrgSwitch } from "@/features/projects/stores/project-git-store";
 import { commsActions } from "@/features/comms/stores/comms-store";
 import { comms } from "@/features/comms/lib/comms-api";
-import { activeOrganisationChanged } from "./active-org-change";
+import { activeOrganisationChanged, switchAwaitsAnswer } from "./active-org-change";
 import {
   useAppStore,
   flushAppStateSave,
@@ -55,11 +55,20 @@ export async function switchOrg(id: string): Promise<void> {
   // can be busy, so an unscoped count is the outgoing org's count.
   const busy = busySessions().length;
   if (busy > 0) {
-    const ok = await useStopAgentsConfirmStore.getState().actions.ask({
-      count: busy,
-      actionLabel: "Switching organizations",
-      confirmLabel: "Stop agents & switch",
-    });
+    // The boot push waits for the answer: a sign-in that lands behind the
+    // prompt would otherwise send the organisation being left, beside the
+    // call this switch is about to make.
+    const answered = switchAwaitsAnswer();
+    let ok = false;
+    try {
+      ok = await useStopAgentsConfirmStore.getState().actions.ask({
+        count: busy,
+        actionLabel: "Switching organizations",
+        confirmLabel: "Stop agents & switch",
+      });
+    } finally {
+      answered(ok);
+    }
     if (!ok) {
       switchingOrg = false;
       return;

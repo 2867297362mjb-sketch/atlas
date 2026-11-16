@@ -39,6 +39,22 @@ export type ActiveOrgChange =
  */
 let bootPush: "pending" | "settled" = "pending";
 
+/** What `pushActiveOrgAtBoot` is given. */
+interface BootPushInput {
+  signedIn: boolean;
+  /** The desktop's active organisation, once the org store knows it. */
+  activeOrg: { remoteId?: string } | undefined;
+}
+
+/**
+ * A switch is waiting on the user's answer (the stop-agents prompt), with the
+ * boot push still owed. The push is neither made nor settled until the answer:
+ * made now, it would send the organisation being left while the switch is
+ * about to send its own, and the two calls are not ordered once they are both
+ * out. `held` is the last push that was asked for meanwhile, if any.
+ */
+let asking: { held: BootPushInput | null } | null = null;
+
 /**
  * The active organisation changed. Everything both reasons need, in order:
  *
@@ -78,15 +94,17 @@ export function activeOrganisationChanged(change: ActiveOrgChange): boolean {
  * Safe to call on every render that changes its inputs: it waits for sign-in
  * and for the active organisation to be known (the org store hydrates from
  * disk long before the credential is confirmed), pushes once, and is a no-op
- * afterwards, as it is once a switch has gone ahead. Returns whether this
- * call made the push.
+ * afterwards, as it is once a switch has gone ahead. While a switch is
+ * waiting on the user's answer it is held back (`switchAwaitsAnswer`).
+ * Returns whether this call made the push.
  */
-export function pushActiveOrgAtBoot(input: {
-  signedIn: boolean;
-  /** The desktop's active organisation, once the org store knows it. */
-  activeOrg: { remoteId?: string } | undefined;
-}): boolean {
+export function pushActiveOrgAtBoot(input: BootPushInput): boolean {
   if (bootPush !== "pending") return false;
+  if (asking) {
+    // The latest word wins: a sign-out behind the prompt owes nothing.
+    asking.held = input;
+    return false;
+  }
   if (!input.signedIn || !input.activeOrg) return false;
   bootPush = "settled";
   void invoke("auth_set_active_org", { orgId: input.activeOrg.remoteId ?? null }).catch((e) => {
@@ -95,7 +113,29 @@ export function pushActiveOrgAtBoot(input: {
   return true;
 }
 
+/**
+ * A switch is about to ask the user whether it may go ahead. From here until
+ * the returned function is called with the answer, the boot push waits:
+ *
+ *   - `true`, the switch goes ahead: the boot push is settled unmade, since
+ *     the switch pushes its own choice;
+ *   - `false`, the switch was declined: the organisation on screen is the one
+ *     it was, so a boot push asked for meanwhile is made now. Nothing else
+ *     would make it: its caller only asks again when its inputs change.
+ */
+export function switchAwaitsAnswer(): (goesAhead: boolean) => void {
+  const mine = { held: null as BootPushInput | null };
+  asking = mine;
+  return (goesAhead) => {
+    if (asking !== mine) return;
+    asking = null;
+    if (goesAhead) bootPush = "settled";
+    else if (mine.held) pushActiveOrgAtBoot(mine.held);
+  };
+}
+
 /** Test seam: a fresh launch. */
 export function resetActiveOrgChangeForTests(): void {
   bootPush = "pending";
+  asking = null;
 }
