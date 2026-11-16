@@ -757,17 +757,13 @@ fn read_cached_detail(path: &std::path::Path) -> Option<atlas_checkpoint::Sessio
 
 fn write_cached_detail(path: &std::path::Path, detail: &atlas_checkpoint::SessionDetail) {
     let Some(dir) = path.parent() else { return };
-    if std::fs::create_dir_all(dir).is_err() {
-        return;
-    }
     let Ok(bytes) = serde_json::to_vec(detail) else {
         return;
     };
-    // Written aside and renamed, so a crash mid-write leaves the old copy or
-    // none — never half of one.
-    let tmp = path.with_extension("json.tmp");
-    if std::fs::write(&tmp, bytes).is_ok() && std::fs::rename(&tmp, path).is_err() {
-        let _ = std::fs::remove_file(&tmp);
+    // Replaced whole, so a crash mid-write leaves the old copy or none, never
+    // half of one. Best effort: a cache that is not written is fetched again.
+    if atlas_fs::replace_file(path, bytes).is_err() {
+        return;
     }
     if let Some(root) = dir.parent().and_then(|p| p.parent()) {
         evict_remote_sessions(root, REMOTE_SESSION_CACHE_BYTES);

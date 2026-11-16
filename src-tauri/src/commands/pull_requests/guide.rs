@@ -127,12 +127,8 @@ pub async fn pr_guide_write(
     }
     let file = guide_file(&data_dir(&app)?, &repository, number);
     tokio::task::spawn_blocking(move || {
-        let parent = file.parent().expect("guide files sit in a folder");
-        std::fs::create_dir_all(parent).map_err(|e| PrError::failed(e.to_string()))?;
-        let tmp = file.with_extension("json.tmp");
         let text = serde_json::to_string(&guide).map_err(|e| PrError::failed(e.to_string()))?;
-        std::fs::write(&tmp, text).map_err(|e| PrError::failed(e.to_string()))?;
-        std::fs::rename(&tmp, &file).map_err(|e| PrError::failed(e.to_string()))
+        atlas_fs::replace_file(&file, text).map_err(|e| PrError::failed(e.to_string()))
     })
     .await
     .map_err(|e| PrError::failed(e.to_string()))?

@@ -110,3 +110,15 @@ pub mod updater;
 pub mod usage;
 pub mod usage_dashboard;
 pub mod window;
+
+/// The names in `dir`, sorted. A store's save test asserts on the whole
+/// listing, so a temp file left beside the target fails it.
+#[cfg(test)]
+pub(crate) fn file_names_in(dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .expect("the directory a save created")
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}

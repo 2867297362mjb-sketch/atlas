@@ -425,13 +425,9 @@ fn update_ledger(app: &AppHandle, root: &Path, synced: Option<bool>) {
         }
         _ => return,
     }
-    let written = path
-        .parent()
-        .map_or(Ok(()), std::fs::create_dir_all)
-        .and_then(|()| {
-            let json = serde_json::to_string_pretty(&roots).map_err(std::io::Error::other)?;
-            std::fs::write(&path, json)
-        });
+    let written = serde_json::to_string_pretty(&roots)
+        .map_err(std::io::Error::other)
+        .and_then(|json| atlas_fs::replace_file(&path, json));
     if let Err(e) = written {
         tracing::warn!("instruction sync: could not update {}: {e}", path.display());
     }

@@ -135,13 +135,11 @@ pub fn session_chat_thread_get(
 #[tauri::command(async)]
 pub fn session_chat_thread_save(app: AppHandle, thread: SessionChatThread) -> Result<(), String> {
     let path = thread_path(&app, &thread.agent_session_id, &thread.id)?;
-    // Tmp-and-rename: a thread is rewritten on every streamed message, so a
+    // Replaced whole: a thread is rewritten on every streamed message, so a
     // crash mid-write is a real possibility and a half-written JSON file is a
     // conversation that never loads again.
-    let tmp = path.with_extension("json.tmp");
     let payload = serde_json::to_string_pretty(&thread).map_err(|e| e.to_string())?;
-    fs::write(&tmp, &payload).map_err(|e| e.to_string())?;
-    fs::rename(&tmp, &path).map_err(|e| e.to_string())
+    atlas_fs::replace_file(&path, &payload).map_err(|e| e.to_string())
 }
 
 #[tauri::command(async)]
