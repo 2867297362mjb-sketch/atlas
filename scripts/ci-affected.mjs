@@ -152,6 +152,14 @@ export const EXTRA_INPUTS = [
     testOnly: true,
     why: "tests/spawn_audit.rs",
   })),
+  // Its own tests/replace_audit.rs walks the first-party Rust sources for a
+  // file replaced by temp-and-rename outside atlas_fs::replace_file.
+  ...["src-tauri/src/", "crates/"].map((p) => ({
+    path: p,
+    packages: ["atlas-fs"],
+    testOnly: true,
+    why: "tests/replace_audit.rs",
+  })),
 ];
 
 /**
