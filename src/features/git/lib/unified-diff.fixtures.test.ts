@@ -96,9 +96,7 @@ type Differs = Record<string, (files: FixtureFile[]) => Reading>;
 const unknownPath = (files: FixtureFile[]) => files.map((file) => ({ ...file, path: "unknown" }));
 
 const OWN_DIFFERS: Differs = {
-  // The path is read from `diff --git a/… b/…` alone, unquoted names only.
-  "quoted-path-utf8": unknownPath,
-  "quoted-path-tab": unknownPath,
+  // The path is read from `diff --git a/… b/…`, with those two prefixes.
   "mnemonic-prefix": unknownPath,
   "no-prefix": unknownPath,
   // Neither `diff --cc` nor `@@@` is recognised: a conflicted file has no lines.

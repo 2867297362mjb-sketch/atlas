@@ -298,6 +298,24 @@
     ]
   },
   {
+    "name": "quoted-rename",
+    "about": "a rename between two quoted names: `rename from` and `rename to` are quoted too, without a prefix",
+    "diff": "diff --git \"a/caf\\303\\251.txt\" \"b/th\\303\\251.txt\"\nsimilarity index 66%\nrename from \"caf\\303\\251.txt\"\nrename to \"th\\303\\251.txt\"\nindex 628ffa8..70bb997 100644\n--- \"a/caf\\303\\251.txt\"\n+++ \"b/th\\303\\251.txt\"\n@@ -1,4 +1,4 @@\n un\n deux\n trois\n-quatre\n+QUATRE\n",
+    "files": [
+      {
+        "path": "thé.txt",
+        "oldPath": "café.txt",
+        "hunks": [
+          {
+            "oldStart": 1,
+            "newStart": 1,
+            "lines": [" un", " deux", " trois", "-quatre", "+QUATRE"]
+          }
+        ]
+      }
+    ]
+  },
+  {
     "name": "crlf-file",
     "about": "a CRLF file: each line's \\r is part of its text",
     "diff": "diff --git a/crlf.txt b/crlf.txt\nindex b5eff57..d5a6cc6 100644\n--- a/crlf.txt\n+++ b/crlf.txt\n@@ -1,3 +1,3 @@\n a\r\n-b\r\n+B\r\n c\r\n",
