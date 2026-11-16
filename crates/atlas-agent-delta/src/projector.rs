@@ -358,11 +358,6 @@ impl DeltaProjector {
             .len()
     }
 
-    /// Subscribe to every delta in-process, without going through the host sink.
-    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<SessionDeltaEnvelope> {
-        self.emitter.subscribe()
-    }
-
     fn notify_observer(
         &self,
         session_id: &acp::SessionId,

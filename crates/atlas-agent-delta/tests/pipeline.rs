@@ -2,10 +2,11 @@
 //! path.
 //!
 //! This is touchpoint #1, and the reason it is a test rather than a comment:
-//! `CaptureMiddleware` is a pipeline *stage*, not a bus subscriber, precisely
-//! because the bus drops events for a lagging subscriber and a dropped event is
-//! a hole in the permanent record. A pipeline that ran late, dropped, or
-//! reordered would be the same hole with a different cause.
+//! `CaptureMiddleware` is a pipeline *stage*, not a subscriber to a broadcast
+//! channel, precisely because a broadcast drops events for a lagging
+//! subscriber and a dropped event is a hole in the permanent record. A
+//! pipeline that ran late, dropped, or reordered would be the same hole with a
+//! different cause.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};

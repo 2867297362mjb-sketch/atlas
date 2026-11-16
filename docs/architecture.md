@@ -338,7 +338,7 @@ All wired in as `path` dependencies from `src-tauri/Cargo.toml`, and all members
 | `atlas-native-agent` | The engine (`vendor/atlas-engine`) on the `AgentConnection` seam — the native agent as just another connection. Its agent id is the literal `"atlas-agent"`: a storage key every thread row resolves through, so renaming it is a data migration (ADR-0011). |
 | `atlas-agent-transcript` | Where an agent keeps its record of a conversation, and how to read Atlas's own text back out of one. The Claude JSONL replay it used to hold is gone. |
 | `atlas-thread-metadata` | The app-owned thread-metadata store (`threads.db`) — Atlas's only source for the sidebar and history. Metadata only, never transcript content. See ADR-0001. |
-| `atlas-bus` | Event broadcaster + middleware pipeline seam: a `tokio::sync::broadcast`-backed fan-out (lagging subscribers drop rather than block the producer), plus `OutboundPipeline`. Generic — no dependency on any agent or ACP type. |
+| `atlas-bus` | The outbound middleware pipeline: `OutboundPipeline`, an ordered chain of `OutboundMiddleware` run on the emit thread, so a stage cannot lag or lose a delta. Generic — no dependency on any agent or ACP type. |
 
 ### Everything else
 
@@ -446,7 +446,7 @@ atlas/
 │   ├── atlas-agent-transcript     an agent's own record of a conversation
 │   ├── atlas-native-agent         the engine on the AgentConnection seam
 │   ├── atlas-thread-metadata      app-owned session history (threads.db)
-│   ├── atlas-bus                  event bus + middleware pipeline
+│   ├── atlas-bus                  outbound middleware pipeline
 │   ├── atlas-checkpoint           session record / Timeline (sessions.db)
 │   ├── atlas-artifacts            Timeline cloud reads + realtime socket
 │   ├── atlas-redact               secret redaction (single source of truth)

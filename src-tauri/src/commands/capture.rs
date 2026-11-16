@@ -7,13 +7,12 @@
 //! Three decisions here are not obvious from the crate's API, and all three come
 //! from how the runtime actually behaves rather than from how it reads:
 //!
-//! **Capture is a pipeline stage, not a bus subscriber.** The `atlas-bus`
-//! broadcast drops events for a subscriber that lags past the ring capacity —
-//! correct for the UI fan-out, where a dropped frame is invisible, and wrong
-//! here, where a dropped event is a turn missing from the permanent record. The
-//! [`OutboundPipeline`] slot runs synchronously on the emit thread and cannot
-//! lag by construction. (`atlas_bus::middleware` has a test pinning that
-//! contrast.)
+//! **Capture is a pipeline stage, not a subscriber to a broadcast.** A
+//! broadcast channel drops events for a subscriber that lags past its ring
+//! capacity, and here a dropped event is a turn missing from the permanent
+//! record. The [`OutboundPipeline`] slot runs synchronously on the emit thread
+//! and cannot lag by construction. (`atlas_bus::middleware` has a test pinning
+//! that every event of a burst arrives.)
 //!
 //! **The user's prompt does not arrive on the delta stream.** The session actor
 //! deliberately skips emitting a message-appended delta for user messages — the
