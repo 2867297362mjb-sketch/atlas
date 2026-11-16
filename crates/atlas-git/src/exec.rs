@@ -329,7 +329,9 @@ impl GitCommand {
             Stdio::null()
         });
 
-        let mut child = cmd.spawn().map_err(|e| spawn_error(&display, &e))?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| spawn_error(&display, self.cwd.as_deref(), &e))?;
 
         // Feed stdin from a thread so a chatty child can't deadlock us.
         let stdin_thread = self.stdin.and_then(|bytes| {
@@ -376,7 +378,7 @@ impl GitCommand {
             .stderr(Stdio::null())
             .stdin(Stdio::null())
             .spawn()
-            .map_err(|e| spawn_error(&display, &e))?;
+            .map_err(|e| spawn_error(&display, self.cwd.as_deref(), &e))?;
         let mut bytes = Vec::new();
         let Some(mut stdout) = child.stdout.take() else {
             let _ = child.kill();
@@ -435,7 +437,9 @@ impl GitCommand {
             Stdio::null()
         });
 
-        let mut child = cmd.spawn().map_err(|e| spawn_error(&display, &e))?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| spawn_error(&display, self.cwd.as_deref(), &e))?;
 
         let stdin_thread = self.stdin.and_then(|bytes| {
             child.stdin.take().map(|mut pipe| {
@@ -546,7 +550,8 @@ pub fn shallow_clone(url: &str, dest: &std::path::Path) -> Result<GitRawOutput, 
         .output()
 }
 
-/// How long [`GitCommand::run_streaming`] keeps reading after git exits.
+/// How long a run keeps reading git's pipes after git itself has exited
+/// ([`GitCommand::run_streaming`], and any run with a timeout).
 const STREAM_DRAIN_GRACE: Duration = Duration::from_millis(500);
 
 /// One raw line as text: the trailing `\n` / `\r\n` dropped, as
@@ -561,33 +566,63 @@ fn decode_line(raw: &[u8]) -> String {
 
 /// `wait_with_output` with a deadline: `Ok(None)` once `limit` passes, after
 /// killing the child. Pipes drain on their own threads so a chatty child
-/// can't block on a full pipe while we poll. On expiry those threads are
-/// left to finish by themselves rather than joined — a helper git spawned
-/// (`ssh`, `git-remote-https`) can hold the pipes open briefly after git
-/// itself dies, and it exits once it sees its parent gone.
+/// can't block on a full pipe while we poll.
+///
+/// Those threads are never joined without a limit. A process git started can
+/// hold a pipe open after git is gone: a helper (`ssh`, `git-remote-https`)
+/// briefly, a hook that left something in the background for as long as that
+/// lives. So once git has exited the pipes get [`STREAM_DRAIN_GRACE`] to
+/// reach their end, and whatever was read by then is the output.
 fn wait_with_deadline(
     mut child: Child,
     limit: Duration,
 ) -> std::io::Result<Option<std::process::Output>> {
     use std::io::Read;
-    fn drain(pipe: Option<impl Read + Send + 'static>) -> std::thread::JoinHandle<Vec<u8>> {
+    use std::sync::{mpsc, Arc, Mutex};
+    type Drained = (Arc<Mutex<Vec<u8>>>, mpsc::Receiver<()>);
+    fn drain(pipe: Option<impl Read + Send + 'static>) -> Drained {
+        let read = Arc::new(Mutex::new(Vec::new()));
+        let (done, ended) = mpsc::channel();
+        let into = read.clone();
         std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            if let Some(mut p) = pipe {
-                let _ = p.read_to_end(&mut buf);
+            if let Some(mut pipe) = pipe {
+                let mut chunk = [0u8; 8192];
+                loop {
+                    match pipe.read(&mut chunk) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            let mut buf = into
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            buf.extend_from_slice(&chunk[..n]);
+                        }
+                    }
+                }
             }
-            buf
-        })
+            let _ = done.send(());
+        });
+        (read, ended)
     }
-    let out = drain(child.stdout.take());
-    let err = drain(child.stderr.take());
+    fn taken(read: &Arc<Mutex<Vec<u8>>>) -> Vec<u8> {
+        std::mem::take(
+            &mut *read
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+    }
+    let (out, out_ended) = drain(child.stdout.take());
+    let (err, err_ended) = drain(child.stderr.take());
     let deadline = Instant::now() + limit;
     loop {
         if let Some(status) = child.try_wait()? {
+            let grace = Instant::now() + STREAM_DRAIN_GRACE;
+            for ended in [&out_ended, &err_ended] {
+                let _ = ended.recv_timeout(grace.saturating_duration_since(Instant::now()));
+            }
             return Ok(Some(std::process::Output {
                 status,
-                stdout: out.join().unwrap_or_default(),
-                stderr: err.join().unwrap_or_default(),
+                stdout: taken(&out),
+                stderr: taken(&err),
             }));
         }
         if Instant::now() >= deadline {
@@ -612,11 +647,20 @@ fn timed_out(display: &str, limit: Duration) -> GitErrorPayload {
     }
 }
 
-fn spawn_error(display: &str, e: &std::io::Error) -> GitRunError {
-    if e.kind() == std::io::ErrorKind::NotFound {
-        GitRunError::NotInstalled
-    } else {
-        GitRunError::Failed(format!("failed to start {display}: {e}"))
+/// A spawn that failed. `NotFound` is "git is not installed" unless the
+/// working directory is the thing that is missing: a deleted worktree or
+/// project gives the same error kind, and "install git" would be the wrong
+/// thing to tell its owner.
+fn spawn_error(display: &str, cwd: Option<&std::path::Path>, e: &std::io::Error) -> GitRunError {
+    if e.kind() != std::io::ErrorKind::NotFound {
+        return GitRunError::Failed(format!("failed to start {display}: {e}"));
+    }
+    match cwd {
+        Some(dir) if !dir.is_dir() => GitRunError::Failed(format!(
+            "{display}: the folder {} does not exist",
+            dir.display()
+        )),
+        _ => GitRunError::NotInstalled,
     }
 }
 
@@ -795,6 +839,48 @@ mod tests {
             started.elapsed()
         );
         assert!(sink.0.lock().unwrap().iter().any(|(_, l)| l == "hook-ran"));
+    }
+
+    /// A timed run whose git exits while something it started still holds
+    /// the pipes (a hook that left a process in the background) answers with
+    /// what was read, not when that process exits.
+    #[cfg(unix)]
+    #[test]
+    fn a_timed_run_returns_when_git_exits_despite_lingering_grandchild() {
+        let repo = temp_repo();
+        let started = Instant::now();
+        let out = GitCommand::new(
+            repo.path(),
+            &[
+                "-c",
+                "alias.linger=!echo ran; (sleep 20; echo late) &",
+                "linger",
+            ],
+        )
+        .timeout(Duration::from_secs(30))
+        .output()
+        .unwrap();
+        assert!(out.success());
+        assert!(String::from_utf8_lossy(&out.stdout).contains("ran"));
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "took {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// A folder that is gone is not "git is not installed": both are a
+    /// `NotFound` from the spawn.
+    #[test]
+    fn a_missing_folder_is_not_reported_as_git_missing() {
+        let gone = tempfile::tempdir().unwrap().path().join("deleted-worktree");
+        let err = GitCommand::new(&gone, &["status"]).output().unwrap_err();
+        match err {
+            GitRunError::Failed(message) => {
+                assert!(message.contains("does not exist"), "{message}")
+            }
+            other => panic!("expected a failure naming the folder, got {other:?}"),
+        }
     }
 
     /// Stage all on a big change set: well past Windows' 32,767-character
