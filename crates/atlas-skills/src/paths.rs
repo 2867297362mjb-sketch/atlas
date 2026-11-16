@@ -123,7 +123,7 @@ fn migrate_legacy_skills(root: &Path) {
 /// - lowercase; `[^a-z0-9._]+` → `-`; collapse runs; strip leading/trailing
 ///   `.`/`-`; cap at 255 chars.
 /// - reject empty results and anything that still looks like traversal.
-fn sanitize_name(name: &str) -> Result<String, String> {
+pub(crate) fn sanitize_name(name: &str) -> Result<String, String> {
     let lowered = name.trim().to_lowercase();
     let mut out = String::with_capacity(lowered.len());
     let mut prev_dash = false;

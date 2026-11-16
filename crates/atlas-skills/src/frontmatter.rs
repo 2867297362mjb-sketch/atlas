@@ -3,14 +3,14 @@
 // ── Frontmatter (minimal, no YAML crate — mirrors agent_memory.rs) ──────────────
 
 #[derive(Default)]
-struct Frontmatter {
-    name: Option<String>,
-    description: Option<String>,
+pub(crate) struct Frontmatter {
+    pub(crate) name: Option<String>,
+    pub(crate) description: Option<String>,
 }
 
 /// Parse the leading `---` frontmatter block for `name`/`description`. Returns
 /// the parsed scalars plus the body with the block stripped.
-fn parse_frontmatter(raw: &str) -> (Frontmatter, String) {
+pub(crate) fn parse_frontmatter(raw: &str) -> (Frontmatter, String) {
     let mut fm = Frontmatter::default();
     let trimmed = raw.strip_prefix('\u{feff}').unwrap_or(raw);
     let lines: Vec<&str> = trimmed.lines().collect();

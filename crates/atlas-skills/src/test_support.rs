@@ -1,6 +1,8 @@
 //! Fixtures shared by the in-module unit tests.
 
 use crate::disk::symlink;
+use crate::model::{ComponentKind, Pack};
+use crate::packs::install::install_pack_from_dir;
 use crate::registry::TOOL_REGISTRY;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -91,4 +93,58 @@ pub(crate) fn tool_env_overridden() -> bool {
         .iter()
         .filter_map(|t| t.env_override)
         .any(|v| std::env::var_os(v).is_some())
+}
+
+pub(crate) fn comp_names(pack: &Pack, kind: ComponentKind) -> Vec<String> {
+    pack.components
+        .iter()
+        .filter(|c| c.kind == kind)
+        .map(|c| c.name.clone())
+        .collect()
+}
+
+/// Build a minimal pack fixture (a "fetched repo" tree) under a fresh dir.
+pub(crate) fn make_src_pack(name_marker: &str) -> PathBuf {
+    let dir = tmp_pack_dir();
+    write_file(
+        &dir.join(".claude-plugin/plugin.json"),
+        &format!(r#"{{"name":"demo-pack","description":"{name_marker}"}}"#),
+    );
+    write_file(
+        &dir.join("skills/foo/SKILL.md"),
+        "---\nname: foo\n---\nbody",
+    );
+    write_file(&dir.join("agents/rev.md"), "agent");
+    dir
+}
+
+/// A richer pack fixture: skill + agent + command + rule + hooks + script.
+pub(crate) fn make_full_src_pack() -> PathBuf {
+    let dir = tmp_pack_dir();
+    write_file(
+        &dir.join(".claude-plugin/plugin.json"),
+        r#"{"name":"demo-pack"}"#,
+    );
+    write_file(
+        &dir.join("skills/foo/SKILL.md"),
+        "---\nname: foo\n---\nbody",
+    );
+    write_file(&dir.join("agents/rev.md"), "agent");
+    write_file(&dir.join("commands/ship.md"), "command");
+    write_file(&dir.join("rules/style.md"), "rule body");
+    write_file(
+        &dir.join("hooks/hooks.json"),
+        r#"{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"node ${CLAUDE_PLUGIN_ROOT}/scripts/setup.js"}]}]}}"#,
+    );
+    write_file(&dir.join("scripts/setup.js"), "console.log(1)");
+    dir
+}
+
+/// A root with `.claude`/`.codex` present (tools "detected") + the pack installed.
+pub(crate) fn installed_root(src: &Path) -> PathBuf {
+    let root = tmp_pack_dir();
+    fs::create_dir_all(root.join(".claude")).unwrap();
+    fs::create_dir_all(root.join(".codex")).unwrap();
+    install_pack_from_dir(&root, src, "owner/repo", "c1", false).unwrap();
+    root
 }

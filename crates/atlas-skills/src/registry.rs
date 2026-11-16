@@ -196,7 +196,11 @@ pub(crate) fn tool_def(id: &str) -> Option<&'static ToolDef> {
 /// (`"global"` / `"project"`). `None` ⇒ this tool does not support that kind at
 /// that scope. Skills are not represented here — use [`tool_skills_dir`].
 #[allow(dead_code)]
-fn tool_home(tool: &ToolDef, kind: ComponentKind, scope: &str) -> Option<&'static ComponentHome> {
+pub(crate) fn tool_home(
+    tool: &ToolDef,
+    kind: ComponentKind,
+    scope: &str,
+) -> Option<&'static ComponentHome> {
     tool.homes
         .iter()
         .find(|h| h.kind == kind && h.scope.covers(scope))

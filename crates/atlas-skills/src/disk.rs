@@ -36,7 +36,7 @@ fn canonical_symlink_target(root: &Path, def: &ToolDef, scope: &str, safe_name: 
 
 /// Wipe whatever entry sits at the projection path (symlink/file/dir), so we can
 /// re-materialize cleanly. Only ever the `<name>` entry inside the tool dir.
-fn clear_entry(link: &Path) -> Result<(), String> {
+pub(crate) fn clear_entry(link: &Path) -> Result<(), String> {
     if let Ok(meta) = link.symlink_metadata() {
         if !meta.file_type().is_symlink() && meta.is_dir() {
             fs::remove_dir_all(link).map_err(|e| e.to_string())?;
@@ -118,7 +118,7 @@ pub(crate) fn copy_dir_all(src: &Path, dst: &Path) -> Result<(), String> {
 /// security). Walks every file under `dir` sorted by relative path and folds
 /// `(relpath_bytes, 0x00, file_bytes)` into a 64-bit FNV-1a, returned as hex.
 /// Missing dir → empty string (treated as "no content").
-fn hash_skill_dir(dir: &Path) -> String {
+pub(crate) fn hash_skill_dir(dir: &Path) -> String {
     const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 

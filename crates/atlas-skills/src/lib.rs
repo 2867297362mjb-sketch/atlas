@@ -41,6 +41,7 @@ mod disk;
 mod frontmatter;
 mod ledger;
 mod model;
+mod packs;
 mod paths;
 mod registry;
 #[cfg(test)]
