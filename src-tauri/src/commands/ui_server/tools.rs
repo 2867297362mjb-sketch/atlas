@@ -12,20 +12,18 @@ use std::sync::Arc;
 
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::{
-    CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock as Content,
-    JsonObject, ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
+    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock as Content, JsonObject,
+    ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
 };
 use rmcp::service::{RequestContext, RoleServer};
-use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
-use rmcp::transport::{StreamableHttpServerConfig, StreamableHttpService};
 use rmcp::ErrorData as McpError;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
 use super::bridge::{UiBridge, UiRequest};
-use super::{NavigationGate, UI_PATH};
+use super::{NavigationGate, UI_PATH, UI_SERVER_NAME};
 use crate::commands::org_server::is_org_id;
-use crate::commands::tool_servers::{Grant, TOOLS_LIST_TTL_MS};
+use crate::commands::tool_servers::{self, require_grant, Audience, Grant, Tenant};
 
 /// What the server tells the agent about itself. The engine shows it as the
 /// description of the `atlas_ui` tool namespace.
@@ -165,12 +163,9 @@ pub(super) fn tool_names() -> Vec<String> {
     tools().into_iter().map(|t| t.name.to_string()).collect()
 }
 
-/// The `tools/list` answer, with the cache fields MCP 2026-07-28 requires
-/// (see the memory tool server's `tools_list`).
+/// The `tools/list` answer.
 pub(super) fn tools_list() -> ListToolsResult {
-    ListToolsResult::with_all_items(tools())
-        .with_ttl_ms(TOOLS_LIST_TTL_MS)
-        .with_cache_scope(CacheScope::Private)
+    tool_servers::tools_list(tools())
 }
 
 fn tool_error(message: impl Into<String>) -> CallToolResult {
@@ -257,23 +252,24 @@ impl ServerHandler for UiTools {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
-        let grant = context
-            .extensions
-            .get::<axum::http::request::Parts>()
-            .and_then(|parts| parts.extensions.get::<Grant>())
-            .cloned()
-            .ok_or_else(|| McpError::invalid_request("no session token", None))?;
+        let grant = require_grant(&context)?;
         Ok(self.dispatch(grant, request).await.into())
     }
 }
 
-/// The service, routed at [`UI_PATH`], for the tool-server listener to merge
-/// in front of its token check.
-pub fn router(tools: UiTools) -> axum::Router {
-    let service = StreamableHttpService::new(
-        move || Ok(tools.clone()),
-        Arc::new(LocalSessionManager::default()),
-        StreamableHttpServerConfig::default(),
-    );
-    axum::Router::new().nest_service(UI_PATH, service)
+/// The UI tool server as a tenant of the tool server host: only for a
+/// connection that carries UI control, while the user lets the agent act on
+/// the window. An offered session's grant says so, which every call checks:
+/// the listener's one token opens every tenant.
+pub fn tenant(tools: UiTools) -> Tenant {
+    let gate = tools.gate.clone();
+    Tenant::new(UI_SERVER_NAME, UI_PATH, tools)
+        .only_for(Audience::UiControl)
+        .admitted_by(move |cwd, grant| {
+            if !gate(cwd) {
+                return Err("agent navigation is off in Settings");
+            }
+            grant.ui = true;
+            Ok(())
+        })
 }

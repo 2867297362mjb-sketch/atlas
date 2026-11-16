@@ -1,7 +1,8 @@
 //! The UI tool server end to end over loopback with an rmcp client, beside
-//! the memory tool server on its listener, and the offer that hands it out.
+//! the memory tool server on the tool server host, and the offer that hands
+//! it out.
 
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -17,19 +18,14 @@ use serde_json::{json, Value};
 
 use super::tools::{tool_names, tools_list, INSTRUCTIONS};
 use super::*;
-use crate::commands::memory_server::{SessionClocks, SessionReads, SharingGate, Sources};
-use crate::commands::shared_memory::SharedMemoryStore;
+use crate::commands::memory_server;
 use crate::commands::tool_servers::{
-    SessionOffers, SessionTokens, ToolServer, ToolServerHost, TOOLS_LIST_TTL_MS,
+    SessionOffers, SessionTokens, Tenant, ToolServer, ToolServerHost, TOOLS_LIST_TTL_MS,
 };
 
-fn memory() -> SharedMemoryStore {
-    let t = Arc::new(AtomicI64::new(1_000));
-    SharedMemoryStore::with_clock(Arc::new(move || t.fetch_add(1_000, Ordering::SeqCst)))
-}
-
-fn sharing(on: bool) -> SharingGate {
-    Arc::new(move |_| on)
+/// The memory tenant, there because the app always mounts it.
+fn memory(sharing: bool) -> Tenant {
+    memory_server::test_tenant(Arc::new(move |_| sharing))
 }
 
 fn navigation(on: bool) -> NavigationGate {
@@ -64,17 +60,9 @@ async fn serve(
     bridge: Arc<UiBridge>,
     nav: NavigationGate,
 ) -> ToolServer {
-    ToolServer::start_with(
-        memory(),
-        tokens,
-        Arc::new(SessionClocks::default()),
-        Arc::new(SessionReads::default()),
-        sharing(true),
-        Sources::default(),
-        vec![router(UiTools::new(bridge, nav))],
-    )
-    .await
-    .unwrap()
+    ToolServer::start(tokens, &[memory(true), tenant(UiTools::new(bridge, nav))])
+        .await
+        .unwrap()
 }
 
 async fn connect(url: &str, token: &str) -> Result<RunningService<RoleClient, ()>, String> {
@@ -249,52 +237,6 @@ async fn with_navigation_off_nothing_crosses_to_the_window() {
     client.cancel().await.ok();
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn an_unknown_or_revoked_token_is_refused_on_the_ui_path() {
-    let tokens = Arc::new(SessionTokens::default());
-    let (bridge, _) = answering_bridge(|_| UiReply {
-        ok: true,
-        result: None,
-        error: None,
-    });
-    let server = serve(tokens.clone(), bridge, navigation(true)).await;
-    assert!(connect(&server.url_at(UI_PATH), "not-a-token")
-        .await
-        .is_err());
-    let token = tokens.mint_with_ui("s1", "atlas-agent", "/p");
-    tokens.revoke("s1");
-    assert!(connect(&server.url_at(UI_PATH), &token).await.is_err());
-}
-
-/// One token opens both services: the memory tools keep working with the UI
-/// service mounted beside them.
-#[tokio::test(flavor = "multi_thread")]
-async fn one_session_token_opens_both_services() {
-    let tokens = Arc::new(SessionTokens::default());
-    let (bridge, _) = answering_bridge(|_| UiReply {
-        ok: true,
-        result: Some(json!({})),
-        error: None,
-    });
-    let server = serve(tokens.clone(), bridge, navigation(true)).await;
-    let project = std::env::temp_dir().join(format!("atlas-ui-server-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&project).unwrap();
-    let token = tokens.mint_with_ui("s1", "atlas-agent", &project.to_string_lossy());
-
-    let memory = connect(&server.url(), &token)
-        .await
-        .expect("the memory service admits the token");
-    let (err, text) = call(&memory, "memory_list", json!({})).await;
-    assert!(!err, "{text}");
-    let ui = connect(&server.url_at(UI_PATH), &token)
-        .await
-        .expect("the UI service admits the same token");
-    assert!(!call(&ui, "ui_state", json!({})).await.0);
-    memory.cancel().await.ok();
-    ui.cancel().await.ok();
-    let _ = std::fs::remove_dir_all(&project);
-}
-
 #[test]
 fn the_tool_list_carries_the_cache_fields_the_2026_07_28_spec_requires() {
     let list = serde_json::to_value(tools_list()).unwrap();
@@ -383,26 +325,20 @@ fn a_reply_reads_the_shape_the_window_sends() {
 
 // ── Handing the server to sessions ───────────────────────────────────────────
 
-async fn running_host() -> Arc<ToolServerHost> {
-    let host = Arc::new(ToolServerHost::new());
+/// A host with shared memory and navigation switched as given, and the
+/// offers handing its servers out.
+async fn offering(sharing: bool, nav: bool) -> (Arc<ToolServerHost>, SessionOffers) {
     let (bridge, _) = answering_bridge(|_| UiReply {
         ok: true,
         result: None,
         error: None,
     });
-    let server = ToolServer::start_with(
-        memory(),
-        host.tokens().clone(),
-        host.clocks().clone(),
-        host.reads().clone(),
-        sharing(true),
-        Sources::default(),
-        vec![router(UiTools::new(bridge, navigation(true)))],
-    )
-    .await
-    .unwrap();
-    host.adopt(server);
-    host
+    let host = ToolServerHost::running(vec![
+        memory(sharing),
+        tenant(UiTools::new(bridge, navigation(nav))),
+    ])
+    .await;
+    (host.clone(), SessionOffers::new(host))
 }
 
 fn session_request(ui_control: bool) -> SessionMcpRequest {
@@ -433,9 +369,7 @@ fn names(offer: &SessionMcpOffer) -> Vec<String> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_connection_with_ui_control_is_offered_both_servers_on_one_token() {
-    let host = running_host().await;
-    let offers =
-        SessionOffers::new(host.clone(), sharing(true)).with_ui(UiOffer::new(navigation(true)));
+    let (host, offers) = offering(true, true).await;
     let offer = offers.offer(&session_request(true));
     let got = entries(&offer);
     assert_eq!(names(&offer), ["atlas_memory", UI_SERVER_NAME]);
@@ -453,8 +387,7 @@ async fn a_connection_with_ui_control_is_offered_both_servers_on_one_token() {
 /// The ACP case: same agent id, only the connection's flag differs.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_connection_without_ui_control_is_offered_memory_only() {
-    let host = running_host().await;
-    let offers = SessionOffers::new(host, sharing(true)).with_ui(UiOffer::new(navigation(true)));
+    let (_host, offers) = offering(true, true).await;
     assert_eq!(
         names(&offers.offer(&session_request(false))),
         ["atlas_memory"]
@@ -463,8 +396,7 @@ async fn a_connection_without_ui_control_is_offered_memory_only() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn with_navigation_off_only_memory_is_offered() {
-    let host = running_host().await;
-    let offers = SessionOffers::new(host, sharing(true)).with_ui(UiOffer::new(navigation(false)));
+    let (_host, offers) = offering(true, false).await;
     assert_eq!(
         names(&offers.offer(&session_request(true))),
         ["atlas_memory"]
@@ -473,69 +405,11 @@ async fn with_navigation_off_only_memory_is_offered() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn with_sharing_off_and_navigation_on_only_ui_is_offered() {
-    let host = running_host().await;
-    let offers = SessionOffers::new(host, sharing(false)).with_ui(UiOffer::new(navigation(true)));
+    let (_host, offers) = offering(false, true).await;
     assert_eq!(
         names(&offers.offer(&session_request(true))),
         [UI_SERVER_NAME]
     );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn without_the_ui_half_the_offer_is_memory_only_as_before() {
-    let host = running_host().await;
-    let offers = SessionOffers::new(host, sharing(true));
-    assert_eq!(
-        names(&offers.offer(&session_request(true))),
-        ["atlas_memory"]
-    );
-}
-
-#[test]
-fn the_decision_says_whether_the_ui_server_is_included_and_why_not() {
-    use UiOfferDecision::*;
-    assert_eq!(UiOfferDecision::decide(true, true, true, true), Included);
-    assert_eq!(
-        UiOfferDecision::decide(false, true, true, true),
-        Omitted("agent did not advertise mcpCapabilities.http")
-    );
-    assert_eq!(
-        UiOfferDecision::decide(true, false, true, true),
-        Omitted("connection does not carry UI control")
-    );
-    assert_eq!(
-        UiOfferDecision::decide(true, true, false, true),
-        Omitted("agent navigation is off in Settings")
-    );
-    assert_eq!(
-        UiOfferDecision::decide(true, true, true, false),
-        Omitted("ui tool server is not running")
-    );
-}
-
-#[test]
-fn each_decision_is_one_log_line_naming_the_agent_its_capabilities_and_the_outcome() {
-    assert_eq!(
-        UiOfferDecision::Included.log_line("atlas-agent", true, true),
-        "ui tool server offer: agent=atlas-agent http_mcp=true ui_control=true ui_server=included",
-    );
-    assert_eq!(
-        UiOfferDecision::decide(true, false, true, true).log_line("claude-code", true, false),
-        "ui tool server offer: agent=claude-code http_mcp=true ui_control=false ui_server=omitted reason=\"connection does not carry UI control\"",
-    );
-}
-
-#[test]
-fn the_setting_is_not_read_for_a_connection_that_cannot_use_the_server() {
-    let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let counted = reads.clone();
-    let ui = UiOffer::new(Arc::new(move |_: &str| {
-        counted.fetch_add(1, Ordering::SeqCst);
-        true
-    }));
-    ui.decide(true, false, "/p", true);
-    ui.decide(false, true, "/p", true);
-    assert_eq!(reads.load(Ordering::SeqCst), 0);
 }
 
 // ── Who the UI service admits (0.3.4 hardening) ──────────────────────────────
@@ -549,26 +423,13 @@ async fn recording_host(
     SessionOffers,
     Arc<Mutex<Vec<UiRequest>>>,
 ) {
-    let host = Arc::new(ToolServerHost::new());
     let (bridge, asked) = answering_bridge(|_| UiReply {
         ok: true,
         result: Some(json!({})),
         error: None,
     });
-    let server = ToolServer::start_with(
-        memory(),
-        host.tokens().clone(),
-        host.clocks().clone(),
-        host.reads().clone(),
-        sharing(true),
-        Sources::default(),
-        vec![router(UiTools::new(bridge, nav.clone()))],
-    )
-    .await
-    .unwrap();
-    host.adopt(server);
-    let offers = SessionOffers::new(host.clone(), sharing(true)).with_ui(UiOffer::new(nav));
-    (host, offers, asked)
+    let host = ToolServerHost::running(vec![memory(true), tenant(UiTools::new(bridge, nav))]).await;
+    (host.clone(), SessionOffers::new(host), asked)
 }
 
 /// ADR-0012: an ACP connection never gets `atlas_ui`. The listener's one token
@@ -648,39 +509,6 @@ async fn switching_navigation_off_refuses_the_next_call_of_a_connected_client() 
     );
     assert_eq!(asked.lock().len(), 2, "the refused call never crossed");
     client.cancel().await.ok();
-}
-
-/// No `Authorization`, or anything but `Bearer <live token>`, is a 401 before
-/// any MCP handling.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_missing_or_non_bearer_authorization_is_refused_on_the_ui_path() {
-    let tokens = Arc::new(SessionTokens::default());
-    let (bridge, _) = answering_bridge(|_| UiReply {
-        ok: true,
-        result: None,
-        error: None,
-    });
-    let server = serve(tokens.clone(), bridge, navigation(true)).await;
-    let token = tokens.mint_with_ui("s1", "atlas-agent", "/p");
-    let init = json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
-        "protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": { "name": "t", "version": "0" } } });
-    let http = reqwest::Client::new();
-    for auth in [
-        None,
-        Some(format!("Basic {token}")),
-        Some(token.clone()),
-        Some("Bearer ".to_string()),
-    ] {
-        let mut req = http
-            .post(server.url_at(UI_PATH))
-            .header("Accept", "application/json, text/event-stream")
-            .json(&init);
-        if let Some(auth) = &auth {
-            req = req.header("Authorization", auth);
-        }
-        let status = req.send().await.unwrap().status();
-        assert_eq!(status, reqwest::StatusCode::UNAUTHORIZED, "{auth:?}");
-    }
 }
 
 /// Two calls in flight at once each get their own answer: the bridge pairs

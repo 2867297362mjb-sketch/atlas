@@ -42,12 +42,10 @@ use std::sync::Arc;
 
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::{
-    CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock as Content,
-    JsonObject, ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
+    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock as Content, JsonObject,
+    ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
 };
 use rmcp::service::{RequestContext, RoleServer};
-use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
-use rmcp::transport::{StreamableHttpServerConfig, StreamableHttpService};
 use rmcp::ErrorData as McpError;
 use serde_json::{json, Value};
 
@@ -57,7 +55,9 @@ use super::offers::SessionOrgs;
 use super::resolve::{self, OrgLink, Resolution};
 use super::{OrgAccessGate, OrgScope, ORG_PATH, ORG_SERVER_NAME};
 use crate::auth::Role;
-use crate::commands::tool_servers::{Grant, TOOLS_LIST_TTL_MS};
+use crate::commands::tool_servers::{
+    self, grant_of, require_grant, Audience, Grant, OutwardCalls, Tenant,
+};
 use crate::commands::ui_server::UiBridge;
 use activity::ActivityArgs;
 #[cfg(test)]
@@ -327,13 +327,10 @@ pub(super) fn tool_names(admin: bool) -> Vec<String> {
         .collect()
 }
 
-/// The `tools/list` answer, with the cache fields MCP 2026-07-28 requires
-/// (see the memory tool server's `tools_list`). Private-scoped: it differs by
-/// the caller's role.
+/// The `tools/list` answer. It differs by the caller's role, and the host
+/// scopes every list to its session.
 pub(super) fn tools_list(admin: bool) -> ListToolsResult {
-    ListToolsResult::with_all_items(tools_for(admin))
-        .with_ttl_ms(TOOLS_LIST_TTL_MS)
-        .with_cache_scope(CacheScope::Private)
+    tool_servers::tools_list(tools_for(admin))
 }
 
 fn tool_error(message: impl Into<String>) -> CallToolResult {
@@ -951,15 +948,6 @@ impl OrgTools {
     }
 }
 
-/// The session's grant, as the listener's token check left it on the request.
-fn grant_of(context: &RequestContext<RoleServer>) -> Option<Grant> {
-    context
-        .extensions
-        .get::<axum::http::request::Parts>()
-        .and_then(|parts| parts.extensions.get::<Grant>())
-        .cloned()
-}
-
 impl ServerHandler for OrgTools {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
@@ -982,19 +970,47 @@ impl ServerHandler for OrgTools {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
-        let grant = grant_of(&context)
-            .ok_or_else(|| McpError::invalid_request("no session token", None))?;
+        let grant = require_grant(&context)?;
         Ok(self.dispatch(grant, request).await.into())
     }
 }
 
-/// The service, routed at [`ORG_PATH`], for the tool-server listener to merge
-/// in front of its token check.
-pub fn router(tools: OrgTools) -> axum::Router {
-    let service = StreamableHttpService::new(
-        move || Ok(tools.clone()),
-        Arc::new(LocalSessionManager::default()),
-        StreamableHttpServerConfig::default(),
-    );
-    axum::Router::new().nest_service(ORG_PATH, service)
+/// The organisation tool server's outward actions, for the host to declare
+/// and to route a waiting call's two questions to (ADR-0014).
+impl OutwardCalls for OrgTools {
+    fn ask_first(&self) -> &'static [&'static str] {
+        OUTWARD_TOOLS
+    }
+
+    /// A message asks on every call: no "Allow for this session" on its card.
+    fn ask_every_time(&self) -> &'static [&'static str] {
+        EVERY_TIME_TOOLS
+    }
+
+    fn describe(
+        &self,
+        grant: Grant,
+        tool: String,
+        arguments: Value,
+    ) -> futures::future::BoxFuture<'static, Option<atlas_agent_servers::CallDescription>> {
+        let tools = self.clone();
+        Box::pin(async move { tools.describe(&grant, &tool, &arguments).await })
+    }
+
+    fn approved(&self, call: atlas_agent_servers::CallToApprove<'_>) {
+        self.consent().record(call);
+    }
+}
+
+/// The organisation tool server as a tenant of the tool server host: only
+/// for a connection that carries organisation access, while the user lets the
+/// agent act in the organisation, is signed in, and the session's Project is
+/// bound to a Workspace ([`admission`](super::offers::admission)). Its
+/// outward actions ask first.
+pub fn tenant(tools: OrgTools) -> Tenant {
+    let admit = super::offers::admission(tools.gate.clone(), tools.orgs.clone());
+    Tenant::new(ORG_SERVER_NAME, ORG_PATH, tools.clone())
+        .only_for(Audience::OrgAccess)
+        .admitted_by(admit)
+        .asking_first(Arc::new(tools))
 }

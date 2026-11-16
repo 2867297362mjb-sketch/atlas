@@ -1,12 +1,11 @@
 //! The **organisation tool server**: Atlas Agent's way to read the
 //! organisation a session's Project belongs to, and to act in it as the
-//! signed-in user (ADR-0014). The third MCP service on the memory tool
-//! server's loopback listener, beside the UI tool server, behind the same
-//! token check and on the same per-session token — the token store binds one
-//! token per session, so a second minted token would revoke the first.
+//! signed-in user (ADR-0014). One of the tenants of the tool server host
+//! ([`tool_servers`](crate::commands::tool_servers)), which owns the
+//! listener, the session's token and how the server reaches the agent.
 //!
 //! - **Offered only to a connection that carries organisation access**
-//!   ([`offers`]): today the in-process native connection, never an ACP one,
+//!   ([`tenant`]): today the in-process native connection, never an ACP one,
 //!   and never decided by agent identity. Also only while the user lets the
 //!   agent act in the organisation, is signed in, and the session's Project is
 //!   bound to a Workspace.
@@ -65,8 +64,9 @@ mod audit;
 mod cloud;
 mod offers;
 mod resolve;
+// Its fakes also stand in for the organisation in the tool server host's tests.
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 mod tools;
 
 use std::sync::Arc;
@@ -82,14 +82,14 @@ pub use cloud::{
     RecordedSession, SentMessage, TimelineQuery,
 };
 #[allow(unused_imports)]
-pub use offers::{OrgOffer, OrgOfferDecision, SessionOrgs};
+pub use offers::SessionOrgs;
 pub use resolve::OrgLink;
 /// The shape every organisation id is checked for before it is used — also
 /// by the UI tool server, for the ids that open a Space page.
 pub(crate) use tools::is_id as is_org_id;
 #[allow(unused_imports)]
 pub use tools::{
-    router, OrgTools, ADMIN_TOOLS, EVERY_TIME_TOOLS, INSTRUCTIONS, OUTWARD_TOOLS, WINDOW_TOOLS,
+    tenant, OrgTools, ADMIN_TOOLS, EVERY_TIME_TOOLS, INSTRUCTIONS, OUTWARD_TOOLS, WINDOW_TOOLS,
 };
 
 /// The name the server goes by in the agent's MCP configuration; its tools

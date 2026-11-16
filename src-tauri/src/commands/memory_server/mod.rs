@@ -1,18 +1,12 @@
 //! The **memory tool server**: shared memory as MCP tools, served by the
-//! Tauri backend itself over streamable HTTP on loopback. It is the only way
-//! memory reaches an agent — nothing is prepended to a prompt (ADR-0010).
+//! Tauri backend itself. It is the only way memory reaches an agent — nothing
+//! is prepended to a prompt (ADR-0010). One of the tenants of the tool server
+//! host ([`tool_servers`](crate::commands::tool_servers)), which owns the
+//! listener, the session's token and how the server reaches each agent.
 //!
-//! - **One server per app**, bound to `127.0.0.1` on a port the OS picks. The
-//!   app starts it at setup on the async runtime, so the main thread never
-//!   waits on it ([`ToolServerHost::start`]).
-//! - **One bearer token per (session, scope)** ([`tokens`]): minted when a
-//!   session starts, revoked when it ends, checked on every request. The
-//!   token says who is calling and which scope's record to open.
-//! - **Handed to every agent** ([`offers`]): every ACP agent as a stdio
-//!   server (this binary's `mcp-bridge`, ADR-0019), the token in a private
-//!   file the entry names and never in the entry itself, which an adapter may
-//!   put on a command line (ADR-0020); the native agent over HTTP through its
-//!   thread's engine config.
+//! - **Offered to every agent** in a project with shared memory on
+//!   ([`tenant`]). The session's grant says who is calling and which scope's
+//!   record to open.
 //! - **Ten tools** ([`tools`]), read first, write last: `memory_briefing`,
 //!   `memory_changes`, `memory_search`, `memory_get`, `memory_list`,
 //!   `memory_history`, `memory_why`, `memory_remember`, `memory_feedback`,
@@ -33,17 +27,18 @@ mod briefing;
 mod tests;
 mod tools;
 
-// The module's surface. The app wires `ToolServerHost`, `SessionOffers`
-// and the source types; the rest is reached through the host or by the tests.
+// The module's surface. The app builds `MemoryTools` from the source types
+// and registers `tenant` on the tool server host; the rest is reached by the
+// tests.
 #[allow(unused_imports)]
 pub use briefing::{SessionClocks, SessionReads};
-pub(crate) use tools::MemoryTools;
 #[allow(unused_imports)]
 pub use tools::{
-    Bootstrap, BootstrapSource, CitationCheck, IndexDoc, IndexEvict, IndexSearch, INSTRUCTIONS,
+    tenant, Bootstrap, BootstrapSource, CitationCheck, IndexDoc, IndexEvict, IndexSearch,
+    MemoryTools, INSTRUCTIONS,
 };
 
-/// The path the MCP endpoint is served at.
+/// Where the service is mounted on the tool-server listener.
 pub const MCP_PATH: &str = "/mcp";
 
 /// The name the server goes by in every agent's MCP configuration.
@@ -73,4 +68,17 @@ pub struct Sources {
     /// Checks a memory's code citations (M3). Without it the cited files are
     /// read directly, with no symbol lookup for moved code.
     pub check: Option<CitationCheck>,
+}
+
+/// The memory tenant over an empty record with no sources, for the tests of
+/// the host and of the other tenants, which need it only to be there.
+#[cfg(test)]
+pub(crate) fn test_tenant(gate: SharingGate) -> crate::commands::tool_servers::Tenant {
+    tenant(MemoryTools::new(
+        crate::commands::shared_memory::SharedMemoryStore::default(),
+        gate,
+        Default::default(),
+        Default::default(),
+        Sources::default(),
+    ))
 }

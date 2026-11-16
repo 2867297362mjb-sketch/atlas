@@ -31,8 +31,8 @@ use atlas_memory::retrieve::{record_query_terms, QueryTerms};
 use futures::future::BoxFuture;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::{
-    CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock as Content,
-    JsonObject, ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
+    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock as Content, JsonObject,
+    ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
 };
 use rmcp::service::{RequestContext, RoleServer};
 use rmcp::ErrorData as McpError;
@@ -40,11 +40,11 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::briefing::{self, Checked, SessionClocks, SessionReads};
-use super::{SharingGate, Sources};
+use super::{SharingGate, Sources, MCP_PATH, MEMORY_SERVER_NAME};
 use crate::commands::memory_capture::{self, CaptureReader};
 use crate::commands::memory_pack::{Handoff, PackEntry};
 use crate::commands::shared_memory::{self, EvidenceArg, SharedMemoryStore, Writer};
-use crate::commands::tool_servers::{Grant, TOOLS_LIST_TTL_MS};
+use crate::commands::tool_servers::{self, require_grant, Grant, Tenant};
 
 /// What the server tells every agent about itself: the protocol for a memory
 /// nothing pushes. Claude Code shows it as the server's instructions; the
@@ -380,16 +380,8 @@ pub(super) fn tool_names() -> Vec<&'static str> {
 }
 
 /// The `tools/list` answer.
-///
-/// MCP 2026-07-28 makes `ttlMs` and `cacheScope` required on list results,
-/// and rmcp leaves them out unless set. Claude Code negotiates that version
-/// and rejects a list without them, so it connected, failed `tools/list`
-/// three times and dropped every memory tool. `private`: each answer is
-/// served under one session's token.
 pub(super) fn tools_list() -> ListToolsResult {
-    ListToolsResult::with_all_items(tools())
-        .with_ttl_ms(TOOLS_LIST_TTL_MS)
-        .with_cache_scope(CacheScope::Private)
+    tool_servers::tools_list(tools())
 }
 
 // ── Arguments ────────────────────────────────────────────────────────────────
@@ -738,7 +730,7 @@ fn switched_off(name: &str) -> CallToolResult {
 // ── The handler ──────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
-pub(crate) struct MemoryTools {
+pub struct MemoryTools {
     memory: SharedMemoryStore,
     gate: SharingGate,
     clocks: Arc<SessionClocks>,
@@ -747,7 +739,7 @@ pub(crate) struct MemoryTools {
 }
 
 impl MemoryTools {
-    pub(crate) fn new(
+    pub fn new(
         memory: SharedMemoryStore,
         gate: SharingGate,
         clocks: Arc<SessionClocks>,
@@ -1300,12 +1292,16 @@ impl ServerHandler for MemoryTools {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
-        let grant = context
-            .extensions
-            .get::<axum::http::request::Parts>()
-            .and_then(|parts| parts.extensions.get::<Grant>())
-            .cloned()
-            .ok_or_else(|| McpError::invalid_request("no session token", None))?;
+        let grant = require_grant(&context)?;
         Ok(self.dispatch(grant, request).await.into())
     }
+}
+
+/// The memory tool server as a tenant of the tool server host: for every
+/// agent, in a project with shared memory on (the tools would hold nothing
+/// otherwise).
+pub fn tenant(tools: MemoryTools) -> Tenant {
+    let gate = tools.gate.clone();
+    Tenant::new(MEMORY_SERVER_NAME, MCP_PATH, tools)
+        .gated_by(gate, "shared memory is off for this project")
 }

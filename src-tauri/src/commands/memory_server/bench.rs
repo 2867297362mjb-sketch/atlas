@@ -91,12 +91,18 @@ async fn world(label: &str) -> World {
         Sources::default(),
     )
     .await;
-    let a = connect(&server.url(), &tokens.mint("s-a", "claude-code", &project))
-        .await
-        .expect("agent a connects");
-    let b = connect(&server.url(), &tokens.mint("s-b", "codex", &project))
-        .await
-        .expect("agent b connects");
+    let a = connect(
+        &server.url_at(super::MCP_PATH),
+        &tokens.mint("s-a", "claude-code", &project),
+    )
+    .await
+    .expect("agent a connects");
+    let b = connect(
+        &server.url_at(super::MCP_PATH),
+        &tokens.mint("s-b", "codex", &project),
+    )
+    .await
+    .expect("agent b connects");
     World {
         memory,
         project,
