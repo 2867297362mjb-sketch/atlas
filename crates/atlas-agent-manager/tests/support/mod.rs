@@ -15,16 +15,14 @@
 pub mod spawning;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use agent_client_protocol::schema::v1 as acp;
 use anyhow::{anyhow, Result};
-use atlas_acp_thread::{
-    AcpThread, AcpThreadEvent, AcpThreadHandle, AgentConnection, AgentId, EventStream, LoadError,
-};
+use atlas_acp_thread::test_support::{FakeConnection, FakeConnectionBuilder, FakeHandle};
+use atlas_acp_thread::{AcpThreadEvent, AgentConnection, AgentId, LoadError};
 use atlas_agent_manager::{
     Agent, AgentCatalog, AgentConnectedState, AgentConnectionEntry, AgentManager,
 };
@@ -227,26 +225,10 @@ pub struct TestServer {
     pub attempts: Arc<AtomicUsize>,
     /// Connect futures dropped before they resolved — a cancelled connect.
     pub connects_cancelled: Arc<AtomicUsize>,
-    /// Connections handed out and not yet dropped.
-    pub live_connections: Arc<AtomicUsize>,
-    /// Sessions opened, so each gets an id of its own.
-    sessions_opened: Arc<AtomicUsize>,
-    /// Prompts that reached the connection, so a test can wait for a turn to be
-    /// genuinely in flight before starting the one that supersedes it.
-    pub prompts_started: Arc<AtomicUsize>,
-    /// Prompt answers, in the order the test wants them delivered. An empty
-    /// queue means "answer immediately with `EndTurn`".
-    prompts: Arc<Mutex<std::collections::VecDeque<oneshot::Receiver<Result<acp::StopReason>>>>>,
-    /// One id for every session this server's connections mint, so a test can
-    /// drive the collision case.
-    fixed_session_id: Option<String>,
-    /// Every session's event stream, kept so a test can read what the thread
-    /// announced rather than inferring it from the thread's final state.
-    events: Arc<Mutex<HashMap<acp::SessionId, EventStream<AcpThreadEvent>>>>,
-    /// `None` until [`TestServer::advertise_close`]: its connections then
-    /// advertise `session/close`, and every id they are asked to close lands
-    /// here.
-    closes: Arc<Mutex<Option<Vec<String>>>>,
+    /// The script every connection this server hands out shares: sessions
+    /// opened, prompts received and their queued answers, closes, and each
+    /// session's event stream all outlive any one connection.
+    fake: FakeHandle,
 }
 
 impl TestServer {
@@ -259,56 +241,52 @@ impl TestServer {
     }
 
     pub fn with_behaviour(id: &str, behaviour: ConnectBehaviour) -> Arc<Self> {
-        Arc::new(Self {
-            id: AgentId::new(id),
-            behaviour: Mutex::new(behaviour),
-            attempts: Arc::new(AtomicUsize::new(0)),
-            connects_cancelled: Arc::new(AtomicUsize::new(0)),
-            live_connections: Arc::new(AtomicUsize::new(0)),
-            sessions_opened: Arc::new(AtomicUsize::new(0)),
-            prompts_started: Arc::new(AtomicUsize::new(0)),
-            prompts: Arc::new(Mutex::new(Default::default())),
-            fixed_session_id: None,
-            events: Arc::new(Mutex::new(HashMap::new())),
-            closes: Arc::default(),
-        })
+        Self::over(id, behaviour, Self::script(id))
     }
 
     /// Every session this server's connections open answers to `session_id`.
     /// The collision ATL-230 describes, made reproducible.
     pub fn with_fixed_session_id(id: &str, session_id: &str) -> Arc<Self> {
+        Self::over(
+            id,
+            ConnectBehaviour::Immediate,
+            Self::script(id).session_id(session_id),
+        )
+    }
+
+    fn script(id: &str) -> FakeConnectionBuilder {
+        FakeConnection::builder().agent(id).version("1.0.0")
+    }
+
+    fn over(id: &str, behaviour: ConnectBehaviour, script: FakeConnectionBuilder) -> Arc<Self> {
         Arc::new(Self {
             id: AgentId::new(id),
-            behaviour: Mutex::new(ConnectBehaviour::Immediate),
+            behaviour: Mutex::new(behaviour),
             attempts: Arc::new(AtomicUsize::new(0)),
             connects_cancelled: Arc::new(AtomicUsize::new(0)),
-            live_connections: Arc::new(AtomicUsize::new(0)),
-            sessions_opened: Arc::new(AtomicUsize::new(0)),
-            prompts_started: Arc::new(AtomicUsize::new(0)),
-            prompts: Arc::new(Mutex::new(Default::default())),
-            fixed_session_id: Some(session_id.to_string()),
-            events: Arc::new(Mutex::new(HashMap::new())),
-            closes: Arc::default(),
+            fake: script.handle(),
         })
     }
 
     /// Advertise `session/close` on this server's connections, live ones
     /// included.
     pub fn advertise_close(&self) {
-        self.closes.lock().unwrap().get_or_insert_with(Vec::new);
+        self.fake.advertise_close();
     }
 
     /// Every session id a connection was asked to close, in order.
     pub fn closes(&self) -> Vec<String> {
-        self.closes.lock().unwrap().clone().unwrap_or_default()
+        self.fake.closes()
     }
 
     pub fn set_behaviour(&self, behaviour: ConnectBehaviour) {
         *self.behaviour.lock().unwrap() = behaviour;
     }
 
+    /// Prompts that reached a connection, so a test can wait for a turn to be
+    /// genuinely in flight before starting the one that supersedes it.
     pub fn prompts_started(&self) -> usize {
-        self.prompts_started.load(Ordering::SeqCst)
+        self.fake.prompts_started()
     }
 
     pub fn attempts(&self) -> usize {
@@ -319,31 +297,23 @@ impl TestServer {
         self.connects_cancelled.load(Ordering::SeqCst)
     }
 
+    /// Connections handed out and not yet dropped.
     pub fn live_connections(&self) -> usize {
-        self.live_connections.load(Ordering::SeqCst)
+        self.fake.live_connections()
     }
 
     /// Everything a session's thread has announced since the last call.
     ///
     /// Drains what is buffered; the stream stays put for the next call.
     pub fn drain_events(&self, session_id: &acp::SessionId) -> Vec<AcpThreadEvent> {
-        let mut streams = self.events.lock().unwrap();
-        let Some(stream) = streams.get_mut(session_id) else {
-            return Vec::new();
-        };
-        let mut drained = Vec::new();
-        while let Ok(event) = stream.try_recv() {
-            drained.push(event);
-        }
-        drained
+        self.fake.drain_events(session_id)
     }
 
     /// Queue an answer the test delivers by hand. The returned sender closes
-    /// the prompt it is paired with, in queue order.
+    /// the prompt it is paired with, in queue order. With nothing queued a
+    /// prompt answers immediately with `EndTurn`.
     pub fn queue_prompt(&self) -> oneshot::Sender<Result<acp::StopReason>> {
-        let (tx, rx) = oneshot::channel();
-        self.prompts.lock().unwrap().push_back(rx);
-        tx
+        self.fake.queue_prompt()
     }
 }
 
@@ -363,14 +333,7 @@ impl AgentServer for TestServer {
         // on first poll would never exist to say so.
         let probe = CancelProbe::new(self.connects_cancelled.clone());
         let behaviour = self.behaviour.lock().unwrap().clone();
-        let id = self.id.clone();
-        let live = self.live_connections.clone();
-        let sessions_opened = self.sessions_opened.clone();
-        let prompts_started = self.prompts_started.clone();
-        let prompts = self.prompts.clone();
-        let fixed_session_id = self.fixed_session_id.clone();
-        let events = self.events.clone();
-        let closes = self.closes.clone();
+        let fake = self.fake.clone();
 
         async move {
             // Dropped-before-resolved is the signal ATL-228 turns on, so the
@@ -389,127 +352,13 @@ impl AgentServer for TestServer {
                 }
             }
             probe.finish();
-            live.fetch_add(1, Ordering::SeqCst);
-            Ok(Arc::new(TestConnection {
-                id,
-                live,
-                sessions_opened,
-                prompts_started,
-                prompts,
-                fixed_session_id,
-                events,
-                closes,
-            }) as Arc<dyn AgentConnection>)
+            Ok(fake.connection() as Arc<dyn AgentConnection>)
         }
         .boxed()
     }
 
     fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
         self
-    }
-}
-
-pub struct TestConnection {
-    id: AgentId,
-    live: Arc<AtomicUsize>,
-    sessions_opened: Arc<AtomicUsize>,
-    prompts_started: Arc<AtomicUsize>,
-    prompts: Arc<Mutex<std::collections::VecDeque<oneshot::Receiver<Result<acp::StopReason>>>>>,
-    fixed_session_id: Option<String>,
-    events: Arc<Mutex<HashMap<acp::SessionId, EventStream<AcpThreadEvent>>>>,
-    closes: Arc<Mutex<Option<Vec<String>>>>,
-}
-
-impl Drop for TestConnection {
-    fn drop(&mut self) {
-        self.live.fetch_sub(1, Ordering::SeqCst);
-    }
-}
-
-impl AgentConnection for TestConnection {
-    fn agent_id(&self) -> AgentId {
-        self.id.clone()
-    }
-
-    fn telemetry_id(&self) -> Arc<str> {
-        self.id.0.clone()
-    }
-
-    fn agent_version(&self) -> Option<Arc<str>> {
-        Some("1.0.0".into())
-    }
-
-    fn new_session(
-        self: Arc<Self>,
-        work_dirs: Vec<PathBuf>,
-    ) -> BoxFuture<'static, Result<AcpThreadHandle>> {
-        let nth = self.sessions_opened.fetch_add(1, Ordering::SeqCst);
-        let session_id = match &self.fixed_session_id {
-            Some(fixed) => acp::SessionId::new(fixed.clone()),
-            None => acp::SessionId::new(format!("session-{}-{nth}", self.id)),
-        };
-        async move {
-            // The receiver is kept rather than dropped, so a test can assert on
-            // what the thread announced — `Stopped` in particular, which is the
-            // event the whole `TurnFinished` chain hangs off.
-            let (sink, stream) = atlas_acp_thread::event_channel();
-            self.events
-                .lock()
-                .unwrap()
-                .insert(session_id.clone(), stream);
-            let thread = AcpThread::new(
-                session_id,
-                self.clone() as Arc<dyn AgentConnection>,
-                work_dirs,
-                None,
-                sink,
-            );
-            Ok(Arc::new(Mutex::new(thread)) as AcpThreadHandle)
-        }
-        .boxed()
-    }
-
-    fn auth_methods(&self) -> &[acp::AuthMethod] {
-        &[]
-    }
-
-    fn authenticate(&self, _method: acp::AuthMethodId) -> BoxFuture<'static, Result<()>> {
-        async { Ok(()) }.boxed()
-    }
-
-    fn prompt(
-        &self,
-        _params: acp::PromptRequest,
-    ) -> BoxFuture<'static, Result<acp::PromptResponse>> {
-        self.prompts_started.fetch_add(1, Ordering::SeqCst);
-        let queued = self.prompts.lock().unwrap().pop_front();
-        async move {
-            match queued {
-                // The test decides when this turn comes back, and with what.
-                Some(rx) => match rx.await {
-                    Ok(result) => result.map(acp::PromptResponse::new),
-                    Err(_) => Err(anyhow!("the test dropped this turn's answer")),
-                },
-                None => Ok(acp::PromptResponse::new(acp::StopReason::EndTurn)),
-            }
-        }
-        .boxed()
-    }
-
-    fn cancel(&self, _session_id: &acp::SessionId) {}
-
-    fn supports_close_session(&self) -> bool {
-        self.closes.lock().unwrap().is_some()
-    }
-
-    fn close_session(
-        self: Arc<Self>,
-        session_id: acp::SessionId,
-    ) -> BoxFuture<'static, Result<()>> {
-        if let Some(closes) = self.closes.lock().unwrap().as_mut() {
-            closes.push(session_id.to_string());
-        }
-        async { Ok(()) }.boxed()
     }
 }
 

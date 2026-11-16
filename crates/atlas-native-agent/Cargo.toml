@@ -88,6 +88,8 @@ atlas-engine-linux-sandbox = { workspace = true }
 atlas-engine-sandboxing = { workspace = true }
 
 [dev-dependencies]
+# The shared scripted `AgentConnection`; the feature is for tests only.
+atlas-acp-thread = { path = "../atlas-acp-thread", features = ["test-support"] }
 async-trait = "0.1"
 # The Linux sandbox helper, for tests only.
 #

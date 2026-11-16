@@ -767,6 +767,7 @@ version = "0.1.0"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
+ "atlas-acp-thread",
  "atlas-terminal",
  "chrono",
  "futures",
@@ -877,11 +878,9 @@ dependencies = [
 name = "atlas-agent-wire"
 version = "0.1.0"
 dependencies = [
- "atlas-bus",
  "chrono",
  "serde",
  "serde_json",
- "tokio",
  "ts-rs",
  "uuid",
 ]
@@ -903,10 +902,6 @@ dependencies = [
 [[package]]
 name = "atlas-bus"
 version = "0.1.0"
-dependencies = [
- "tokio",
- "tracing",
-]
 
 [[package]]
 name = "atlas-checkpoint"

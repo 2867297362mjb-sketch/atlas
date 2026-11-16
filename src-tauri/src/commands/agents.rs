@@ -66,10 +66,8 @@ use uuid::Uuid;
 ///
 /// The sink body is an ordered [`OutboundPipeline`] of small, independently
 /// testable middleware (window broadcast → analytics → capture → transcript →
-/// memory ingest) rather than one monolithic `emit`. The projector also
-/// publishes every delta to an in-process broadcast (`projector.subscribe()`)
-/// before reaching this sink, so a cloud streamer can tap the same stream
-/// without touching any of this.
+/// memory ingest) rather than one monolithic `emit`. An in-process consumer
+/// is a tap on the last stage, not a subscription beside the pipeline.
 pub struct TauriDeltaSink {
     inner: Arc<SinkInner>,
 }
@@ -106,9 +104,10 @@ impl TauriDeltaSink {
             .with(Arc::new(BroadcastMiddleware { app: app.clone() }))
             .with(Arc::new(AnalyticsMiddleware { app: app.clone() }))
             .with(Arc::new(KeepAwakeMiddleware { app: app.clone() }))
-            // Session capture lives here rather than on the event bus because
-            // the bus drops events for a lagging subscriber, and a dropped event
-            // is a turn missing from the permanent record. This stage only
+            // Session capture is a stage here rather than a subscriber to a
+            // broadcast because a broadcast drops events for a lagging
+            // subscriber, and a dropped event is a turn missing from the
+            // permanent record. This stage only
             // enqueues; all disk work happens on the capture worker thread.
             .with(Arc::new(super::capture::CaptureMiddleware {
                 app: app.clone(),

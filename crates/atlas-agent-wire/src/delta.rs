@@ -1,8 +1,7 @@
 //! Wire shape for session-scoped delta events (additive-only; see [`crate::types`]).
 //!
 //! One change to one session, routed through a [`DeltaSink`] the host provides
-//! (typically a window-event emitter) and fanned out on an [`EventBus`] for
-//! in-process subscribers.
+//! (typically a window-event emitter).
 //!
 //! They are produced by projecting thread events (`atlas-agent-delta`). See
 //! [`crate::types`] for why they live in a crate of their own.
@@ -12,8 +11,6 @@ use std::sync::Arc;
 use serde::Serialize;
 use ts_rs::TS;
 
-use atlas_bus::EventBus;
-use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::types::{
@@ -300,49 +297,24 @@ pub trait DeltaSink: Send + Sync + 'static {
     fn emit(&self, envelope: SessionDeltaEnvelope);
 }
 
-/// The single outbound fan-out point for every session delta.
+/// The single outbound point for every session delta.
 ///
 /// The manager and the per-session worker both funnel their emits through one
-/// `Emitter` so there is exactly one place that sees every event. It publishes
-/// to the global [`EventBus`] (the cloud-ready seam — a UI fan-out task and, in
-/// future, a cloud streamer subscribe to it) and then delivers to the host
-/// [`DeltaSink`] (window emit + telemetry + memory-ingest). Publishing to the
-/// bus is non-blocking and drops for lagging subscribers, so the streaming hot
-/// path is never held up by a slow consumer.
+/// `Emitter` so there is exactly one place that sees every event, and it hands
+/// each to the host [`DeltaSink`] (window emit, telemetry, capture,
+/// memory-ingest). An in-process consumer is a stage of that sink's pipeline,
+/// not a subscription here.
 pub struct Emitter {
     sink: Arc<dyn DeltaSink>,
-    bus: EventBus<SessionDeltaEnvelope>,
 }
 
 impl Emitter {
     pub fn new(sink: Arc<dyn DeltaSink>) -> Self {
-        Self {
-            sink,
-            bus: EventBus::new(),
-        }
+        Self { sink }
     }
 
-    /// The global event bus. Subscribe here for an in-process (or cloud) tap on
-    /// every delta without going through the host sink.
-    pub fn bus(&self) -> &EventBus<SessionDeltaEnvelope> {
-        &self.bus
-    }
-
-    /// Convenience: a fresh subscription to the bus.
-    pub fn subscribe(&self) -> broadcast::Receiver<SessionDeltaEnvelope> {
-        self.bus.subscribe()
-    }
-
-    /// Fan one delta out to the bus and the host sink.
+    /// Hand one delta to the host sink.
     pub fn emit(&self, envelope: SessionDeltaEnvelope) {
-        // Bus first (cheap, non-blocking) so an in-process/cloud subscriber sees
-        // the event even if the host sink does heavier work. Guarded: with no
-        // subscribers (the production default — only opt-in taps attach), the
-        // deep clone (full message bodies, full accumulated tool results) was
-        // pure waste on the hottest path in the crate.
-        if self.bus.receiver_count() > 0 {
-            self.bus.publish(envelope.clone());
-        }
         self.sink.emit(envelope);
     }
 }

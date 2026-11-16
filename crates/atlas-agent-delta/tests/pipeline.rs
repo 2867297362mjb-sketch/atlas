@@ -2,21 +2,21 @@
 //! path.
 //!
 //! This is touchpoint #1, and the reason it is a test rather than a comment:
-//! `CaptureMiddleware` is a pipeline *stage*, not a bus subscriber, precisely
-//! because the bus drops events for a lagging subscriber and a dropped event is
-//! a hole in the permanent record. A pipeline that ran late, dropped, or
-//! reordered would be the same hole with a different cause.
+//! `CaptureMiddleware` is a pipeline *stage*, not a subscriber to a broadcast
+//! channel, precisely because a broadcast drops events for a lagging
+//! subscriber and a dropped event is a hole in the permanent record. A
+//! pipeline that ran late, dropped, or reordered would be the same hole with a
+//! different cause.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::v1 as acp;
-use atlas_acp_thread::{AcpThread, AcpThreadHandle, AgentConnection};
+use atlas_acp_thread::test_support::FakeConnection;
+use atlas_acp_thread::{AcpThread, AgentConnection};
 use atlas_agent_delta::{AgentId, DeltaProjector, DeltaSink, SessionDeltaEnvelope};
 use atlas_bus::{OutboundMiddleware, OutboundPipeline};
-use futures::future::BoxFuture;
-use futures::FutureExt;
 
 /// One stage of the pipeline. The real ones are broadcast, analytics, capture,
 /// transcript and memory-ingest; what matters here is that each sees every
@@ -52,34 +52,14 @@ impl DeltaSink for PipelineSink {
     }
 }
 
-struct Stub;
-
-impl AgentConnection for Stub {
-    fn agent_id(&self) -> atlas_acp_thread::AgentId {
-        atlas_acp_thread::AgentId::new("stub")
-    }
-    fn telemetry_id(&self) -> Arc<str> {
-        "stub".into()
-    }
-    fn new_session(
-        self: Arc<Self>,
-        _work_dirs: Vec<PathBuf>,
-    ) -> BoxFuture<'static, anyhow::Result<AcpThreadHandle>> {
-        async { Err(anyhow::anyhow!("not used")) }.boxed()
-    }
-    fn auth_methods(&self) -> &[acp::AuthMethod] {
-        &[]
-    }
-    fn authenticate(&self, _method: acp::AuthMethodId) -> BoxFuture<'static, anyhow::Result<()>> {
-        async { Ok(()) }.boxed()
-    }
-    fn prompt(
-        &self,
-        _params: acp::PromptRequest,
-    ) -> BoxFuture<'static, anyhow::Result<acp::PromptResponse>> {
-        async { Ok(acp::PromptResponse::new(acp::StopReason::EndTurn)) }.boxed()
-    }
-    fn cancel(&self, _session_id: &acp::SessionId) {}
+/// A connection that answers nothing: these tests drive the thread
+/// directly, so no request ever leaves it.
+fn stub_connection() -> Arc<dyn AgentConnection> {
+    FakeConnection::builder()
+        .agent("stub")
+        .fail_new_session("not used")
+        .build()
+        .0
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -116,7 +96,7 @@ async fn every_delta_reaches_every_stage_in_order_on_the_emit_path() {
     let events = (projector.thread_events())(&session_id);
     let thread = Arc::new(Mutex::new(AcpThread::new(
         session_id.clone(),
-        Arc::new(Stub) as Arc<dyn AgentConnection>,
+        stub_connection(),
         vec![PathBuf::from("/tmp")],
         None,
         events,

@@ -9,14 +9,12 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use agent_client_protocol::schema::v1 as acp;
 use anyhow::{anyhow, Result};
-use atlas_acp_thread::{
-    AcpThread, AcpThreadHandle, AgentConnection, AgentId, AgentSessionList,
-    AgentSessionListRequest, AgentSessionListResponse,
-};
+use atlas_acp_thread::test_support::{FakeConnection, FakeHandle};
+use atlas_acp_thread::{AgentConnection, AgentId};
 use atlas_agent_manager::{Agent, AgentCatalog, AgentManager, ResumeMode};
 use atlas_agent_servers::{
     AcpConnectionDefaults, AgentServer, AgentServerCommand, AgentServerDelegate, ConnectOptions,
@@ -58,167 +56,62 @@ impl Capabilities {
     }
 }
 
-// ------------------------------------------------------------------ the fake
+// ---------------------------------------------------------------- harness
 
-struct FakeConnection {
-    id: AgentId,
+/// Hands out connections over one script, so every connect answers to the
+/// same recorded calls.
+struct FakeServer {
+    fake: FakeHandle,
+    spawns: Arc<AtomicUsize>,
+}
+
+/// The connection an agent with these capabilities presents.
+///
+/// `forgets_sessions`: load and resume fail, an agent that no longer knows the
+/// session. `replays_history`: whether `session/load` actually replays the
+/// conversation into the thread. The protocol requires it before the load
+/// answers, so replaying is the realistic default; `Harness::silent` is the
+/// agent that does not, which ATL-230 finding 3 is about.
+fn scripted(
+    id: &AgentId,
     capabilities: Capabilities,
-    /// Load/resume fail when set — an agent that no longer knows the session.
     forgets_sessions: bool,
-    /// Whether `session/load` actually replays the conversation into the
-    /// thread. The protocol requires it before the load answers, so replaying
-    /// is the realistic default here; `Harness::silent` is the agent that does
-    /// not, which ATL-230 finding 3 is about.
     replays_history: bool,
-    calls: Arc<Mutex<Vec<String>>>,
-}
-
-impl FakeConnection {
-    fn thread(self: &Arc<Self>, session_id: acp::SessionId) -> AcpThreadHandle {
-        Arc::new(Mutex::new(AcpThread::new(
-            session_id,
-            self.clone() as Arc<dyn AgentConnection>,
-            vec![PathBuf::from("/tmp/atlas")],
-            None,
-            atlas_acp_thread::event_channel().0,
-        )))
+) -> FakeHandle {
+    let mut fake = FakeConnection::builder()
+        .agent(id.as_str())
+        .session_id("fresh");
+    if capabilities.load {
+        fake = fake.supports_load();
     }
-
-    fn note(&self, call: &str) {
-        self.calls.lock().unwrap().push(call.to_string());
+    if capabilities.resume {
+        fake = fake.supports_resume();
     }
-}
-
-impl AgentConnection for FakeConnection {
-    fn agent_id(&self) -> AgentId {
-        self.id.clone()
+    // Exactly the real gate: no `list` capability, no list object — and so no
+    // delete, whatever `delete` says.
+    if capabilities.list {
+        fake = fake.supports_session_list();
     }
-
-    fn telemetry_id(&self) -> Arc<str> {
-        self.id.0.clone()
+    if capabilities.delete {
+        fake = fake.supports_session_delete();
     }
-
-    fn new_session(
-        self: Arc<Self>,
-        _work_dirs: Vec<PathBuf>,
-    ) -> BoxFuture<'static, Result<AcpThreadHandle>> {
-        self.note("new_session");
-        let thread = self.thread(acp::SessionId::new("fresh"));
-        async move { Ok(thread) }.boxed()
+    if forgets_sessions {
+        fake = fake.forgets_sessions("no conversation found with that id");
     }
-
-    fn supports_load_session(&self) -> bool {
-        self.capabilities.load
-    }
-
-    fn load_session(
-        self: Arc<Self>,
-        session_id: acp::SessionId,
-        _work_dirs: Vec<PathBuf>,
-        _title: Option<Arc<str>>,
-    ) -> BoxFuture<'static, Result<AcpThreadHandle>> {
-        self.note("load_session");
-        if self.forgets_sessions {
-            return async { Err(anyhow!("no conversation found with that id")) }.boxed();
-        }
-        let thread = self.thread(session_id);
-        if self.replays_history {
+    if replays_history {
+        fake = fake.on_load(|thread| {
             thread.lock().unwrap().push_user_content_block(
                 None,
                 acp::ContentBlock::Text(acp::TextContent::new("what we said before".to_string())),
             );
-        }
-        async move { Ok(thread) }.boxed()
+        });
     }
-
-    fn supports_resume_session(&self) -> bool {
-        self.capabilities.resume
-    }
-
-    fn resume_session(
-        self: Arc<Self>,
-        session_id: acp::SessionId,
-        _work_dirs: Vec<PathBuf>,
-        _title: Option<Arc<str>>,
-    ) -> BoxFuture<'static, Result<AcpThreadHandle>> {
-        self.note("resume_session");
-        if self.forgets_sessions {
-            return async { Err(anyhow!("no conversation found with that id")) }.boxed();
-        }
-        let thread = self.thread(session_id);
-        async move { Ok(thread) }.boxed()
-    }
-
-    fn session_list(&self) -> Option<Arc<dyn AgentSessionList>> {
-        // Exactly the real gate: no `list` capability, no list object — and so
-        // no delete, whatever `delete` says.
-        self.capabilities.list.then(|| {
-            Arc::new(FakeSessionList {
-                supports_delete: self.capabilities.delete,
-                calls: self.calls.clone(),
-            }) as Arc<dyn AgentSessionList>
-        })
-    }
-
-    fn auth_methods(&self) -> &[acp::AuthMethod] {
-        &[]
-    }
-
-    fn authenticate(&self, _method: acp::AuthMethodId) -> BoxFuture<'static, Result<()>> {
-        async { Ok(()) }.boxed()
-    }
-
-    fn prompt(
-        &self,
-        _params: acp::PromptRequest,
-    ) -> BoxFuture<'static, Result<acp::PromptResponse>> {
-        async { Ok(acp::PromptResponse::new(acp::StopReason::EndTurn)) }.boxed()
-    }
-
-    fn cancel(&self, _session_id: &acp::SessionId) {}
-}
-
-struct FakeSessionList {
-    supports_delete: bool,
-    calls: Arc<Mutex<Vec<String>>>,
-}
-
-impl AgentSessionList for FakeSessionList {
-    fn list_sessions(
-        &self,
-        _request: AgentSessionListRequest,
-    ) -> BoxFuture<'static, Result<AgentSessionListResponse>> {
-        async { Ok(AgentSessionListResponse::new(Vec::new())) }.boxed()
-    }
-
-    fn supports_delete(&self) -> bool {
-        self.supports_delete
-    }
-
-    fn delete_session(&self, _session_id: &acp::SessionId) -> BoxFuture<'static, Result<()>> {
-        self.calls.lock().unwrap().push("delete_session".into());
-        async { Ok(()) }.boxed()
-    }
-
-    fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
-        self
-    }
-}
-
-// ---------------------------------------------------------------- harness
-
-struct FakeServer {
-    id: AgentId,
-    capabilities: Capabilities,
-    forgets_sessions: bool,
-    replays_history: bool,
-    calls: Arc<Mutex<Vec<String>>>,
-    spawns: Arc<AtomicUsize>,
+    fake.handle()
 }
 
 impl AgentServer for FakeServer {
     fn agent_id(&self) -> AgentId {
-        self.id.clone()
+        self.fake.agent_id()
     }
 
     fn connect(
@@ -227,13 +120,7 @@ impl AgentServer for FakeServer {
         _options: ConnectOptions,
     ) -> BoxFuture<'static, Result<Arc<dyn AgentConnection>>> {
         self.spawns.fetch_add(1, Ordering::SeqCst);
-        let connection = Arc::new(FakeConnection {
-            id: self.id.clone(),
-            capabilities: self.capabilities,
-            forgets_sessions: self.forgets_sessions,
-            replays_history: self.replays_history,
-            calls: self.calls.clone(),
-        });
+        let connection = self.fake.connection();
         async move { Ok(connection as Arc<dyn AgentConnection>) }.boxed()
     }
 
@@ -280,7 +167,7 @@ impl ExternalAgentServer for FakeResolver {
 struct Harness {
     manager: Arc<AgentManager>,
     agent: Agent,
-    calls: Arc<Mutex<Vec<String>>>,
+    fake: FakeHandle,
     spawns: Arc<AtomicUsize>,
 }
 
@@ -302,14 +189,10 @@ impl Harness {
 
     fn with(capabilities: Capabilities, forgets_sessions: bool, replays_history: bool) -> Self {
         let id = AgentId::new("some-agent");
-        let calls = Arc::new(Mutex::new(Vec::new()));
+        let fake = scripted(&id, capabilities, forgets_sessions, replays_history);
         let spawns = Arc::new(AtomicUsize::new(0));
         let server = Arc::new(FakeServer {
-            id: id.clone(),
-            capabilities,
-            forgets_sessions,
-            replays_history,
-            calls: calls.clone(),
+            fake: fake.clone(),
             spawns: spawns.clone(),
         });
         let thread_events: ThreadEventSink =
@@ -332,7 +215,7 @@ impl Harness {
         Self {
             manager,
             agent: Agent::Native,
-            calls,
+            fake,
             spawns,
         }
     }
@@ -349,8 +232,8 @@ impl Harness {
             .map(|resumed| resumed.mode)
     }
 
-    fn calls(&self) -> Vec<String> {
-        self.calls.lock().unwrap().clone()
+    fn calls(&self) -> Vec<&'static str> {
+        self.fake.call_names()
     }
 }
 

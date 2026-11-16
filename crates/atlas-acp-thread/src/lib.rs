@@ -63,6 +63,8 @@ pub mod elicitation;
 pub mod prompt;
 pub mod subagent;
 pub mod terminal;
+#[cfg(feature = "test-support")]
+pub mod test_support;
 pub mod thread;
 
 pub use connection::*;
