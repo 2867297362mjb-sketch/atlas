@@ -1,0 +1,21 @@
+{
+  "currentProject": null,
+  "recentProjects": [
+    { "name": "atlas", "path": "/Users/dev/atlas", "lastOpened": "2025-06-01T09:00:00Z" }
+  ],
+  "workspaces": [
+    { "id": "ws-1", "name": "atlas", "path": "/Users/dev/atlas", "orgId": "org-1", "gitUrl": "git@example.com:dev/atlas.git", "lastActiveAt": "2025-06-01T09:00:00Z" },
+    { "id": "ws-2", "name": "server", "path": "/Users/dev/server" }
+  ],
+  "activeWorkspaceId": "ws-1",
+  "organisations": [
+    { "id": "org-1", "name": "Personal", "slug": "personal", "activeWorkspaceId": "ws-1", "syncEnabled": false },
+    { "id": "org-2", "name": "Northwind", "slug": "northwind", "color": "#3366ff", "syncEnabled": true, "remoteId": "srv-org-2" }
+  ],
+  "activeOrganisationId": "org-1",
+  "groups": [{ "id": "g1", "name": "Work" }],
+  "settings": { "enterToSend": false, "gitBlameInline": true },
+  "settingsConfigMigrated": true,
+  "telemetryAnonId": "device-uuid",
+  "version": 3
+}
