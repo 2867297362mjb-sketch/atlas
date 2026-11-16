@@ -464,30 +464,11 @@ impl AppState {
     /// [`Self::save`] for a known path, so the write is reachable without an
     /// `AppHandle`.
     fn save_at(path: &Path, state: &AppState) -> std::io::Result<()> {
-        use std::io::Write;
-
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        let tmp = path.with_extension(format!("json.tmp.{}", uuid::Uuid::new_v4()));
         let merged = Self::merged_for_save(path, state)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
         let raw = serde_json::to_string_pretty(&merged)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
-        let written = (|| -> std::io::Result<()> {
-            let mut f = std::fs::File::create(&tmp)?;
-            f.write_all(raw.as_bytes())?;
-            f.sync_all()
-        })();
-        if let Err(e) = written {
-            let _ = std::fs::remove_file(&tmp);
-            return Err(e);
-        }
-        if let Err(e) = std::fs::rename(&tmp, path) {
-            let _ = std::fs::remove_file(&tmp);
-            return Err(e);
-        }
-        Ok(())
+        atlas_fs::replace_file(path, raw)
     }
 }
 
