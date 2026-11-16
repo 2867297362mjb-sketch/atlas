@@ -126,12 +126,6 @@ export const EXTRA_INPUTS = [
     why: "the tests module of src/lib.rs, and tests/import.rs, check the mock's snapshots",
   },
   {
-    path: "docs/agents/delta-wire-contract.md",
-    packages: ["atlas-agent-wire"],
-    testOnly: true,
-    why: "tests/contract.rs reads the prose contract when it exists",
-  },
-  {
     path: "src/bindings/agent-wire/",
     packages: ["atlas-agent-wire"],
     testOnly: true,
