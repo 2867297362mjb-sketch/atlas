@@ -443,12 +443,8 @@ pub fn write_theme_to(dir: &Path, source: &str) -> Result<PathBuf, ThemeError> {
             format!("theme id '{id}' must be letters, digits, '-' or '_'"),
         ));
     }
-    fs::create_dir_all(dir).map_err(|source| ThemeError::Read {
-        path: dir.to_path_buf(),
-        source,
-    })?;
     let path = dir.join(format!("{id}.toml"));
-    fs::write(&path, source).map_err(|source| ThemeError::Read {
+    atlas_fs::replace_file(&path, source).map_err(|source| ThemeError::Read {
         path: path.clone(),
         source,
     })?;

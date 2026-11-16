@@ -461,8 +461,7 @@ impl AgentRegistryStore {
             let text = String::from_utf8_lossy(&body);
             bail!("icon status error {status}, response: {text:?}");
         }
-        tokio::fs::write(icon_path, &body).await?;
-        Ok(())
+        write_atomically(icon_path, &body).await
     }
 }
 
@@ -637,22 +636,14 @@ struct RegistryNpxDistribution {
 /// between leaves a file that exists, is the right name, and is half a
 /// document. That is precisely the corrupt cache `load_cached` has to tolerate
 /// — and tolerating it is second best to not producing it.
+///
+/// [`atlas_fs::replace_file`] on the blocking pool: it syncs the file and its
+/// directory, which is not work for an async worker.
 async fn write_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
-    let parent = path.parent().context("cache path has no parent")?;
-    let temporary = parent.join(format!(
-        ".{}.tmp",
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("cache"),
-    ));
-
-    tokio::fs::write(&temporary, bytes)
-        .await
-        .with_context(|| format!("writing {temporary:?}"))?;
-    // Rename within one directory is atomic on every filesystem Atlas runs on,
-    // which is what makes the reader see one version or the other, never half.
-    tokio::fs::rename(&temporary, path)
-        .await
-        .with_context(|| format!("renaming {temporary:?} to {path:?}"))?;
-    Ok(())
+    let (path, bytes) = (path.to_owned(), bytes.to_owned());
+    tokio::task::spawn_blocking(move || {
+        atlas_fs::replace_file(&path, &bytes).with_context(|| format!("writing {path:?}"))
+    })
+    .await
+    .context("the cache write did not finish")?
 }
