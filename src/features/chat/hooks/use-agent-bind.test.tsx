@@ -32,14 +32,17 @@ import { useChatStore } from "../stores/chat-store";
 import { resetAgent } from "../lib/agents-api";
 import { saveConfigOptionPref } from "../lib/config-option-prefs";
 import { sessionBind } from "../lib/session-bind";
+import { sessionSend } from "../lib/session-send";
 import { takeSignInCallback } from "../lib/agent-signin";
 import { useAgentBind, type BindControl } from "./use-agent-bind";
+import { useQueueDrain } from "./use-queue-drain";
 
 // The numbers the bind runs on, restated: a change to one is a change to what
 // the user waits through, and should have to be made twice.
 const RETRY_MS = 1_500;
 const STALL_MS = 30_000;
 const DEADLINE_MS = 3 * 60_000;
+const REAPPLY_MS = 5_000;
 
 const PLUGIN = "codex";
 const AGENT = { agent_id: "agent-codex", spec_id: PLUGIN, display_name: "Codex" };
@@ -120,6 +123,16 @@ function usePanel(tabId: string) {
 const mountPanel = (opts?: Parameters<typeof renderHook>[1]) =>
   renderHook(() => usePanel(TAB), opts);
 
+/** The bind and the drain halves of `ChatPanel`: what holds a first message
+ *  for the bind and lets it go when the binding lands. */
+function useSendingPanel(tabId: string) {
+  const live = useChatStore((s) => s.sessions[tabId]);
+  const bindControlRef = useRef<BindControl | null>(null);
+  useAgentBind(tabId, live, bindControlRef);
+  useQueueDrain({ tabId, session: live, heldElsewhere: false, grantHold: false, bindControlRef });
+  return bindControlRef;
+}
+
 let toastError: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
@@ -128,6 +141,7 @@ beforeEach(() => {
   healthyBackend();
   localStorage.clear();
   sessionBind.reset();
+  sessionSend.reset();
   for (const plugin of [PLUGIN, "opencode"]) resetAgent(plugin);
   useChatStore.setState({
     sessions: {},
@@ -404,7 +418,6 @@ describe("once the binding lands", () => {
   });
 
   it("drops a snapshot that answers after the tab moved to another session", async () => {
-    saveConfigOptionPref("codex", "thought", "high");
     const snap = heldSnapshot();
     mountPanel();
     await flush();
@@ -417,7 +430,175 @@ describe("once the binding lands", () => {
     await flush();
     expect(session().availableCommands ?? []).toHaveLength(0);
     expect(session().acpAvailableModels ?? []).toHaveLength(0);
+  });
+
+  it("applies no remembered pick for an attempt let go while the options were being read", async () => {
+    // The picks go in before the binding now, so the snapshot they are read
+    // from answers while the attempt can still be let go.
+    saveConfigOptionPref("codex", "thought", "high");
+    const snap = heldSnapshot();
+    const { result } = mountPanel();
+    await flush();
+    expect(session().acpSessionId).toBeUndefined();
+
+    act(() => result.current.current?.abandon());
+    snap.resolve(advertising());
+    await flush();
     expect(count("agents_set_config_option")).toBe(0);
+    expect(session().acpSessionId).toBeUndefined();
+  });
+});
+
+describe("a first message sent before the bind has finished", () => {
+  const KNOBS = [
+    {
+      id: "thought",
+      name: "Thinking",
+      category: "thought_level",
+      type: "select",
+      currentValue: "medium",
+      options: [
+        { value: "high", name: "High" },
+        { value: "medium", name: "Medium" },
+      ],
+    },
+  ];
+  const SENT = ["agents_set_config_option", "agents_set_effort", "agents_send"];
+  /** The option pushes and the prompt, in the order they reached the backend. */
+  const order = () =>
+    tauri
+      .calls()
+      .map((call) => call.cmd)
+      .filter((cmd) => SENT.includes(cmd));
+
+  /** Hold `session/new`, mount, send "hello" into the tab that is still
+   *  starting, and hand back what lets the bind carry on. */
+  async function sendWhileStarting() {
+    const created = deferred<unknown>();
+    tauri.handleRaw({
+      agents_new_session: () => created.promise,
+      agents_snapshot_meta: ({ key }) =>
+        meta((key as { session_id: string }).session_id, { config_options: KNOBS }),
+    });
+    const { result } = renderHook(() => useSendingPanel(TAB));
+    await flush();
+    await act(() =>
+      sessionSend.send(
+        TAB,
+        { content: "hello", mentions: [] },
+        { kickBind: () => result.current.current?.kick() },
+      ),
+    );
+    expect(session().pendingSend?.content).toBe("hello");
+    return () =>
+      created.resolve({
+        key: { agent_id: AGENT.agent_id, session_id: "sess-1" },
+        current_mode: null,
+        available_modes: [],
+      });
+  }
+
+  it("goes out after the remembered option picks are applied, not before", async () => {
+    saveConfigOptionPref("codex", "thought", "high");
+    // The agent is slow to take the option: the window the prompt used to
+    // slip through, on the agent's own default while the pill said "high".
+    const taken = deferred<null>();
+    tauri.handleRaw({ agents_set_config_option: () => taken.promise });
+    const bindCarriesOn = await sendWhileStarting();
+
+    bindCarriesOn();
+    await flush();
+    expect(order()).toEqual(["agents_set_config_option"]);
+    expect(session().acpSessionId, "not exposed until the option is in").toBeUndefined();
+
+    taken.resolve(null);
+    await flush();
+    expect(order()).toEqual(["agents_set_config_option", "agents_send"]);
+    expect(tauri.calls("agents_set_config_option")[0]!.args).toMatchObject({
+      configId: "thought",
+      value: "high",
+    });
+    expect(session().acpSessionId).toBe("sess-1");
+    expect(session().pendingSend).toBeUndefined();
+    // And the pill follows from the snapshot read once the tab is bound.
+    expect(session().acpConfigOptions).toHaveLength(1);
+  });
+
+  it("goes out after the native agent's reasoning effort is applied", async () => {
+    act(() => {
+      store().actions.switchChatAgent(TAB, "atlas-agent");
+      useChatStore.setState((s) => {
+        s.sessions[TAB]!.nativeEffort = "high";
+      });
+    });
+    const taken = deferred<null>();
+    tauri.handleRaw({ agents_set_effort: () => taken.promise });
+    const bindCarriesOn = await sendWhileStarting();
+
+    bindCarriesOn();
+    await flush();
+    expect(order()).toEqual(["agents_set_effort"]);
+    expect(session().acpSessionId).toBeUndefined();
+
+    taken.resolve(null);
+    await flush();
+    expect(order()).toEqual(["agents_set_effort", "agents_send"]);
+    expect(tauri.calls("agents_set_effort")[0]!.args).toMatchObject({ effort: "high" });
+  });
+
+  it("still goes out when the agent refuses a remembered pick", async () => {
+    saveConfigOptionPref("codex", "thought", "high");
+    tauri.handleRaw({
+      agents_set_config_option: () => {
+        throw "not now";
+      },
+    });
+    const bindCarriesOn = await sendWhileStarting();
+
+    bindCarriesOn();
+    await flush();
+    expect(order()).toEqual(["agents_set_config_option", "agents_send"]);
+    expect(session().acpSessionId).toBe("sess-1");
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("still goes out when the options cannot be read", async () => {
+    saveConfigOptionPref("codex", "thought", "high");
+    const bindCarriesOn = await sendWhileStarting();
+    tauri.handleRaw({
+      agents_snapshot_meta: () => {
+        throw { message: "busy" };
+      },
+    });
+
+    bindCarriesOn();
+    await flush();
+    expect(order()).toEqual(["agents_send"]);
+    expect(session().acpSessionId).toBe("sess-1");
+    expect(session().acpModesPending).toBe(false);
+  });
+
+  it("is not held for ever by an option the agent never answers", async () => {
+    saveConfigOptionPref("codex", "thought", "high");
+    tauri.handleRaw({ agents_set_config_option: () => new Promise(() => {}) });
+    const bindCarriesOn = await sendWhileStarting();
+
+    bindCarriesOn();
+    await advance(REAPPLY_MS - 1);
+    expect(session().acpSessionId).toBeUndefined();
+    await advance(1);
+    expect(session().acpSessionId).toBe("sess-1");
+    expect(order()).toEqual(["agents_set_config_option", "agents_send"]);
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("asks for nothing extra when nothing is remembered", async () => {
+    const bindCarriesOn = await sendWhileStarting();
+    bindCarriesOn();
+    await flush();
+    expect(order()).toEqual(["agents_send"]);
+    // The one snapshot is the seeding one, read after the tab is bound.
+    expect(count("agents_snapshot_meta")).toBe(1);
   });
 });
 

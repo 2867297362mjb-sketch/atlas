@@ -384,6 +384,15 @@ describe("reapplyRememberedOptions: a session that has just advertised its optio
     select("verbosity", "terse", ["terse", "chatty"]),
     { id: "web", name: "Web search", type: "boolean", currentValue: true },
   ];
+  /** How often the session was asked for its option list. */
+  let reads = 0;
+  const advertised = async () => {
+    reads += 1;
+    return ADVERTISED;
+  };
+  beforeEach(() => {
+    reads = 0;
+  });
 
   it("pushes each remembered pick once, and nothing the session does not take", async () => {
     remembered.codex = {
@@ -396,7 +405,7 @@ describe("reapplyRememberedOptions: a session that has just advertised its optio
       sandbox: "strict",
     };
 
-    await configuration.reapplyRememberedOptions("codex", KEY, ADVERTISED, () => false);
+    await configuration.reapplyRememberedOptions("codex", KEY, advertised, () => false);
 
     expect(pushes).toEqual([{ cmd: "setConfigOption", configId: "thought", value: "high" }]);
     expect(prefs.options, "re-applying is not a pick").toEqual([]);
@@ -408,7 +417,7 @@ describe("reapplyRememberedOptions: a session that has just advertised its optio
       if (push.configId === "thought") throw "no";
     };
 
-    await configuration.reapplyRememberedOptions("codex", KEY, ADVERTISED, () => false);
+    await configuration.reapplyRememberedOptions("codex", KEY, advertised, () => false);
 
     expect(pushes.map((push) => push.configId)).toEqual(["thought", "verbosity"]);
     expect(refusals).toEqual([]);
@@ -417,14 +426,36 @@ describe("reapplyRememberedOptions: a session that has just advertised its optio
   it("stops once the tab has moved to another session", async () => {
     remembered.codex = { thought: "high", verbosity: "chatty" };
 
-    await configuration.reapplyRememberedOptions("codex", KEY, ADVERTISED, () => true);
+    // Moved after the first push went out.
+    await configuration.reapplyRememberedOptions("codex", KEY, advertised, () => pushes.length > 0);
 
     expect(pushes).toHaveLength(1);
   });
 
-  it("pushes nothing for an agent with nothing remembered", async () => {
-    await configuration.reapplyRememberedOptions("codex", KEY, ADVERTISED, () => false);
+  it("pushes nothing when the tab moved while the options were being read", async () => {
+    remembered.codex = { thought: "high" };
+    await configuration.reapplyRememberedOptions("codex", KEY, advertised, () => true);
     expect(pushes).toEqual([]);
+  });
+
+  it("pushes nothing for an agent with nothing remembered, and does not read its options", async () => {
+    await configuration.reapplyRememberedOptions("codex", KEY, advertised, () => false);
+    expect(pushes).toEqual([]);
+    expect(reads).toBe(0);
+  });
+
+  it("re-applies nothing, quietly, when the options cannot be read", async () => {
+    remembered.codex = { thought: "high" };
+    await configuration.reapplyRememberedOptions(
+      "codex",
+      KEY,
+      async () => {
+        throw "busy";
+      },
+      () => false,
+    );
+    expect(pushes).toEqual([]);
+    expect(refusals).toEqual([]);
   });
 });
 

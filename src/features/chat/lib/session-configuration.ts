@@ -326,15 +326,23 @@ export interface SessionConfiguration {
   apply<V>(key: SessionKey, knob: Knob<V>, value: V): Promise<boolean>;
   /**
    * Re-apply the option picks remembered for `agentType` to a session that
-   * has just advertised `advertised`: only options it advertises, only values
-   * it takes, nothing where it already sits there (`configOptionPushes`).
-   * Each push is answered with the confirmed list as a delta, so the pills
-   * follow. Stops early when `stop` says the tab has moved on.
+   * has just been opened: only options it advertises, only values it takes,
+   * nothing where it already sits there (`configOptionPushes`). Stops early
+   * when `stop` says the tab has moved on.
+   *
+   * `advertised` reads the session's option list, and is only asked when
+   * something is remembered for the agent: the bind calls this before it
+   * exposes the session, so that read is a round trip a first prompt waits
+   * on. A list that cannot be read re-applies nothing, quietly.
+   *
+   * Each push is answered with the confirmed list as a delta. The composer
+   * only follows it for a session its tab is bound to; the bind's caller
+   * reads the list again once it is.
    */
   reapplyRememberedOptions(
     agentType: string,
     key: SessionKey,
-    advertised: unknown,
+    advertised: () => Promise<unknown>,
     stop: () => boolean,
   ): Promise<void>;
   /**
@@ -466,10 +474,20 @@ export function createSessionConfiguration(deps: SessionConfigurationDeps): Sess
   async function reapplyRememberedOptions(
     agentType: string,
     key: SessionKey,
-    advertised: unknown,
+    advertised: () => Promise<unknown>,
     stop: () => boolean,
   ): Promise<void> {
-    for (const push of configOptionPushes(advertised, deps.prefs.loadOptions(agentType))) {
+    const remembered = deps.prefs.loadOptions(agentType);
+    if (Object.keys(remembered).length === 0) return;
+    let options: unknown;
+    try {
+      options = await advertised();
+    } catch (err) {
+      console.warn("reading the options to re-apply the remembered picks failed:", err);
+      return;
+    }
+    if (stop()) return;
+    for (const push of configOptionPushes(options, remembered)) {
       await apply(key, option(push.configId), push.value);
       if (stop()) return;
     }

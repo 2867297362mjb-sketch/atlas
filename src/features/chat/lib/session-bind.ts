@@ -50,6 +50,12 @@ const BIND_STALL_MS = 30_000;
  *  stalled-start plan makes that a per-version cost rather than per-launch. */
 const BIND_DEADLINE_MS = 3 * 60_000;
 
+/** How long the bind waits on the remembered options before it exposes the
+ *  session without them. They are a nicety the first prompt is worth waiting
+ *  a moment for, not a hop the start depends on: an agent that never answers
+ *  one must not leave the tab starting for ever. */
+const REAPPLY_DEADLINE_MS = 5_000;
+
 /** What the bind asks of the agents backend (`agents-api.ts`). */
 export type BindAgentsPort = Pick<typeof agents, "newSession" | "snapshotMeta" | "killPlugin">;
 
@@ -294,7 +300,50 @@ export function createSessionBind(deps: SessionBindDeps): SessionBind {
           await deps.configuration.apply(key, KNOBS.model, pickedModel);
           if (stale()) return;
         }
+        // The tab's session, once the binding below is out. Until then the
+        // attempt can only be let go (`stale`); after it, binding is exactly
+        // what makes the panel let go of the bind (its effect re-runs on
+        // `acpSessionId`), so `stale()` is always true and the question is
+        // whether the tab has moved to ANOTHER session.
+        let exposed = false;
+        const moved = () => deps.chat().sessions[tabId]?.acpSessionId !== key.session_id;
+        const letGo = () => (exposed ? moved() : stale());
+        // What the user remembers for this agent goes in before the binding
+        // too, and for the same reason as the mode and the model: a first
+        // prompt held for the bind is released by it, and ran on the agent's
+        // defaults while the pills showed the remembered values. The native
+        // agent's reasoning effort is on the tab already (its pill seeds it
+        // from the saved one); the option picks (#33) are in the prefs.
+        const remembered = (async () => {
+          const starting = deps.chat().sessions[tabId];
+          const effort = starting?.nativeEffort;
+          if (starting && effort && KNOBS.effort.offers(starting, effort)) {
+            await deps.configuration.apply(key, KNOBS.effort, effort);
+            if (letGo()) return;
+          }
+          if (!nowAt) return;
+          await deps.configuration.reapplyRememberedOptions(
+            nowAt,
+            key,
+            async () => (await deps.agents.snapshotMeta(key)).config_options ?? [],
+            letGo,
+          );
+        })();
+        // Never in the way of the bind: a refusal is only logged (`apply`),
+        // and one that does not answer is left to finish behind the binding,
+        // which is where all of this used to run.
+        try {
+          await withDeadline(
+            remembered,
+            REAPPLY_DEADLINE_MS,
+            `${label} has not taken its remembered options`,
+          );
+        } catch (err) {
+          console.warn("binding without the remembered options:", err);
+        }
+        if (stale()) return;
         deps.chat().actions.setAcpBinding(tabId, agent.agent_id, key.session_id, cwd);
+        exposed = true;
         // Bound successfully — re-arm the failure toast so a LATER breakage
         // (agent crashes, gets uninstalled) is reported again rather than
         // swallowed by the earlier dedupe. Same for the sign-in offer: a token
@@ -303,13 +352,10 @@ export function createSessionBind(deps: SessionBindDeps): SessionBind {
         signInAttempted.delete(`${tabId}:${pluginId}`);
         retriedBinds.delete(`${tabId}:${pluginId}`);
         // The attempt is over here, and what follows is seeding the tab from
-        // the session it now holds. `stale()` is the wrong question for that:
-        // binding is exactly what makes the panel let go of the bind (its
-        // effect re-runs on `acpSessionId`), so by the time the snapshot's
-        // round trip answers this attempt is always stale, and guarding on it
-        // skipped everything below on every bind. What can go wrong from here
-        // is the tab moving to ANOTHER session before the snapshot is back.
-        const moved = () => deps.chat().sessions[tabId]?.acpSessionId !== key.session_id;
+        // the session it now holds. `stale()` is the wrong question for that
+        // (see `exposed`): guarding on it skipped everything below on every
+        // bind. What can go wrong from here is the tab moving to ANOTHER
+        // session before the snapshot is back (`moved`).
         // Seed the composer mode picker from the freshly-created session's
         // advertised modes (Codex: read-only / auto / full-access). The modes
         // are seeded into the Rust SessionState by `new_session`, so the
@@ -361,7 +407,9 @@ export function createSessionBind(deps: SessionBindDeps): SessionBind {
             // without this the effort pill and every other knob simply never
             // appeared. This also heals the early-delta drop: any
             // `config_options_updated` emitted before the tab was bound is
-            // re-covered by this snapshot, which is fetched after bind.
+            // re-covered by this snapshot, which is fetched after bind. The
+            // remembered picks re-applied above are answered that way, so
+            // this is also what puts them in the pills.
             deps
               .chat()
               .actions.setAcpConfigOptions(
@@ -369,17 +417,6 @@ export function createSessionBind(deps: SessionBindDeps): SessionBind {
                 snap.config_options ?? [],
                 agentTypeFromPluginId(snap.plugin_id),
               );
-            // Re-apply the user's remembered knob picks (#33).
-            const at = deps.chat().sessions[tabId]?.agentType;
-            if (at) {
-              await deps.configuration.reapplyRememberedOptions(
-                at,
-                key,
-                snap.config_options ?? [],
-                moved,
-              );
-              if (moved()) return;
-            }
             // Boot finished (with or without modes) — drop the loading state.
             deps.chat().actions.setAcpModesPending(tabId, false);
           }
