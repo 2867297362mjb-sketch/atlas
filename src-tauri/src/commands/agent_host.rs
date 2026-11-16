@@ -749,14 +749,13 @@ impl AgentHost {
     /// Answers the connection to send `session/close` on, when the end calls
     /// for one: the only step that waits, so it is the caller's to await.
     fn finish_end(&self, ended: &Ended) -> Option<Arc<dyn AgentConnection>> {
-        self.follow_up(&ended.session_id, &ended.follow_ups, true)
+        self.follow_up(&ended.session_id, &ended.follow_ups)
     }
 
     fn follow_up(
         &self,
         session_id: &str,
         follow_ups: &[FollowUp],
-        close_projections: bool,
     ) -> Option<Arc<dyn AgentConnection>> {
         let acp_id = acp::SessionId::new(session_id);
         let mut close_on = None;
@@ -780,11 +779,7 @@ impl AgentHost {
                 // request id with no other removal path (ATL-225). The
                 // thread holds the connection: left in place, the agent's
                 // process outlives whatever ended the session.
-                FollowUp::CloseProjection => {
-                    if close_projections {
-                        self.projector.close_session(&acp_id);
-                    }
-                }
+                FollowUp::CloseProjection => self.projector.close_session(&acp_id),
                 FollowUp::CloseOnAgent { connection } => close_on = Some(connection.clone()),
             }
         }
@@ -792,15 +787,11 @@ impl AgentHost {
     }
 
     /// End every session on `agent`: its process is going, or gone.
-    ///
-    /// `close_projections` is `false` for the three callers that have never
-    /// released their sessions' projections (a kill, a sign-out, a model-list
-    /// reconnect).
-    fn end_agent(&self, plugin_id: &str, agent: &Agent, how: AgentEnd, close_projections: bool) {
+    fn end_agent(&self, plugin_id: &str, agent: &Agent, how: AgentEnd) {
         // A dialog whose agent has died can no longer be answered.
         self.forget_request_elicitations(&ThreadAgentId::new(plugin_id));
         for ended in self.sessions.end_agent(agent, how) {
-            self.follow_up(&ended.session_id, &ended.follow_ups, close_projections);
+            self.follow_up(&ended.session_id, &ended.follow_ups);
         }
     }
 
@@ -1119,7 +1110,7 @@ impl AgentHost {
     }
 
     fn kill_agent(&self, plugin_id: &str, agent: &Agent) {
-        self.end_agent(plugin_id, agent, AgentEnd::stopping(), false);
+        self.end_agent(plugin_id, agent, AgentEnd::stopping());
     }
 
     /// Whether any open session on `plugin_id` has a turn running. `false` for
@@ -1152,7 +1143,6 @@ impl AgentHost {
             AgentEnd::stopping().with_notice(format!(
                 "updated to v{version}; the next message reconnects"
             )),
-            true,
         );
         Ok(())
     }
@@ -1166,7 +1156,6 @@ impl AgentHost {
             plugin_id,
             &agent,
             AgentEnd::stopping().with_notice("turned off in Settings → Agents"),
-            true,
         );
         Ok(())
     }
@@ -1185,7 +1174,6 @@ impl AgentHost {
             &Self::plugin_id_of(agent),
             agent,
             AgentEnd::exited().with_notice("the agent stopped; the next message reconnects"),
-            true,
         );
     }
 
@@ -1268,7 +1256,6 @@ impl AgentHost {
                     plugin_id,
                     &agent,
                     AgentEnd::stopping().with_notice("the model list changed; restart to continue"),
-                    false,
                 );
                 return Ok(NativeModelsRefresh {
                     models,
@@ -1415,7 +1402,7 @@ impl AgentHost {
         );
         if let Err(refused) = bound {
             tracing::info!(session = %session_id, "{refused}; the session it opened is discarded");
-            let close_on = self.follow_up(session_id.0.as_ref(), &refused.follow_ups, true);
+            let close_on = self.follow_up(session_id.0.as_ref(), &refused.follow_ups);
             if let Some(connection) = close_on {
                 if let Err(e) = connection.close_session(session_id.clone()).await {
                     tracing::debug!(session = %session_id, "closing a discarded session: {e:#}");

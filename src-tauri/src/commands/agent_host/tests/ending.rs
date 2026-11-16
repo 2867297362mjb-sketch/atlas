@@ -408,12 +408,10 @@ async fn killing_an_agent_ends_its_sessions() {
 
         assert_eq!(
             s.residue(),
-            Residue {
-                projection: true,
-                ..KEPT_FOR_THE_REBIND
-            }
+            KEPT_FOR_THE_REBIND,
+            "the projection goes too: it holds the thread, and the thread the connection"
         );
-        assert!(s.connection_pinned());
+        assert!(!s.connection_pinned(), "nothing keeps the killed process");
         assert_eq!(s.ended(), [SESSION]);
         assert!(s.closes().is_empty(), "the process is going: no close");
         assert!(s.deltas.disconnects().is_empty(), "a kill sends no notice");
@@ -488,12 +486,10 @@ async fn signing_out_ends_the_native_sessions() {
 
     assert_eq!(
         s.residue(),
-        Residue {
-            projection: true,
-            ..KEPT_FOR_THE_REBIND
-        }
+        KEPT_FOR_THE_REBIND,
+        "the projection goes too: it holds the thread, and the thread the connection"
     );
-    assert!(s.connection_pinned());
+    assert!(!s.connection_pinned(), "nothing keeps the old process");
     assert_eq!(s.ended(), [SESSION]);
     assert!(s.closes().is_empty());
     assert!(s.deltas.disconnects().is_empty());
@@ -513,12 +509,10 @@ async fn a_model_list_that_needs_a_reconnect_tells_the_chats_and_ends_the_sessio
 
     assert_eq!(
         s.residue(),
-        Residue {
-            projection: true,
-            ..KEPT_FOR_THE_REBIND
-        }
+        KEPT_FOR_THE_REBIND,
+        "the projection goes too: it holds the thread, and the thread the connection"
     );
-    assert!(s.connection_pinned());
+    assert!(!s.connection_pinned(), "nothing keeps the old process");
     assert_eq!(s.ended(), [SESSION]);
     assert!(s.closes().is_empty());
     assert_eq!(
