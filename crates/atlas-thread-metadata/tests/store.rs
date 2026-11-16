@@ -859,3 +859,29 @@ fn a_recorded_model_survives_a_reopen_and_later_live_updates() {
         Some("Claude Sonnet 4.5")
     );
 }
+
+/// Dropping the last handle is a close: whatever is still queued reaches the
+/// disk, with no `flush` first. Each round queues writes faster than the
+/// writer takes them, so the drop finds it part-way through one batch with
+/// more behind it, which is where a writer that stops at the drop loses the
+/// newest value.
+#[test]
+fn dropping_the_store_writes_everything_still_queued() {
+    for round in 0..40 {
+        let dir = tempfile::tempdir().unwrap();
+        let saved = thread("atlas-agent", &["/tmp/atlas"]);
+        {
+            let store = open(&dir);
+            store.save_one(saved.clone());
+            for n in 0..200 {
+                store.set_generated_title(saved.thread_id, format!("turn {n}"));
+            }
+        }
+
+        assert_eq!(
+            open(&dir).thread(saved.thread_id).unwrap().title.as_deref(),
+            Some("turn 199"),
+            "round {round}"
+        );
+    }
+}

@@ -691,6 +691,128 @@ mod tests {
         assert_eq!(header_path("b/plain.rs", "b/").as_deref(), Some("plain.rs"));
     }
 
+    #[derive(serde::Deserialize)]
+    struct FixtureCase {
+        name: String,
+        diff: String,
+        files: Vec<FixtureFile>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct FixtureFile {
+        path: String,
+        hunks: Vec<FixtureHunk>,
+    }
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct FixtureHunk {
+        old_start: u32,
+        new_start: u32,
+        lines: Vec<String>,
+    }
+
+    /// The ranges a fixture file states: each hunk's start, and as many
+    /// lines as it has on that side; a side with none has no range.
+    fn stated_ranges(file: &FixtureFile) -> PrGuideHunks {
+        let mut stated = PrGuideHunks::default();
+        for hunk in &file.hunks {
+            let side = |marker: char| {
+                hunk.lines
+                    .iter()
+                    .filter(|line| line.starts_with(' ') || line.starts_with(marker))
+                    .count() as u32
+            };
+            let range = |start: u32, lines: u32| (lines > 0).then(|| [start, start + lines - 1]);
+            stated.old.extend(range(hunk.old_start, side('-')));
+            stated.new.extend(range(hunk.new_start, side('+')));
+        }
+        stated
+    }
+
+    /// Cases the guide's checkout never produces, and why. For each the
+    /// reader answers no ranges at all, which the test holds it to; an entry
+    /// that stops differing fails, so a fix removes it.
+    const FIXTURES_NOT_READ: &[(&str, &str)] = &[
+        (
+            "mnemonic-prefix",
+            "the patch is asked for with --src-prefix=a/ --dst-prefix=b/, over the user's config",
+        ),
+        (
+            "no-prefix",
+            "the patch is asked for with --src-prefix=a/ --dst-prefix=b/, over the user's config",
+        ),
+        (
+            "combined-merge",
+            "the patch is `git diff base...HEAD` between two commits, which is never a combined diff",
+        ),
+    ];
+
+    /// The cases every unified-diff reader in Atlas is held to; the docblock
+    /// of `src/features/git/lib/unified-diff.fixtures.test.ts` names the
+    /// others. This reader is for one thing: each file's changed line ranges
+    /// on both sides, under the path git names it by. It reads no line text,
+    /// no rename source and no binary flag, so a case is its files' ranges,
+    /// counted from the hunks the fixtures state. A file with no hunk (a
+    /// pure rename, a mode change, a binary file) has no ranges; whether it
+    /// has an entry is not something the reader promises.
+    #[test]
+    fn it_reads_the_shared_fixtures_as_they_state() {
+        let cases: Vec<FixtureCase> = serde_json::from_str(include_str!(
+            "../../../../src/features/git/lib/unified-diff.fixtures.json"
+        ))
+        .expect("the fixture table parses");
+        assert!(cases.len() >= 20);
+        for (name, why) in FIXTURES_NOT_READ {
+            assert!(
+                cases.iter().any(|case| case.name == *name),
+                "FIXTURES_NOT_READ names a case that is gone: {name}"
+            );
+            assert!(why.len() >= 20, "{name}: a difference needs a real reason");
+        }
+
+        for case in &cases {
+            let names: String = case.files.iter().map(|f| format!("{}\0", f.path)).collect();
+            let change = parse_change(&names, &case.diff);
+            let paths: Vec<&str> = case.files.iter().map(|f| f.path.as_str()).collect();
+            assert_eq!(change.files, paths, "{}", case.name);
+
+            let reads_as_stated = case.files.iter().all(|file| {
+                change.hunks.get(&file.path).cloned().unwrap_or_default() == stated_ranges(file)
+            });
+            if FIXTURES_NOT_READ.iter().any(|(name, _)| *name == case.name) {
+                assert!(
+                    !reads_as_stated,
+                    "{} is read as the fixtures state it: remove it from FIXTURES_NOT_READ",
+                    case.name
+                );
+                assert!(
+                    change
+                        .hunks
+                        .values()
+                        .all(|h| h.old.is_empty() && h.new.is_empty()),
+                    "{}: {:?}",
+                    case.name,
+                    change.hunks
+                );
+                continue;
+            }
+            for file in &case.files {
+                assert_eq!(
+                    change.hunks.get(&file.path).cloned().unwrap_or_default(),
+                    stated_ranges(file),
+                    "{}: {}",
+                    case.name,
+                    file.path
+                );
+            }
+            // Nothing is filed under a path the diff does not name.
+            for path in change.hunks.keys() {
+                assert!(paths.contains(&path.as_str()), "{}: {path}", case.name);
+            }
+        }
+    }
+
     #[test]
     fn a_run_is_stale_after_six_hours() {
         let now = 100 * STALE_RUN_AGE_MS;

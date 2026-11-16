@@ -29,6 +29,16 @@
 //! by rename would turn a symlink into a regular file and reset the
 //! permissions) for a source scan to tell them apart. Review has to.
 //!
+//! # The writer that skips the flush
+//!
+//! [`atlas_fs::replace_cache_file`] replaces a file the same way but does not
+//! wait for the disk, so after a power cut the file can be empty. That is
+//! right for a download that can be fetched again and wrong for anything
+//! else, and a state file moved onto it fails nothing either. So every call
+//! to it is a site too: `CACHE_WRITERS` lists each file that calls it, how
+//! many times, and why its content can be had again. A call in a file that is
+//! not listed, or one more call in a file that is, fails the test.
+//!
 //! Out of scope: `vendor/atlas-engine`, which keeps its own writers.
 
 use std::fs;
@@ -122,6 +132,26 @@ const ALLOWED: &[(&str, usize, &str)] = &[
     ),
 ];
 
+/// Files that call `replace_cache_file`: path, how many calls, and why the
+/// content can be fetched or rebuilt again (20+ characters, checked).
+const CACHE_WRITERS: &[(&str, usize, &str)] = &[
+    (
+        "src-tauri/src/commands/comms.rs",
+        2,
+        "recording tracks and message attachments, downloaded from the server by id on a cache miss",
+    ),
+    (
+        "src-tauri/src/commands/spaces.rs",
+        1,
+        "space media named by its content hash, downloaded and verified again on a cache miss",
+    ),
+    (
+        "src-tauri/src/auth/avatar.rs",
+        1,
+        "profile photos named by a hash of their URL, fetched from that URL again on a cache miss",
+    ),
+];
+
 /// The fewest Rust files a real walk of `src-tauri/src` and `crates` finds.
 /// Far below today's count: it is a floor against scanning nothing.
 const MIN_FILES: usize = 200;
@@ -165,8 +195,23 @@ fn replaces_by_hand(line: &str) -> bool {
         || line.contains(".with_extension(\"tmp\")")
 }
 
+/// Whether `line` writes a file without flushing it.
+fn writes_a_cache_file(line: &str) -> bool {
+    line.contains("replace_cache_file(")
+}
+
 /// The 1-indexed lines of `src` that are sites, production code only.
 fn sites_in(src: &str) -> Vec<usize> {
+    lines_where(src, replaces_by_hand)
+}
+
+/// The 1-indexed lines of `src` that call the unflushed writer, production
+/// code only.
+fn cache_writes_in(src: &str) -> Vec<usize> {
+    lines_where(src, writes_a_cache_file)
+}
+
+fn lines_where(src: &str, is_site: fn(&str) -> bool) -> Vec<usize> {
     let lines: Vec<&str> = src.lines().collect();
     let mut sites = Vec::new();
     for (i, line) in lines.iter().enumerate() {
@@ -180,7 +225,7 @@ fn sites_in(src: &str) -> Vec<usize> {
         {
             break;
         }
-        if !trimmed.starts_with("//") && replaces_by_hand(line) {
+        if !trimmed.starts_with("//") && is_site(line) {
             sites.push(i + 1);
         }
     }
@@ -222,7 +267,27 @@ fn the_scanner_sees_a_hand_rolled_replace_and_ignores_tests_and_comments() {
 }
 
 #[test]
-fn every_file_is_replaced_through_the_chokepoint() {
+fn the_scanner_sees_an_unflushed_write_and_ignores_tests_and_comments() {
+    for site in [
+        r#"atlas_fs::replace_cache_file(&path, &bytes).map_err(|e| e.to_string())?;"#,
+        r#"replace_cache_file(path, bytes)?;"#,
+    ] {
+        assert_eq!(cache_writes_in(site), vec![1], "{site}");
+        assert!(sites_in(site).is_empty(), "{site}");
+    }
+    for not_a_site in [
+        r#"// atlas_fs::replace_cache_file(&path, &bytes) would lose this."#,
+        r#"atlas_fs::replace_file(&path, bytes)?;"#,
+        r#"if atlas_fs::cache_file_present(&path) {"#,
+    ] {
+        assert!(cache_writes_in(not_a_site).is_empty(), "{not_a_site}");
+    }
+    let with_tests = "fn real() {}\n#[cfg(test)]\nmod tests {\n    fn g() { atlas_fs::replace_cache_file(a, b); }\n}\n";
+    assert!(cache_writes_in(with_tests).is_empty());
+}
+
+/// Walk the workspace's production Rust: `(repo-relative path, source)`.
+fn production_sources() -> Vec<(String, String)> {
     let root = repo_root();
     let mut files = Vec::new();
     for dir in ["src-tauri/src", "crates"] {
@@ -233,7 +298,89 @@ fn every_file_is_replaced_through_the_chokepoint() {
         "walked {} Rust files, expected at least {MIN_FILES}: the audit is not seeing the workspace",
         files.len()
     );
+    files
+        .iter()
+        .filter_map(|file| {
+            let rel = file
+                .strip_prefix(&root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            if skipped(&format!("/{rel}")) {
+                return None;
+            }
+            Some((rel, fs::read_to_string(file).ok()?))
+        })
+        .collect()
+}
 
+#[test]
+fn only_listed_caches_skip_the_flush() {
+    for (path, _, reason) in CACHE_WRITERS {
+        assert!(
+            reason.len() >= 20,
+            "{path}: a cache writer needs a real reason"
+        );
+    }
+
+    let mut unlisted: Vec<String> = Vec::new();
+    let mut changed: Vec<String> = Vec::new();
+    let mut listed_hit: Vec<&str> = Vec::new();
+    for (rel, src) in production_sources() {
+        if rel == CHOKEPOINT {
+            continue;
+        }
+        let sites = cache_writes_in(&src);
+        if sites.is_empty() {
+            continue;
+        }
+        let lines = sites
+            .iter()
+            .map(|line| format!("{rel}:{line}"))
+            .collect::<Vec<_>>();
+        match CACHE_WRITERS.iter().find(|(path, _, _)| *path == rel) {
+            Some((path, count, _)) => {
+                listed_hit.push(path);
+                if sites.len() != *count {
+                    changed.push(format!(
+                        "{rel}: {count} listed, {} found ({})",
+                        sites.len(),
+                        lines.join(", ")
+                    ));
+                }
+            }
+            None => unlisted.extend(lines),
+        }
+    }
+
+    assert!(
+        unlisted.is_empty(),
+        "atlas_fs::replace_cache_file does not flush to disk: after a power cut the file can \
+         be empty. Use atlas_fs::replace_file unless the content can be fetched or rebuilt \
+         again; if it can, add the file to CACHE_WRITERS with its call count and the reason, \
+         and read it back through atlas_fs::cache_file_present:\n  {}",
+        unlisted.join("\n  ")
+    );
+    assert!(
+        changed.is_empty(),
+        "a listed file's calls to atlas_fs::replace_cache_file changed. A new one is right \
+         only for content that can be fetched or rebuilt again; then update the count in \
+         CACHE_WRITERS:\n  {}",
+        changed.join("\n  ")
+    );
+    let stale: Vec<&str> = CACHE_WRITERS
+        .iter()
+        .map(|(path, _, _)| *path)
+        .filter(|path| !listed_hit.contains(path))
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "CACHE_WRITERS entries that no longer call replace_cache_file: remove them: {stale:?}"
+    );
+}
+
+#[test]
+fn every_file_is_replaced_through_the_chokepoint() {
     for (path, _, reason) in ALLOWED {
         assert!(
             reason.len() >= 20,
@@ -245,18 +392,7 @@ fn every_file_is_replaced_through_the_chokepoint() {
     let mut new_sites: Vec<String> = Vec::new();
     let mut changed: Vec<String> = Vec::new();
     let mut allowed_hit: Vec<&str> = Vec::new();
-    for file in &files {
-        let rel = file
-            .strip_prefix(&root)
-            .unwrap()
-            .to_string_lossy()
-            .replace('\\', "/");
-        if skipped(&format!("/{rel}")) {
-            continue;
-        }
-        let Ok(src) = fs::read_to_string(file) else {
-            continue;
-        };
+    for (rel, src) in production_sources() {
         let sites = sites_in(&src);
         if rel == CHOKEPOINT {
             // The scanner run over the chokepoint must report it: proof that
@@ -295,7 +431,8 @@ fn every_file_is_replaced_through_the_chokepoint() {
     assert!(
         new_sites.is_empty(),
         "a rename or a temp path outside {CHOKEPOINT}. To replace a file's contents call \
-         atlas_fs::replace_file (or replace_file_with_mode for a private file); if this is \
+         atlas_fs::replace_file (or replace_file_with_mode for a private file, or \
+         replace_cache_file for a download that can be fetched again); if this is \
          not a replace, add the file to ALLOWED with its site count and the reason:\n  {}",
         new_sites.join("\n  ")
     );

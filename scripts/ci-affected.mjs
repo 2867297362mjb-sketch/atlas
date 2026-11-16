@@ -121,6 +121,18 @@ export const EXTRA_INPUTS = [
     why: "include_str! in the tests module of crates/atlas-git/src/patch.rs",
   },
   {
+    path: "src/features/git/lib/unified-diff.fixtures.json",
+    packages: ["atlas-security"],
+    testOnly: true,
+    why: "include_str! in crates/atlas-security/tests/diff_fixtures.rs",
+  },
+  {
+    path: "src/features/git/lib/unified-diff.fixtures.json",
+    packages: ["atlas"],
+    testOnly: true,
+    why: "include_str! in the tests module of src-tauri/src/commands/pull_requests/guide.rs",
+  },
+  {
     path: "docs/reference/config.default.toml",
     packages: ["atlas"],
     testOnly: true,

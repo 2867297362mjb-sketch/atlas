@@ -25,6 +25,17 @@
 //! Concurrent callers replacing one path each land a complete file; the last
 //! rename wins. This serializes nothing: a read-modify-write still needs the
 //! caller's own lock.
+//!
+//! # Files that can be fetched again
+//!
+//! The two `fsync`s are what a write costs: each waits for the disk. A cache
+//! of downloaded media does not need them, because losing the file costs one
+//! more download. [`replace_cache_file`] is steps 1, 2, 4 and the cleanup,
+//! without 3 and 5: still atomic to every reader while the machine stays up,
+//! but after a power cut the name can be there with nothing in it. So a cache
+//! asks [`cache_file_present`], not `Path::exists`, before it trusts a file.
+//! Anything the user made, or that cannot be fetched or rebuilt, belongs in
+//! [`replace_file`].
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
@@ -38,7 +49,33 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// The new file gets the platform's default permissions for a created file,
 /// not the replaced file's. Use [`replace_file_with_mode`] to choose them.
 pub fn replace_file(path: impl AsRef<Path>, bytes: impl AsRef<[u8]>) -> io::Result<()> {
-    replace(path.as_ref(), bytes.as_ref(), None)
+    replace(path.as_ref(), bytes.as_ref(), None, Flush::ToDisk)
+}
+
+/// Replace the contents of `path` with `bytes` atomically, without waiting for
+/// the disk: for a cache whose content can be fetched or rebuilt again, and
+/// for nothing else.
+///
+/// Like [`replace_file`], a reader sees the old contents or the new ones,
+/// never part of either; the temp file is unique and is removed on failure;
+/// missing parent directories are created; and the new file gets the
+/// platform's default permissions for a created file, not the replaced
+/// file's. Unlike it, neither the file nor the directory is `fsync`ed, so
+/// after a power cut the file may be missing, or present and empty or short.
+/// Check a cached file with [`cache_file_present`] before using it.
+pub fn replace_cache_file(path: impl AsRef<Path>, bytes: impl AsRef<[u8]>) -> io::Result<()> {
+    replace(path.as_ref(), bytes.as_ref(), None, Flush::Skip)
+}
+
+/// Whether `path` is a file with at least one byte in it: the test a cache
+/// written by [`replace_cache_file`] applies before it trusts a file.
+///
+/// An empty file is what a power cut most often leaves behind an unflushed
+/// write (the rename reached the disk, the data did not), and no cached
+/// download is legitimately empty. A file cut short is not detected: a cache
+/// that must rule that out verifies the content itself.
+pub fn cache_file_present(path: impl AsRef<Path>) -> bool {
+    fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() > 0)
 }
 
 /// [`replace_file`], with the new file's Unix permission bits set to exactly
@@ -52,10 +89,19 @@ pub fn replace_file_with_mode(
     bytes: impl AsRef<[u8]>,
     mode: u32,
 ) -> io::Result<()> {
-    replace(path.as_ref(), bytes.as_ref(), Some(mode))
+    replace(path.as_ref(), bytes.as_ref(), Some(mode), Flush::ToDisk)
 }
 
-fn replace(path: &Path, bytes: &[u8], mode: Option<u32>) -> io::Result<()> {
+/// Whether a replace waits for the disk.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Flush {
+    /// `fsync` the file before the rename and the directory after it.
+    ToDisk,
+    /// Neither: the content can be fetched again.
+    Skip,
+}
+
+fn replace(path: &Path, bytes: &[u8], mode: Option<u32>, flush: Flush) -> io::Result<()> {
     if path.file_name().is_none() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -73,7 +119,9 @@ fn replace(path: &Path, bytes: &[u8], mode: Option<u32>) -> io::Result<()> {
     let written = (|| {
         file.write_all(bytes)?;
         set_mode(&file, mode)?;
-        file.sync_all()?;
+        if flush == Flush::ToDisk {
+            file.sync_all()?;
+        }
         // Closed before the rename: Windows will not rename an open file.
         drop(file);
         fs::rename(&temp, path)
@@ -83,8 +131,10 @@ fn replace(path: &Path, bytes: &[u8], mode: Option<u32>) -> io::Result<()> {
         return Err(error);
     }
 
-    if let Ok(dir) = File::open(dir) {
-        let _ = dir.sync_all();
+    if flush == Flush::ToDisk {
+        if let Ok(dir) = File::open(dir) {
+            let _ = dir.sync_all();
+        }
     }
     Ok(())
 }
