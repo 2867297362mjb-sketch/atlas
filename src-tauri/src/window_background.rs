@@ -12,6 +12,10 @@
 //! different times: this one is before the webview exists, that one is before
 //! the first stylesheet.
 //!
+//! The colour is applied as Atlas starts and again whenever the settings
+//! change (`settings_effects`), so a theme switched mid-run does not leave the
+//! window on the old theme's colour.
+//!
 //! Only the `background` BASE TOKEN is read. A theme may leave it out
 //! (ADR-0022), so it goes through `atlas_theme::derive`, the Rust half of the
 //! one derivation engine — the same answer `resolveBase` gives the webview.

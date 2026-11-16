@@ -80,8 +80,6 @@ pub enum Effect {
 enum Paths {
     /// At boot and on every change: what an effect is unless it has a reason.
     Both,
-    /// At boot only, and why a change does not need it.
-    BootOnly(&'static str),
     /// On a change only, and why boot does not need it.
     ChangeOnly(&'static str),
 }
@@ -118,7 +116,7 @@ const WIRING: &[Wiring] = &[
             dark: s.theme_dark.clone(),
             mode: s.theme_mode,
         },
-        paths: Paths::BootOnly("as found"),
+        paths: Paths::Both,
     },
     Wiring {
         decide: |s| Effect::AppIcon(s.app_icon.clone()),
@@ -143,12 +141,8 @@ pub fn effects(settings: &AppSettings, when: When) -> Vec<Effect> {
     WIRING
         .iter()
         .filter(|wiring| match (wiring.paths, when) {
-            (Paths::Both, _)
-            | (Paths::BootOnly(_), When::Boot)
-            | (Paths::ChangeOnly(_), When::Changed { .. }) => true,
-            (Paths::BootOnly(_), When::Changed { .. }) | (Paths::ChangeOnly(_), When::Boot) => {
-                false
-            }
+            (Paths::Both, _) | (Paths::ChangeOnly(_), When::Changed { .. }) => true,
+            (Paths::ChangeOnly(_), When::Boot) => false,
         })
         .map(|wiring| (wiring.decide)(settings))
         .collect()
@@ -202,8 +196,11 @@ fn perform(app: &AppHandle, effect: Effect, when: When) {
         Effect::TelemetryIdentity { link_to_account } => {
             crate::commands::auth::resync_telemetry_identity(app, link_to_account);
         }
-        // Fills the gap between window-shown and first paint with the theme's
-        // own background; see `window_background`.
+        // At boot it fills the gap between window-shown and first paint with
+        // the theme's own background; see `window_background`. On a change it
+        // keeps that colour the current theme's, because the window shows
+        // through again wherever the webview has not painted yet: the strip a
+        // live resize uncovers, and the frame after a reload.
         Effect::WindowBackground { light, dark, mode } => {
             if let Some(window) = app.get_webview_window("main") {
                 let system_is_light = matches!(window.theme(), Ok(tauri::Theme::Light));
@@ -367,7 +364,7 @@ mod tests {
     }
 
     #[test]
-    fn the_theme_sets_the_window_background_at_boot() {
+    fn the_theme_sets_the_window_background() {
         let settings = AppSettings {
             theme_light: "a-light-theme".into(),
             theme_dark: "a-dark-theme".into(),
@@ -379,8 +376,7 @@ mod tests {
             dark: "a-dark-theme".into(),
             mode: ThemeMode::Light,
         };
-        assert!(asks(&settings, BOOT, &effect));
-        assert!(!asks(&AppSettings::default(), BOOT, &effect));
+        on_both_paths(&settings, &effect);
     }
 
     /// A change re-applies account linkage. Boot does not need to: every auth
