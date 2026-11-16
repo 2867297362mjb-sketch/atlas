@@ -3269,6 +3269,7 @@ dependencies = [
  "atlas-process",
  "regex",
  "serde",
+ "serde_json",
  "tempfile",
 ]
 
