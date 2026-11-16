@@ -188,6 +188,14 @@ fn ensure_bundled_skill_at(root: &Path, name: &str, content: &str, link: bool) {
         }
     }
 
+    // Already what this build ships: nothing to write. This runs at every
+    // launch, and a durable replace costs two flushes to disk per file.
+    let up_to_date =
+        |path: &Path, want: &str| fs::read_to_string(path).is_ok_and(|have| have == want);
+    if up_to_date(&skill_md, content) && up_to_date(&hash_file, &bundled_hash) {
+        return;
+    }
+
     if fs::create_dir_all(&dir).is_err() {
         return;
     }
@@ -251,6 +259,34 @@ mod tests {
             fs::read_to_string(skills_base(&root).join("atlas-self-configure/SKILL.md")).unwrap();
         assert!(self_configure.contains("name: atlas-self-configure"));
 
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// The sync runs at every launch. A skill that is already what this build
+    /// ships is left alone: a replace would be two flushes to disk per file
+    /// before the window shows.
+    #[cfg(unix)]
+    #[test]
+    fn a_bundled_skill_that_is_up_to_date_is_not_rewritten() {
+        use std::os::unix::fs::MetadataExt;
+        let root = tmp_root_isolated();
+        ensure_bundled_skills_at(&root, atlas_profile::Profile::Default, CONFIG_FILE);
+        let files = |root: &Path| -> Vec<u64> {
+            BUNDLED_SKILLS
+                .iter()
+                .flat_map(|skill| {
+                    let dir = skills_base(root).join(skill.name);
+                    [dir.join("SKILL.md"), dir.join(BUNDLED_HASH_FILE)]
+                })
+                .map(|path| fs::metadata(path).unwrap().ino())
+                .collect()
+        };
+        let first = files(&root);
+
+        ensure_bundled_skills_at(&root, atlas_profile::Profile::Default, CONFIG_FILE);
+
+        // A replace lands a new file, so an unchanged inode is "not written".
+        assert_eq!(files(&root), first);
         fs::remove_dir_all(&root).ok();
     }
 

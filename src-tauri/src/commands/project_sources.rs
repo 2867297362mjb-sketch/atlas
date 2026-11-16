@@ -16,11 +16,15 @@ use serde::Serialize;
 
 /// The sign-in probe: a background read nobody should wait long for.
 const STATUS_TIMEOUT: Duration = Duration::from_secs(5);
-/// `gh repo create`: one write to the API.
-const CREATE_TIMEOUT: Duration = Duration::from_secs(30);
-/// `gh repo clone`: bounded, so a remote that never answers cannot hold the
-/// palette open forever.
-const CLONE_TIMEOUT: Duration = Duration::from_secs(120);
+/// `gh repo create`: one write to the API, then `gh` adds the remote. Long
+/// enough that a slow answer is not cut off between the two, which would
+/// report a failure for a repository that now exists.
+const CREATE_TIMEOUT: Duration = Duration::from_secs(120);
+/// `gh repo clone`: minutes of `git` for a large repository, so the limit is
+/// only there to end a clone that has plainly stalled. Killing `gh` does not
+/// stop the `git` it started, so a limit a real clone can reach leaves a
+/// half-written folder that the next try refuses as "already exists".
+const CLONE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 /// Where new and cloned projects go: `~/.atlas/projects`.
 fn projects_root() -> Result<PathBuf, String> {
