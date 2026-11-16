@@ -4336,7 +4336,8 @@ pub fn save_installed(
     }
     let json = serde_json::to_string_pretty(settings)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    atlas_fs::replace_file(path, json)
+    // A Custom agent's `env` can hold an API key, so the map is owner-only.
+    atlas_fs::replace_file_with_mode(path, json, 0o600)
 }
 
 #[cfg(test)]
