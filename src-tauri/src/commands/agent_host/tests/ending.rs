@@ -804,10 +804,27 @@ async fn a_late_refused_load_leaves_a_newer_bind_of_the_same_session_alone() {
     );
     assert!(ended.lock().unwrap().is_empty());
 
-    // The reopened tab still hears its session.
+    // The reopened tab can still send: the manager's handle, which a send
+    // resolves through, is the reopened session's thread and not the late one.
     let thread = loaded.lock().unwrap()[0]
         .upgrade()
         .expect("the reopened session's thread is alive");
+    let handle = host
+        .manager()
+        .session(&acp::SessionId::new(SESSION))
+        .expect("the reopened session lost its handle, so it cannot send");
+    assert!(
+        Arc::ptr_eq(&handle.thread, &thread),
+        "the manager holds the refused load's thread"
+    );
+    // And nothing keeps the refused load's thread, which pins the agent's
+    // connection.
+    assert!(
+        loaded.lock().unwrap()[1].upgrade().is_none(),
+        "the refused load's thread is still held"
+    );
+
+    // The reopened tab still hears its session.
     thread
         .lock()
         .unwrap()

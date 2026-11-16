@@ -410,6 +410,8 @@ impl<X: SessionExtra> SessionRegistry<X> {
                 .and_then(|bind| bind.ended_by);
             match ended_by {
                 None => {
+                    self.manager
+                        .settle_session(&meta.agent, &session_id, thread, true);
                     state.records.insert(
                         session_id.to_string(),
                         Record {
@@ -429,7 +431,7 @@ impl<X: SessionExtra> SessionRegistry<X> {
                     // Only this bind's own thread: a newer bind of the same
                     // id may have registered since, and that one is live.
                     self.manager
-                        .forget_session_if_same(&meta.agent, &session_id, thread);
+                        .settle_session(&meta.agent, &session_id, thread, false);
                     let rebound = state
                         .records
                         .get(session_id.0.as_ref())

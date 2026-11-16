@@ -221,6 +221,11 @@ pub struct AgentManager {
     /// id alone, two agents that both mint `ses-1` are one entry, and the
     /// second registration silently evicts the first (ATL-230 finding 1).
     sessions: Mutex<HashMap<(Agent, acp::SessionId), SessionHandle>>,
+    /// Sessions opened under an id that already has a different live handle:
+    /// a second load of a session that is still bound. Each waits here until
+    /// its bind is decided ([`Self::settle_session`]), so a late load that
+    /// is refused cannot have replaced the live one first.
+    displacing: Mutex<Vec<SessionHandle>>,
     events: tokio::sync::broadcast::Sender<AgentManagerEvent>,
     deadlines: Mutex<Deadlines>,
 }
@@ -240,6 +245,7 @@ impl AgentManager {
             options,
             entries: Mutex::new(HashMap::new()),
             sessions: Mutex::new(HashMap::new()),
+            displacing: Mutex::new(Vec::new()),
             events,
             deadlines: Mutex::new(Deadlines::default()),
         });
@@ -408,6 +414,7 @@ impl AgentManager {
             sessions.clear();
             had
         };
+        self.lock_displacing().clear();
         if !entries.is_empty() || had_sessions {
             self.emit(AgentManagerEvent::ConnectionsChanged);
         }
@@ -427,6 +434,7 @@ impl AgentManager {
     /// `session/close` RPC to a peer that is about to be killed buys nothing.
     pub(crate) fn forget_sessions_for(&self, key: &Agent) {
         self.lock_sessions().retain(|(agent, _), _| agent != key);
+        self.lock_displacing().retain(|handle| &handle.agent != key);
     }
 
     /// Restart `key`, resolving its server the way [`Self::connect_to`] does.
@@ -1217,19 +1225,69 @@ impl AgentManager {
 
     /// Every session-opening path ends here, so this is where the one
     /// session-start line is written.
+    ///
+    /// A session opened under an id that already has a different live handle
+    /// does not replace it here: it waits in `displacing` until its bind is
+    /// decided ([`Self::settle_session`]).
     fn register_session(&self, agent: Agent, thread: &AcpThreadHandle) {
         let (session_id, connection) = {
             let thread = lock_thread(thread);
             (thread.session_id().clone(), thread.connection().clone())
         };
         log_session_start(&connection, &session_id);
-        self.lock_sessions().insert(
-            (agent.clone(), session_id),
-            SessionHandle {
-                agent,
-                thread: thread.clone(),
-            },
-        );
+        let handle = SessionHandle {
+            agent: agent.clone(),
+            thread: thread.clone(),
+        };
+        let mut sessions = self.lock_sessions();
+        let key = (agent, session_id);
+        let over_another = sessions
+            .get(&key)
+            .is_some_and(|live| !Arc::ptr_eq(&live.thread, thread));
+        if over_another {
+            drop(sessions);
+            self.lock_displacing().push(handle);
+        } else {
+            sessions.insert(key, handle);
+        }
+    }
+
+    /// The bind of `thread`, opened as `session_id` on `agent`, was decided.
+    ///
+    /// Accepted: `thread` is the session's handle, replacing one it was
+    /// opened over. Refused: `thread` goes, and a live handle it was opened
+    /// over stays. Takes no thread lock, so it may be called under the
+    /// session registry's.
+    pub(crate) fn settle_session(
+        &self,
+        agent: &Agent,
+        session_id: &acp::SessionId,
+        thread: &AcpThreadHandle,
+        accepted: bool,
+    ) {
+        let waiting = {
+            let mut displacing = self.lock_displacing();
+            displacing
+                .iter()
+                .position(|handle| Arc::ptr_eq(&handle.thread, thread))
+                .map(|at| displacing.swap_remove(at))
+        };
+        match (accepted, waiting) {
+            (true, Some(handle)) => {
+                self.lock_sessions()
+                    .insert((agent.clone(), session_id.clone()), handle);
+            }
+            (true, None) | (false, Some(_)) => {}
+            (false, None) => {
+                self.forget_session_if_same(agent, session_id, thread);
+            }
+        }
+    }
+
+    fn lock_displacing(&self) -> std::sync::MutexGuard<'_, Vec<SessionHandle>> {
+        self.displacing
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn lock_sessions(
