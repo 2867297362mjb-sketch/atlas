@@ -11,7 +11,7 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use atlas_gh::{GhCommand, GhError, Intent};
+use atlas_gh::{Api, GhCommand, GhError, Intent};
 use serde::Serialize;
 
 /// The sign-in probe: a background read nobody should wait long for.
@@ -92,6 +92,7 @@ async fn gh_status() -> (GhStatus, Option<String>) {
         ["api", "user", "--jq", ".login"],
         Intent::BackgroundRead,
     )
+    .api(Api::Rest)
     .timeout(STATUS_TIMEOUT)
     .run()
     .await;

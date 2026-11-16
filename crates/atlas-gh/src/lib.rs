@@ -11,16 +11,17 @@
 //! - **A bound on every run.** A timeout that kills the child, and a
 //!   directory guard so a removed worktree is not mistaken for a missing
 //!   binary.
-//! - **One budget.** A shared pool of permits for API requests and one
-//!   pause, set when GitHub refuses for its rate limit. What a call says it
-//!   is ([`Intent`]) decides what it waits for and whether a pause refuses
-//!   it.
+//! - **One budget.** Two pools of permits for API requests, one for what
+//!   the user is waiting on and one for background reads, and a pause per
+//!   API ([`Api`]), set when GitHub refuses for its rate limit. What a call
+//!   says it is ([`Intent`]) decides which pool it waits on and whether a
+//!   pause refuses it.
 //! - **One failure taxonomy** ([`GhError`]) for a run that produced no
 //!   answer.
 //!
 //! What an answer *means* is the caller's: the pull-request surface reads
 //! `gh api -i` output as HTTP, and keeps the quota accounting that needs its
-//! headers. It reads and extends the pause here rather than keeping its own.
+//! headers. It reads and extends the pauses here rather than keeping its own.
 
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
@@ -31,23 +32,34 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Semaphore;
 
-/// How many `gh` processes run at once for the API, across every surface
-/// and repository. A sidebar listing sessions from many worktrees would
-/// otherwise spawn one per repository in the same instant, and opening a
-/// pull request reads four things side by side. GitHub's secondary limits
-/// punish bursts of concurrent requests, so this stays a small pool rather
-/// than an open door: six is under the eight concurrent requests GitHub
-/// treats as polite, and each permit is a whole process, not a pooled
-/// connection.
-static API_PERMITS: Semaphore = Semaphore::const_new(6);
+/// How many `gh` processes run at once for what the user is waiting on
+/// ([`Intent::InteractiveRead`] and [`Intent::Write`]), across every surface
+/// and repository. Opening a pull request reads four things side by side.
+/// GitHub's secondary limits punish bursts of concurrent requests, so this
+/// stays a small pool rather than an open door: with
+/// [`BACKGROUND_PERMITS`] it is six, under the eight concurrent requests
+/// GitHub treats as polite, and each permit is a whole process, not a
+/// pooled connection.
+static INTERACTIVE_PERMITS: Semaphore = Semaphore::const_new(4);
 
-/// The API is paused until this time (epoch milliseconds); zero when it is
-/// not. One pause for the whole API: a refusal is GitHub asking this user to
-/// slow down, whichever quota the refused request happened to spend.
-static PAUSED_UNTIL: AtomicI64 = AtomicI64::new(0);
+/// How many `gh` processes run at once for [`Intent::BackgroundRead`]. A
+/// pool of their own, because the wait for a permit has no limit: a sidebar
+/// listing sessions from many worktrees spawns one avatar read per
+/// repository in the same instant, and in a shared pool those held every
+/// permit while a pull request the user had just opened waited behind them.
+static BACKGROUND_PERMITS: Semaphore = Semaphore::const_new(2);
 
-/// How long a rate-limit refusal that named no retry time pauses the API.
+/// Each API is paused until its time here (epoch milliseconds), indexed by
+/// [`Api`]; zero when it is not. GitHub counts the REST and GraphQL quotas
+/// separately, so one running out says nothing about the other.
+static PAUSED_UNTIL: [AtomicI64; 2] = [AtomicI64::new(0), AtomicI64::new(0)];
+
+/// How long a rate-limit refusal that named no retry time pauses for.
 const REFUSAL_COOLDOWN_MS: i64 = 30_000;
+
+/// How long a run keeps at its pipes after `gh` itself has exited: the same
+/// grace, for the same reason, as `atlas-git`'s `STREAM_DRAIN_GRACE`.
+const PIPE_DRAIN_GRACE: Duration = Duration::from_millis(500);
 
 /// What a run gets when its caller sets no [`GhCommand::timeout`].
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -57,20 +69,35 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 /// versions, and the code is the part it promises.
 const EXIT_AUTH_REQUIRED: i32 = 4;
 
+/// One of GitHub's two APIs. Each has a quota of its own, and so a pause of
+/// its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Api {
+    Rest,
+    Graphql,
+}
+
+impl Api {
+    pub const ALL: [Api; 2] = [Api::Rest, Api::Graphql];
+
+    fn pause(self) -> &'static AtomicI64 {
+        &PAUSED_UNTIL[self as usize]
+    }
+}
+
 /// What a call is, which decides what it waits for and whether a pause
 /// refuses it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Intent {
     /// A read nobody asked for just now (avatars, a status probe, a sweep).
-    /// Takes an API permit; refused while the API is paused.
+    /// Takes a background permit; refused while its API is paused.
     BackgroundRead,
-    /// A read the user is waiting on. Takes an API permit; refused while the
-    /// API is paused, since GitHub would refuse it too. It differs from a
-    /// background read above this crate, where a quota's reserve is kept for
-    /// it.
+    /// A read the user is waiting on. Takes an interactive permit; refused
+    /// while its API is paused, since GitHub would refuse it too. Above this
+    /// crate a quota's reserve is kept for it as well.
     InteractiveRead,
     /// Something the user did (open a pull request, create a repository).
-    /// Takes an API permit; always runs, pause or not.
+    /// Takes an interactive permit; always runs, pause or not.
     Write,
     /// A user-initiated verb that runs for minutes and spends most of them
     /// in `git` (`gh pr checkout`, `gh repo clone`). Takes no permit, so a
@@ -155,6 +182,7 @@ pub struct GhCommand {
     stdin: Option<Vec<u8>>,
     timeout: Duration,
     intent: Intent,
+    api: Option<Api>,
 }
 
 impl GhCommand {
@@ -174,7 +202,18 @@ impl GhCommand {
             stdin: None,
             timeout: DEFAULT_TIMEOUT,
             intent,
+            api: None,
         }
+    }
+
+    /// Which API this run asks (`gh api graphql` or `gh api <path>`), so a
+    /// pause of the other does not refuse it and a quota refusal pauses only
+    /// this one. Left unset for a verb whose requests are `gh`'s own choice
+    /// (`gh pr create`): that is refused, as a read, while either API is
+    /// paused, and its refusal pauses both.
+    pub fn api(mut self, api: Api) -> Self {
+        self.api = Some(api);
+        self
     }
 
     /// Test seam: run another program in place of `gh`. A parameter rather
@@ -234,25 +273,46 @@ impl GhCommand {
                 message: "not a git repository".into(),
             });
         }
-        let _permit = match self.intent {
-            Intent::BackgroundRead | Intent::InteractiveRead => {
-                if let Some(until) = paused_until(now_ms()) {
-                    return Err(GhError::RateLimited {
-                        retry_at: Some(until),
-                    });
-                }
-                Some(api_permit().await?)
-            }
-            Intent::Write => Some(api_permit().await?),
+        let api = self.api;
+        let pool = match self.intent {
+            Intent::BackgroundRead => Some(&BACKGROUND_PERMITS),
+            Intent::InteractiveRead | Intent::Write => Some(&INTERACTIVE_PERMITS),
             Intent::LongWrite | Intent::Unmetered => None,
         };
+        let held_back = || {
+            let read = matches!(
+                self.intent,
+                Intent::BackgroundRead | Intent::InteractiveRead
+            );
+            match paused_for(api, now_ms()) {
+                Some(until) if read => Err(GhError::RateLimited {
+                    retry_at: Some(until),
+                }),
+                _ => Ok(()),
+            }
+        };
+        held_back()?;
+        let _permit = match pool {
+            Some(pool) => Some(pool.acquire().await.map_err(|_| GhError::Failed {
+                message: "Atlas is shutting down.".into(),
+            })?),
+            None => None,
+        };
+        // Again: a pause can start while this run waits for a permit.
+        held_back()?;
         let metered = self.intent != Intent::Unmetered;
         let output = self.spawn_and_wait().await?;
-        if metered && !output.success() && says_rate_limited(&output.stderr.to_ascii_lowercase()) {
-            // Recorded here, not in `failure`, so no caller can see a
-            // refusal and forget to slow down. Never shortens a pause a
-            // caller set from the time GitHub named.
-            PAUSED_UNTIL.fetch_max(now_ms() + REFUSAL_COOLDOWN_MS, Ordering::Relaxed);
+        if metered && !output.success() {
+            let lower = output.stderr.to_ascii_lowercase();
+            if says_rate_limited(&lower) {
+                // Recorded here, not in `failure`, so no caller can see a
+                // refusal and forget to slow down. Never shortens a pause a
+                // caller set from the time GitHub named.
+                let until = now_ms() + REFUSAL_COOLDOWN_MS;
+                for paused in refused_apis(api, &lower) {
+                    paused.pause().fetch_max(until, Ordering::Relaxed);
+                }
+            }
         }
         Ok(output)
     }
@@ -293,27 +353,47 @@ impl GhCommand {
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
         let input = self.stdin;
+        let mut out = Vec::new();
+        let mut err = Vec::new();
         // Stdin is fed while both pipes drain, so neither a large body nor a
         // large answer can fill a pipe and stall the child.
         let work = async {
-            let feed = async {
-                if let (Some(mut pipe), Some(bytes)) = (pipe, input) {
-                    // A child that exits early closes the pipe; its own
-                    // answer says why.
-                    let _ = pipe.write_all(&bytes).await;
+            let pipes = async {
+                let feed = async {
+                    if let (Some(mut pipe), Some(bytes)) = (pipe, input) {
+                        // A child that exits early closes the pipe; its own
+                        // answer says why.
+                        let _ = pipe.write_all(&bytes).await;
+                    }
+                };
+                tokio::join!(feed, drain(stdout, &mut out), drain(stderr, &mut err));
+            };
+            tokio::pin!(pipes);
+            let mut pipes_done = false;
+            let status = loop {
+                tokio::select! {
+                    status = child.wait() => break status,
+                    () = &mut pipes, if !pipes_done => pipes_done = true,
                 }
             };
-            let ((), stdout, stderr, status) =
-                tokio::join!(feed, drain(stdout), drain(stderr), child.wait());
-            status.map(|status| GhOutput {
-                exit: status.code(),
-                stdout,
-                stderr: String::from_utf8_lossy(&stderr).into_owned(),
-            })
+            // Done when `gh` exits, not when its pipes close. A process it
+            // started can hold them open after it is gone: `git` and its
+            // helpers briefly, a hook that left something in the background
+            // (a clone runs the repository's own) for as long as that lives.
+            // Output already in flight gets the grace to arrive, and what
+            // was read by then is the answer.
+            if !pipes_done {
+                let _ = tokio::time::timeout(PIPE_DRAIN_GRACE, &mut pipes).await;
+            }
+            status
         };
         let finished = tokio::time::timeout(self.timeout, work).await;
         match finished {
-            Ok(Ok(output)) => Ok(output),
+            Ok(Ok(status)) => Ok(GhOutput {
+                exit: status.code(),
+                stdout: out,
+                stderr: String::from_utf8_lossy(&err).into_owned(),
+            }),
             Ok(Err(e)) => Err(GhError::Failed {
                 message: e.to_string(),
             }),
@@ -329,20 +409,13 @@ impl GhCommand {
     }
 }
 
-async fn api_permit() -> Result<tokio::sync::SemaphorePermit<'static>, GhError> {
-    API_PERMITS.acquire().await.map_err(|_| GhError::Failed {
-        message: "Atlas is shutting down.".into(),
-    })
-}
-
-/// Everything a pipe carries until it closes. A read error ends it early:
-/// the exit code and what did arrive still classify the run.
-async fn drain(pipe: Option<impl AsyncRead + Unpin>) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    if let Some(mut pipe) = pipe {
-        let _ = pipe.read_to_end(&mut bytes).await;
-    }
-    bytes
+/// Everything a pipe carries until it closes, appended to `into` as it
+/// arrives, so a caller that stops waiting keeps what was read. A read error
+/// ends it early: the exit code and what did arrive still classify the run.
+async fn drain(pipe: Option<impl AsyncRead + Unpin>, into: &mut Vec<u8>) {
+    let Some(mut pipe) = pipe else { return };
+    // A `Vec` always has room, so reading nothing is the end of the pipe.
+    while matches!(pipe.read_buf(into).await, Ok(read) if read > 0) {}
 }
 
 /// Now, in epoch milliseconds: the clock the pause is kept in.
@@ -353,20 +426,46 @@ pub fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// Until when the API is paused (epoch milliseconds), if it is at `now_ms`.
-pub fn paused_until(now_ms: i64) -> Option<i64> {
-    let until = PAUSED_UNTIL.load(Ordering::Relaxed);
+/// Until when `api` is paused (epoch milliseconds), if it is at `now_ms`.
+pub fn paused_until(api: Api, now_ms: i64) -> Option<i64> {
+    let until = api.pause().load(Ordering::Relaxed);
     (until > now_ms).then_some(until)
 }
 
-/// Pause the API until `at_ms`, replacing any pause in force: for the caller
-/// that read the time GitHub named from an answer's headers. Zero lifts it.
-pub fn pause_until(at_ms: i64) {
-    PAUSED_UNTIL.store(at_ms, Ordering::Relaxed);
+/// Pause `api` until `at_ms`, replacing any pause of it in force: for the
+/// caller that read the time GitHub named from an answer's headers. Zero
+/// lifts it.
+pub fn pause_until(api: Api, at_ms: i64) {
+    api.pause().store(at_ms, Ordering::Relaxed);
+}
+
+/// The pause that holds a run back: its own API's, or for a run that named
+/// none, the later of the two.
+fn paused_for(api: Option<Api>, now_ms: i64) -> Option<i64> {
+    match api {
+        Some(api) => paused_until(api, now_ms),
+        None => Api::ALL
+            .into_iter()
+            .filter_map(|api| paused_until(api, now_ms))
+            .max(),
+    }
 }
 
 fn says_rate_limited(lower: &str) -> bool {
     lower.contains("rate limit") || lower.contains("http 429")
+}
+
+/// Which APIs a refusal pauses, from `gh`'s (lowercased) stderr. A quota
+/// that ran out pauses the API it was spent on, when the run named one.
+/// Everything else pauses both: a secondary limit is GitHub asking this user
+/// to slow down whatever they ask next, a 429 can be either kind, and a verb
+/// that named no API could have spent either quota.
+fn refused_apis(api: Option<Api>, lower: &str) -> Vec<Api> {
+    let secondary = lower.contains("secondary") || lower.contains("http 429");
+    match api {
+        Some(api) if !secondary => vec![api],
+        _ => Api::ALL.to_vec(),
+    }
 }
 
 /// One taxonomy for a run with no answer. The order matters: a signed-out
@@ -381,8 +480,10 @@ fn classify(exit: Option<i32>, stderr: &str) -> GhError {
         return GhError::NotAuthenticated;
     }
     if says_rate_limited(&lower) {
+        // The output does not say which API was asked, so this is the later
+        // of the two pauses. A caller that knows asks [`paused_until`].
         return GhError::RateLimited {
-            retry_at: paused_until(now_ms()),
+            retry_at: paused_for(None, now_ms()),
         };
     }
     let message = stderr
