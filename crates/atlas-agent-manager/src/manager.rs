@@ -425,7 +425,7 @@ impl AgentManager {
     /// Local only: the sessions are not closed on the agent first. An update
     /// and an uninstall both end with that process being dropped, and a
     /// `session/close` RPC to a peer that is about to be killed buys nothing.
-    fn forget_sessions_for(&self, key: &Agent) {
+    pub(crate) fn forget_sessions_for(&self, key: &Agent) {
         self.lock_sessions().retain(|(agent, _), _| agent != key);
     }
 
@@ -1167,6 +1167,42 @@ impl AgentManager {
             connection.close_session(session_id.clone()).await?;
         }
         Ok(())
+    }
+
+    /// Drop the manager's handle on one session's thread, without asking the
+    /// agent anything. Answers the handle, if there was one.
+    ///
+    /// By agent and id, so it is never ambiguous the way [`Self::session`]
+    /// can be. The session registry ends a session through this: whether the
+    /// agent is then sent `session/close` is the registry's follow-up to
+    /// hand out, after the caller has released what it holds on the thread.
+    pub(crate) fn forget_session(
+        &self,
+        agent: &Agent,
+        session_id: &acp::SessionId,
+    ) -> Option<SessionHandle> {
+        self.lock_sessions()
+            .remove(&(agent.clone(), session_id.clone()))
+    }
+
+    /// [`Self::forget_session`], only if the handle registered under the id
+    /// is `thread` itself: a newer session bound under the same id is left
+    /// alone.
+    pub(crate) fn forget_session_if_same(
+        &self,
+        agent: &Agent,
+        session_id: &acp::SessionId,
+        thread: &AcpThreadHandle,
+    ) -> bool {
+        let key = (agent.clone(), session_id.clone());
+        let mut sessions = self.lock_sessions();
+        let same = sessions
+            .get(&key)
+            .is_some_and(|handle| Arc::ptr_eq(&handle.thread, thread));
+        if same {
+            sessions.remove(&key);
+        }
+        same
     }
 
     /// The connection for `agent`, connecting first if it is not up.
