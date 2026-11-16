@@ -334,13 +334,9 @@ impl GitCommand {
             .map_err(|e| spawn_error(&display, self.cwd.as_deref(), &e))?;
 
         // Feed stdin from a thread so a chatty child can't deadlock us.
-        let stdin_thread = self.stdin.and_then(|bytes| {
-            child.stdin.take().map(|mut pipe| {
-                std::thread::spawn(move || {
-                    let _ = pipe.write_all(&bytes);
-                })
-            })
-        });
+        let stdin_fed = self
+            .stdin
+            .and_then(|bytes| child.stdin.take().map(|pipe| feed_stdin(pipe, bytes)));
 
         let out = match self.timeout {
             None => child.wait_with_output(),
@@ -356,8 +352,12 @@ impl GitCommand {
             },
         }
         .map_err(|e| GitRunError::Failed(format!("{display}: {e}")))?;
-        if let Some(t) = stdin_thread {
-            let _ = t.join();
+        // Git has exited, so the feeder is normally done: git read the
+        // bytes, or its exit closed the pipe under the write. Whatever git
+        // left running can still hold the read end without reading it, so
+        // the feeder is waited on for the grace and no longer.
+        if let Some(fed) = stdin_fed {
+            let _ = fed.recv_timeout(STREAM_DRAIN_GRACE);
         }
         Ok(GitRawOutput {
             exit_code: out.status.code(),
@@ -551,8 +551,23 @@ pub fn shallow_clone(url: &str, dest: &std::path::Path) -> Result<GitRawOutput, 
 }
 
 /// How long a run keeps reading git's pipes after git itself has exited
-/// ([`GitCommand::run_streaming`], and any run with a timeout).
+/// ([`GitCommand::run_streaming`], and any run with a timeout), and how long
+/// [`GitCommand::output`] then waits for its stdin feeder.
 const STREAM_DRAIN_GRACE: Duration = Duration::from_millis(500);
+
+/// Write `bytes` to git's stdin on a thread of its own, and close the pipe.
+/// The receiver hears once when that is over, written or refused. The thread
+/// is never joined: a write blocked on a pipe nobody reads cannot be
+/// interrupted, and ends by itself when the last holder closes the read end.
+fn feed_stdin(mut pipe: std::process::ChildStdin, bytes: Vec<u8>) -> std::sync::mpsc::Receiver<()> {
+    let (done, fed) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = pipe.write_all(&bytes);
+        drop(pipe);
+        let _ = done.send(());
+    });
+    fed
+}
 
 /// One raw line as text: the trailing `\n` / `\r\n` dropped, as
 /// [`BufRead::lines`] does, but bytes that are not UTF-8 (a Windows console
@@ -867,6 +882,43 @@ mod tests {
             "took {:?}",
             started.elapsed()
         );
+    }
+
+    /// The stdin feeder is not waited on without a limit. A process git
+    /// left behind can hold the read end of stdin and never read it, so a
+    /// body larger than the pipe never finishes being written: git is done,
+    /// and the run must be too. The program here exits without reading,
+    /// leaving a child that holds that read end as descriptor 3 (a
+    /// background job's own stdin is `/dev/null`).
+    #[cfg(unix)]
+    #[test]
+    fn a_run_returns_when_git_exits_though_its_stdin_was_never_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("fake-git");
+        std::fs::write(
+            &script,
+            "exec 3<&0\nsleep 20 >/dev/null 2>&1 &\necho ran\nexit 0\n",
+        )
+        .unwrap();
+        for limit in [None, Some(Duration::from_secs(60))] {
+            let mut cmd = GitCommand::new(dir.path(), &[])
+                .program("/bin/sh")
+                .arg(&script)
+                // Far more than a pipe holds, so the write cannot complete.
+                .stdin(vec![b'x'; 4 * 1024 * 1024]);
+            if let Some(limit) = limit {
+                cmd = cmd.timeout(limit);
+            }
+            let started = Instant::now();
+            let out = cmd.output().unwrap();
+            assert!(out.success());
+            assert_eq!(out.stdout, b"ran\n");
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "timeout {limit:?}: took {:?}",
+                started.elapsed()
+            );
+        }
     }
 
     /// A folder that is gone is not "git is not installed": on Unix both are
