@@ -62,6 +62,34 @@ export function getLanguage(path: string): string {
   return map[ext] ?? ext.toUpperCase();
 }
 
+const C_ESCAPES: Record<string, number> = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13 };
+
+/**
+ * A name as git prints it in a diff header. Git C-quotes a name that holds a
+ * quote, a backslash, a control character or, with `core.quotePath` (on by
+ * default), a non-ASCII byte: `"caf\303\251.txt"` is `café.txt`. The octal
+ * escapes are the name's UTF-8 bytes, so they are decoded together.
+ */
+function gitName(printed: string): string {
+  if (!printed.startsWith('"') || !printed.endsWith('"')) return printed;
+  const encoder = new TextEncoder();
+  const bytes: number[] = [];
+  for (const part of printed.slice(1, -1).match(/\\[0-7]{3}|\\.|[^\\]+/g) ?? []) {
+    if (!part.startsWith("\\")) bytes.push(...encoder.encode(part));
+    else if (part.length === 4) bytes.push(parseInt(part.slice(1), 8));
+    else bytes.push(C_ESCAPES[part[1]] ?? part.charCodeAt(1));
+  }
+  return new TextDecoder().decode(new Uint8Array(bytes));
+}
+
+/** The new path on a `diff --git` line (what follows `diff --git `). */
+function headerPath(header: string): string | undefined {
+  const quoted = header.match(/"(?:[^"\\]|\\.)*"$/);
+  if (quoted) return gitName(quoted[0]).replace(/^b\//, "");
+  const plain = header.match(/a\/(.+?) b\/(.+)/);
+  return plain?.[2] ?? plain?.[1];
+}
+
 export function parseDiff(raw: string): DiffFile[] {
   const files: DiffFile[] = [];
   if (!raw.trim()) return files;
@@ -69,8 +97,7 @@ export function parseDiff(raw: string): DiffFile[] {
 
   for (const section of fileSections) {
     const lines = section.split("\n");
-    const headerMatch = lines[0]?.match(/a\/(.+?) b\/(.+)/);
-    const path = headerMatch?.[2] ?? headerMatch?.[1] ?? "unknown";
+    const path = headerPath(lines[0] ?? "") ?? "unknown";
     let additions = 0,
       deletions = 0;
     const hunks: DiffHunk[] = [];
@@ -93,7 +120,8 @@ export function parseDiff(raw: string): DiffFile[] {
       if (!currentHunk) {
         // Extended header lines, before the first hunk.
         if (line.startsWith("Binary files ")) binary = true;
-        else if (line.startsWith("rename from ")) oldPath = line.slice("rename from ".length);
+        else if (line.startsWith("rename from "))
+          oldPath = gitName(line.slice("rename from ".length));
         continue;
       }
       if (line.startsWith("+")) {

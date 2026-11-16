@@ -1,39 +1,16 @@
-//! The editor gutter's line classification, backed by the `atlas-gitdiff`
-//! engine. The diff viewer reads `git_review` instead.
+//! The editor gutter's line classification, from `atlas-gitdiff`. The diff
+//! viewer reads `git_review` instead.
 
 use atlas_git::GitCommand;
-use atlas_gitdiff::{build_file_diff, line_status, LineStatus};
+use atlas_gitdiff::{line_status, LineStatus};
 
-/// Run `git diff` for one file and return the raw unified output. `staged`
-/// selects the index-vs-HEAD diff; otherwise it's worktree-vs-HEAD. `context`
-/// is the `-U` value (large → whole-file side-by-side). Falls back to
-/// `--no-index` against /dev/null so brand-new / untracked files render as
-/// all-added instead of an empty diff. `ignore_ws` adds `-w`
-/// (`diffIgnoreWhitespace`): a change that is only whitespace then reads as
-/// no change, the same as a clean file.
-fn run_git_diff(
-    path: &str,
-    file: &str,
-    staged: bool,
-    context: u32,
-    commit: Option<&str>,
-    ignore_ws: bool,
-) -> Result<String, String> {
-    let ctx = format!("-U{context}");
-    let ws: &[&str] = if ignore_ws { &["-w"] } else { &[] };
-    // Commit mode: the diff INTRODUCED by `commit` for this file. `git show`
-    // diffs the commit against its parent (and against the empty tree for the
-    // root commit), so it works uniformly. `-m --first-parent` makes a merge
-    // show what it brought into its branch, matching `git_show` — without it a
-    // merge prints a combined diff, empty for a clean merge.
-    if let Some(sha) = commit {
-        let mut args = vec!["show", "--no-color", &ctx];
-        args.extend_from_slice(ws);
-        args.extend_from_slice(&["--format=", "-m", "--first-parent", sha, "--", file]);
-        return git_stdout(path, &args);
-    }
-    let mut args: Vec<&str> = vec!["diff", "--no-color", &ctx];
-    args.extend_from_slice(ws);
+/// Run `git diff -U0` for one file and return the raw unified output.
+/// `staged` selects the index-vs-HEAD diff; otherwise it's worktree-vs-HEAD.
+/// Falls back to `--no-index` against /dev/null so brand-new / untracked
+/// files read as all-added instead of an empty diff. Never `-w`: the gutter
+/// marks every changed line, whitespace included.
+fn run_git_diff(path: &str, file: &str, staged: bool) -> Result<String, String> {
+    let mut args: Vec<&str> = vec!["diff", "--no-color", "-U0"];
     if staged {
         args.push("--cached");
     }
@@ -62,10 +39,7 @@ fn run_git_diff(
         // uncommitted here", and falling back to the staged diff would make the
         // editor gutter mark lines the user already staged and moved on from.
         if !staged && !exists_in_head(path, file) {
-            let mut args = vec!["diff", "--no-color", &ctx];
-            args.extend_from_slice(ws);
-            args.extend_from_slice(&["--cached", "--", file]);
-            let cached = git_stdout(path, &args)?;
+            let cached = git_stdout(path, &["diff", "--no-color", "-U0", "--cached", "--", file])?;
             if !cached.trim().is_empty() {
                 return Ok(cached);
             }
@@ -78,7 +52,7 @@ fn run_git_diff(
     let nul = devnull();
     git_stdout(
         path,
-        &["diff", "--no-color", &ctx, "--no-index", "--", nul, file],
+        &["diff", "--no-color", "-U0", "--no-index", "--", nul, file],
     )
 }
 
@@ -126,12 +100,7 @@ pub async fn git_diff_line_status(
     file: String,
     staged: bool,
 ) -> Result<LineStatus, String> {
-    tokio::task::spawn_blocking(move || {
-        // The gutter marks every changed line, whitespace included.
-        let diff = run_git_diff(&path, &file, staged, 0, None, false)?;
-        let fd = build_file_diff(&diff, &file, "");
-        Ok(line_status(&fd))
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    tokio::task::spawn_blocking(move || Ok(line_status(&run_git_diff(&path, &file, staged)?)))
+        .await
+        .map_err(|e| e.to_string())?
 }

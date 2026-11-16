@@ -1,5 +1,5 @@
 //! Minimal unified-diff parser: turns `git diff` text into hunks of classified
-//! lines. Just enough to feed the side-by-side engine — header lines (diff
+//! lines. Just enough to classify the new file's lines — header lines (diff
 //! --git, index, ---/+++, rename/mode) are skipped; binary diffs are flagged.
 
 use regex::Regex;
@@ -20,7 +20,6 @@ pub struct RawLine {
 
 #[derive(Debug, Clone)]
 pub struct Hunk {
-    pub old_start: u32,
     pub new_start: u32,
     pub lines: Vec<RawLine>,
 }
@@ -88,13 +87,11 @@ pub fn parse_unified(diff: &str) -> ParsedDiff {
                 out.hunks.push(h);
             }
             columns = caps[1].len() - 1;
-            let old_start = caps[2].parse().unwrap_or(0);
             let new_start = caps[4].parse().unwrap_or(0);
             // An omitted count means one line (`-40` is `-40,1`).
             let count = |i: usize| caps.get(i).map_or(Some(1), |m| m.as_str().parse().ok());
             left = (count(3).unwrap_or(0), count(5).unwrap_or(0));
             cur = Some(Hunk {
-                old_start,
                 new_start,
                 lines: Vec::new(),
             });
@@ -193,7 +190,7 @@ mod tests {
         );
         assert_eq!(parsed.hunks.len(), 1);
         let h = &parsed.hunks[0];
-        assert_eq!((h.old_start, h.new_start), (10, 10));
+        assert_eq!(h.new_start, 10);
         assert_eq!(kinds(h), [(C, "keep"), (M, "old"), (P, "new")]);
     }
 
@@ -201,15 +198,9 @@ mod tests {
     fn several_hunks_keep_their_own_starts() {
         let parsed = parse_unified("@@ -1,2 +1,2 @@\n-a\n+b\n@@ -40 +41,2 @@\n x\n+y\n");
         assert_eq!(parsed.hunks.len(), 2);
-        assert_eq!(
-            (parsed.hunks[0].old_start, parsed.hunks[0].new_start),
-            (1, 1)
-        );
+        assert_eq!(parsed.hunks[0].new_start, 1);
         // A single-line range omits its count (`-40`, not `-40,1`).
-        assert_eq!(
-            (parsed.hunks[1].old_start, parsed.hunks[1].new_start),
-            (40, 41)
-        );
+        assert_eq!(parsed.hunks[1].new_start, 41);
         assert_eq!(kinds(&parsed.hunks[1]), [(C, "x"), (P, "y")]);
     }
 
@@ -318,16 +309,13 @@ mod tests {
         let added = parse_unified(
             "diff --git a/n b/n\nnew file mode 100644\n--- /dev/null\n+++ b/n\n@@ -0,0 +1 @@\n+hi\n",
         );
-        assert_eq!((added.hunks[0].old_start, added.hunks[0].new_start), (0, 1));
+        assert_eq!(added.hunks[0].new_start, 1);
         assert_eq!(kinds(&added.hunks[0]), [(P, "hi")]);
 
         let deleted = parse_unified(
             "diff --git a/d b/d\ndeleted file mode 100644\n--- a/d\n+++ /dev/null\n@@ -1 +0,0 @@\n-bye\n",
         );
-        assert_eq!(
-            (deleted.hunks[0].old_start, deleted.hunks[0].new_start),
-            (1, 0)
-        );
+        assert_eq!(deleted.hunks[0].new_start, 0);
         assert_eq!(kinds(&deleted.hunks[0]), [(M, "bye")]);
     }
 
@@ -364,7 +352,7 @@ mod tests {
         );
         assert_eq!(parsed.hunks.len(), 2);
         let h = &parsed.hunks[0];
-        assert_eq!((h.old_start, h.new_start), (1, 1));
+        assert_eq!(h.new_start, 1);
         assert_eq!(
             kinds(h),
             [
@@ -376,6 +364,71 @@ mod tests {
             ]
         );
         assert_eq!(kinds(&parsed.hunks[1]), [(M, "gone"), (P, "here")]);
+    }
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct FixtureHunk {
+        new_start: u32,
+        lines: Vec<String>,
+    }
+    #[derive(serde::Deserialize)]
+    struct FixtureFile {
+        #[serde(default)]
+        binary: bool,
+        hunks: Vec<FixtureHunk>,
+    }
+    #[derive(serde::Deserialize)]
+    struct FixtureCase {
+        name: String,
+        diff: String,
+        files: Vec<FixtureFile>,
+    }
+
+    /// The cases every unified-diff parser in Atlas is held to; the docblock
+    /// of `src/features/git/lib/unified-diff.fixtures.test.ts` names the
+    /// others. This parser reads no paths and no old-file line numbers, so
+    /// a case is its files' hunks in order, each from its new-file start, and
+    /// whether any of them is binary. It reads every case as the
+    /// fixtures state it: there is no table of differences here.
+    #[test]
+    fn it_reads_the_shared_fixtures_as_they_state() {
+        let cases: Vec<FixtureCase> = serde_json::from_str(include_str!(
+            "../../../src/features/git/lib/unified-diff.fixtures.json"
+        ))
+        .expect("the fixture table parses");
+        assert!(cases.len() >= 20);
+        for case in cases {
+            let parsed = parse_unified(&case.diff);
+            let got: Vec<(u32, Vec<String>)> = parsed
+                .hunks
+                .iter()
+                .map(|h| {
+                    let lines = h.lines.iter().map(|l| {
+                        let marker = match l.kind {
+                            C => ' ',
+                            M => '-',
+                            P => '+',
+                        };
+                        format!("{marker}{}", l.text)
+                    });
+                    (h.new_start, lines.collect())
+                })
+                .collect();
+            let want: Vec<(u32, Vec<String>)> = case
+                .files
+                .iter()
+                .flat_map(|f| &f.hunks)
+                .map(|h| (h.new_start, h.lines.clone()))
+                .collect();
+            assert_eq!(got, want, "{}", case.name);
+            assert_eq!(
+                parsed.is_binary,
+                case.files.iter().any(|f| f.binary),
+                "{}",
+                case.name
+            );
+        }
     }
 
     /// Once a hunk is open, the next file's `--- a/…` and `+++ b/…` headers

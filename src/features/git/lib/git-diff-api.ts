@@ -1,4 +1,4 @@
-// Bridge to the native `atlas-gitdiff` engine (Rust) for the editor gutter's
+// Bridge to the native `atlas-gitdiff` crate (Rust) for the editor gutter's
 // line classification, and the entry point that opens the review diff.
 
 import { invoke } from "@tauri-apps/api/core";

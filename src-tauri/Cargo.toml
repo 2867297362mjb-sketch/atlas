@@ -150,8 +150,8 @@ atlas-embed = { path = "../crates/atlas-embed" }
 atlas-memory = { path = "../crates/atlas-memory" }
 # CLAUDE.md + .claude/rules mirrored into AGENTS.md (commands::instruction_sync).
 atlas-instruction-sync = { path = "../crates/atlas-instruction-sync" }
-# Structured side-by-side git diff engine (vendors delta's word-diff). Drives
-# `commands::gitdiff` (diff viewer + editor gutter).
+# The editor gutter's line status from a file's `git diff` (vendors delta's
+# line pairing). Drives `commands::gitdiff`.
 atlas-gitdiff = { path = "../crates/atlas-gitdiff" }
 # Git execution chokepoint: real-binary spawns (hooks run), typed stderr →
 # error taxonomy with friendly messages, porcelain-v2 status, streaming
