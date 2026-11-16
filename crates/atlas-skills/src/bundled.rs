@@ -191,8 +191,8 @@ fn ensure_bundled_skill_at(root: &Path, name: &str, content: &str, link: bool) {
     if fs::create_dir_all(&dir).is_err() {
         return;
     }
-    if fs::write(&skill_md, content).is_ok() {
-        let _ = fs::write(&hash_file, &bundled_hash);
+    if atlas_fs::replace_file(&skill_md, content).is_ok() {
+        let _ = atlas_fs::replace_file(&hash_file, &bundled_hash);
         if fresh && link {
             link_bundled_skill(root, name);
         }

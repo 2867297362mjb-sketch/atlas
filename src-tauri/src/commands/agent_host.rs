@@ -4336,7 +4336,7 @@ pub fn save_installed(
     }
     let json = serde_json::to_string_pretty(settings)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    std::fs::write(path, json)
+    atlas_fs::replace_file(path, json)
 }
 
 #[cfg(test)]

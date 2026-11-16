@@ -66,14 +66,9 @@ const ALLOWED: &[(&str, usize, &str)] = &[
         "swaps whole .app bundles (directories) with a .bak rollback, not a file's contents",
     ),
     (
-        "src-tauri/src/commands/skills.rs",
+        "crates/atlas-skills/src/paths.rs",
         1,
         "moves a skill directory between stores, with a copy fallback across devices",
-    ),
-    (
-        "src-tauri/src/commands/agent_host/open_turns.rs",
-        2,
-        "a hand-rolled replace still to migrate; the file was being moved when the others were",
     ),
     (
         "crates/atlas-memory/src/health.rs",
