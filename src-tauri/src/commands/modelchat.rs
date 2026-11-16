@@ -68,6 +68,7 @@ pub(super) fn provider_endpoint(provider: &str) -> Option<(ApiKind, &'static str
         "opper" => (ApiKind::OpenAi, "https://api.opper.ai/v3/compat"),
         "standardcompute" => (ApiKind::OpenAi, "https://api.stdcmpt.com/v1"),
         "uberllm" => (ApiKind::OpenAi, "https://api.uberllm.dev/v1"),
+        "trustedrouter" => (ApiKind::OpenAi, "https://api.trustedrouter.com/v1"),
         _ => return None,
     })
 }
@@ -430,6 +431,11 @@ fn fallback_models(provider: &str) -> Vec<&'static str> {
             "anthropic/claude-sonnet-4.6",
             "openai/gpt-5.5",
         ],
+        "trustedrouter" => vec![
+            "deepseek/deepseek-v4-flash",
+            "anthropic/claude-sonnet-4.6",
+            "openai/gpt-5.5",
+        ],
         _ => vec![],
     }
 }
@@ -753,6 +759,27 @@ mod tests {
     #[test]
     fn test_uberllm_fallback_models() {
         let models = fallback_models("uberllm");
+        assert_eq!(
+            models,
+            vec![
+                "deepseek/deepseek-v4-flash",
+                "anthropic/claude-sonnet-4.6",
+                "openai/gpt-5.5",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_trustedrouter_endpoint() {
+        let (kind, url) =
+            provider_endpoint("trustedrouter").expect("trustedrouter endpoint must exist");
+        assert_eq!(kind, ApiKind::OpenAi);
+        assert_eq!(url, "https://api.trustedrouter.com/v1");
+    }
+
+    #[test]
+    fn test_trustedrouter_fallback_models() {
+        let models = fallback_models("trustedrouter");
         assert_eq!(
             models,
             vec![

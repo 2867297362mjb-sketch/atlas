@@ -116,6 +116,7 @@ const ENV_KEY_VARS: &[(&str, &[&str])] = &[
     ("opper", &["OPPER_API_KEY"]),
     ("standardcompute", &["STANDARDCOMPUTE_API_KEY"]),
     ("uberllm", &["UBERLLM_API_KEY"]),
+    ("trustedrouter", &["TRUSTEDROUTER_API_KEY"]),
 ];
 
 /// One env-imported key: which provider it maps to, the variable it came from,
@@ -823,5 +824,15 @@ mod tests {
         assert!(entry.is_some(), "uberllm must be in ENV_KEY_VARS");
         let (_, vars) = entry.unwrap();
         assert_eq!(vars, &["UBERLLM_API_KEY"]);
+    }
+
+    #[test]
+    fn test_trustedrouter_env_vars() {
+        let entry = ENV_KEY_VARS
+            .iter()
+            .find(|(provider, _)| *provider == "trustedrouter");
+        assert!(entry.is_some(), "trustedrouter must be in ENV_KEY_VARS");
+        let (_, vars) = entry.unwrap();
+        assert_eq!(vars, &["TRUSTEDROUTER_API_KEY"]);
     }
 }

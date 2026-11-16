@@ -245,6 +245,14 @@ export const PROVIDERS: ProviderDef[] = [
     chat: true,
   },
   {
+    id: "trustedrouter",
+    name: "TrustedRouter",
+    env: "TRUSTEDROUTER_API_KEY",
+    category: "Gateway",
+    docsUrl: "https://trustedrouter.com/docs",
+    chat: true,
+  },
+  {
     id: "litellm",
     name: "LiteLLM Proxy",
     env: "LITELLM_API_KEY",

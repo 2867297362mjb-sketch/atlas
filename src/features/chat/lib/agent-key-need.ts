@@ -102,6 +102,13 @@ const NEEDS: ProviderNeed[] = [
     phrases: ["uberllm api key"],
   },
   {
+    provider: "trustedrouter",
+    label: "TrustedRouter",
+    consoleHint: "trustedrouter.com",
+    envVars: ["TRUSTEDROUTER_API_KEY"],
+    phrases: ["trustedrouter api key"],
+  },
+  {
     provider: "xai",
     label: "xAI",
     consoleHint: "console.x.ai",
