@@ -432,10 +432,14 @@ impl<X: SessionExtra> SessionRegistry<X> {
                     // id may have registered since, and that one is live.
                     self.manager
                         .settle_session(&meta.agent, &session_id, thread, false);
+                    // A newer bind of the id is live on this agent, or opened
+                    // there and on its way to its own bind: either way the
+                    // agent's one session by this id is that bind's now.
                     let rebound = state
                         .records
                         .get(session_id.0.as_ref())
-                        .is_some_and(|record| record.agent == meta.agent);
+                        .is_some_and(|record| record.agent == meta.agent)
+                        || self.manager.holds_session(&meta.agent, &session_id);
                     (ended_by, rebound)
                 }
             }

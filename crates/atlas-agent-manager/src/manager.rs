@@ -225,7 +225,7 @@ pub struct AgentManager {
     /// a second load of a session that is still bound. Each waits here until
     /// its bind is decided ([`Self::settle_session`]), so a late load that
     /// is refused cannot have replaced the live one first.
-    displacing: Mutex<Vec<SessionHandle>>,
+    displacing: Mutex<Vec<(acp::SessionId, SessionHandle)>>,
     events: tokio::sync::broadcast::Sender<AgentManagerEvent>,
     deadlines: Mutex<Deadlines>,
 }
@@ -434,7 +434,8 @@ impl AgentManager {
     /// `session/close` RPC to a peer that is about to be killed buys nothing.
     pub(crate) fn forget_sessions_for(&self, key: &Agent) {
         self.lock_sessions().retain(|(agent, _), _| agent != key);
-        self.lock_displacing().retain(|handle| &handle.agent != key);
+        self.lock_displacing()
+            .retain(|(_, handle)| &handle.agent != key);
     }
 
     /// Restart `key`, resolving its server the way [`Self::connect_to`] does.
@@ -1246,7 +1247,7 @@ impl AgentManager {
             .is_some_and(|live| !Arc::ptr_eq(&live.thread, thread));
         if over_another {
             drop(sessions);
-            self.lock_displacing().push(handle);
+            self.lock_displacing().push((key.1, handle));
         } else {
             sessions.insert(key, handle);
         }
@@ -1269,8 +1270,8 @@ impl AgentManager {
             let mut displacing = self.lock_displacing();
             displacing
                 .iter()
-                .position(|handle| Arc::ptr_eq(&handle.thread, thread))
-                .map(|at| displacing.swap_remove(at))
+                .position(|(_, handle)| Arc::ptr_eq(&handle.thread, thread))
+                .map(|at| displacing.swap_remove(at).1)
         };
         match (accepted, waiting) {
             (true, Some(handle)) => {
@@ -1284,7 +1285,19 @@ impl AgentManager {
         }
     }
 
-    fn lock_displacing(&self) -> std::sync::MutexGuard<'_, Vec<SessionHandle>> {
+    /// Whether a session `agent` opened as `session_id` is still held: live,
+    /// or waiting on its bind. Takes no thread lock, so it may be called
+    /// under the session registry's.
+    pub(crate) fn holds_session(&self, agent: &Agent, session_id: &acp::SessionId) -> bool {
+        self.lock_sessions()
+            .contains_key(&(agent.clone(), session_id.clone()))
+            || self
+                .lock_displacing()
+                .iter()
+                .any(|(id, handle)| id == session_id && &handle.agent == agent)
+    }
+
+    fn lock_displacing(&self) -> std::sync::MutexGuard<'_, Vec<(acp::SessionId, SessionHandle)>> {
         self.displacing
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

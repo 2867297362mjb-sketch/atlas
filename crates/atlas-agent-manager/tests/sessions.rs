@@ -509,9 +509,68 @@ async fn a_refused_bind_does_not_close_a_newer_bind_of_its_session_on_the_agent(
         "the agent has one session by this id, and the reopened tab is on it"
     );
     assert!(f.registry.contains("s-stored"));
+    let handle = f
+        .manager
+        .session(&acp::SessionId::new("s-stored"))
+        .expect("the newer bind lost its handle");
     assert!(
-        f.residue("s-stored").manager_handle,
+        Arc::ptr_eq(&handle.thread, &newer_thread),
         "the newer bind's thread is the one registered"
+    );
+}
+
+#[tokio::test]
+async fn a_refused_bind_does_not_close_a_newer_open_that_is_still_on_its_way() {
+    let f = fixture_on(TestServer::with_fixed_session_id(AGENT, "s-stored"));
+    f.server.advertise_close();
+    let late = f.registry.begin_bind(&f.agent, Some("s-stored"));
+    assert!(matches!(f.registry.close("s-stored"), Closed::Unknown));
+    let newer = f.registry.begin_bind(&f.agent, Some("s-stored"));
+    let open = || f.manager.new_session(f.agent.clone(), Vec::new());
+    // The late load is answered first this time, and the newer one is
+    // opened but not yet bound when the late bind is refused.
+    let (late_thread, newer_thread) =
+        (open().await.expect("opened"), open().await.expect("opened"));
+
+    let refused = f
+        .registry
+        .bind(late, &late_thread, meta(&f.agent))
+        .expect_err("the bind the close covered");
+    assert!(
+        refused.follow_ups.is_empty(),
+        "the agent was told to close the session the newer open is on"
+    );
+
+    f.registry
+        .bind(newer, &newer_thread, meta(&f.agent))
+        .expect("the reopen binds");
+    let handle = f
+        .manager
+        .session(&acp::SessionId::new("s-stored"))
+        .expect("the reopen has no handle, so it cannot send");
+    assert!(Arc::ptr_eq(&handle.thread, &newer_thread));
+}
+
+#[tokio::test]
+async fn binding_a_session_again_replaces_its_handle() {
+    let f = fixture_on(TestServer::with_fixed_session_id(AGENT, "s-stored"));
+    let id = f.open_on(&f.agent).await;
+    let again = f.registry.begin_bind(&f.agent, Some(&id));
+    let thread = f
+        .manager
+        .new_session(f.agent.clone(), Vec::new())
+        .await
+        .expect("opened again");
+    f.registry
+        .bind(again, &thread, meta(&f.agent))
+        .expect("a rebind of a bound session is accepted");
+    let handle = f
+        .manager
+        .session(&acp::SessionId::new(id.as_str()))
+        .expect("the session has a handle");
+    assert!(
+        Arc::ptr_eq(&handle.thread, &thread),
+        "the session still sends through the thread it was bound to first"
     );
 }
 
