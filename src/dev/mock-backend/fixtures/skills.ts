@@ -59,7 +59,7 @@ const NOW = Date.parse("2026-09-18T11:30:00Z");
 const asScope = (value: unknown): Scope => (value === "project" ? "project" : "global");
 
 // ── Tools ───────────────────────────────────────────────────────────────────
-// The Rust registry is exactly these three (`TOOL_REGISTRY` in skills.rs), and
+// The Rust registry is exactly these three (`TOOL_REGISTRY` in `crates/atlas-skills`), and
 // their ids are what every projection command takes. Codex is deliberately
 // undetected at project scope: that is the only way to see the "n/a" row in the
 // per-tool toggles, and it is the common real case (no `.codex` in the repo).

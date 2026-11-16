@@ -329,8 +329,8 @@ pub async fn search_github(query: String) -> Result<Vec<GithubRepo>, String> {
 /// A single path/URL segment safe to hand to git and to `Path::join`:
 /// non-empty, no leading `-` (git would parse it as a flag), and only
 /// `[A-Za-z0-9._-]` (no separators, no `..` — the `.` rule below).
-/// Mirrors `skills.rs::is_safe_gh_segment`; duplicated because the two
-/// modules deliberately do not depend on each other.
+/// Mirrors `is_safe_gh_segment` in `atlas-skills`; duplicated because the
+/// two deliberately do not depend on each other.
 fn safe_segment(s: &str) -> bool {
     !s.is_empty()
         && s != "."

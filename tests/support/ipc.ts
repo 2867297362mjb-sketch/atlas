@@ -30,7 +30,7 @@ export function rustCommandFiles(): string[] {
  * Command handlers as *declared*: every `fn` carrying `#[tauri::command]`,
  * with the files that declare it.
  *
- * The attribute must start its own line. `skills.rs` cites `#[tauri::command]`
+ * The attribute must start its own line. `skills.rs` once cited `#[tauri::command]`
  * inside a `//!` module doc comment, and matching that occurrence sent the
  * scan past it to the next unrelated `fn` (an `impl Default`), inventing a
  * command called `default`.

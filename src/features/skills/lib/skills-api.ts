@@ -11,7 +11,7 @@ import type {
 
 /**
  * Skills on-disk bridge. The canonical `SKILL.md` store + per-agent symlinks
- * are owned Rust-side (`commands/skills.rs`); the frontend only lists, reads,
+ * are owned Rust-side (`crates/atlas-skills`); the frontend only lists, reads,
  * and issues mutations through these wrappers. Disk *is* the state — every
  * mutation refetches rather than locally patching (see `skills-store.ts`).
  *

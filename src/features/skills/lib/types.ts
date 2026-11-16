@@ -1,4 +1,4 @@
-// Skills feature — shared types. These mirror the Rust `commands/skills.rs`
+// Skills feature — shared types. These mirror the Rust `crates/atlas-skills`
 // IPC contract exactly (serde emits camelCase). The frontend never touches the
 // filesystem; all skill state flows through `skills-api.ts` → `invoke()`.
 
@@ -84,7 +84,7 @@ export interface AgentTarget {
 }
 
 // ── Control Plane (reconcile) ──────────────────────────────────────────────
-// Mirror the Rust `commands/skills.rs` reconcile structs (serde camelCase).
+// Mirror the Rust `crates/atlas-skills` reconcile structs (serde camelCase).
 
 /** A tool's registry facts in the reconciled view. */
 export interface ToolInfo {

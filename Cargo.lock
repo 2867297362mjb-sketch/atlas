@@ -700,6 +700,7 @@ dependencies = [
  "atlas-remote-control",
  "atlas-search",
  "atlas-security",
+ "atlas-skills",
  "atlas-terminal",
  "atlas-theme",
  "atlas-thread-metadata",
