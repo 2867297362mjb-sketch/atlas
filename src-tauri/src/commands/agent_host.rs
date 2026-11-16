@@ -5063,6 +5063,14 @@ mod tests {
         live_catalogue: Option<ScriptedCatalogue>,
         /// Parks every prompt until notified, so a turn stays running.
         hold_turns: Option<Arc<tokio::sync::Notify>>,
+        /// Parks every `session/new` and `session/load` until notified, so a
+        /// bind stays in flight.
+        hold_opens: Option<Arc<tokio::sync::Notify>>,
+        /// Reopens stored sessions (`session/load`), under the id asked for.
+        load: bool,
+        /// Advertises `session/close`, and records every id it is asked to
+        /// close.
+        closes: Option<Arc<std::sync::Mutex<Vec<String>>>>,
     }
 
     /// An agent that is whatever it advertises and nothing else: its id is a
@@ -5072,6 +5080,9 @@ mod tests {
         id: &'static str,
         session_id: &'static str,
         advertised: Advertised,
+        /// Where its threads report, once connected: the host's own sink, so
+        /// a session it opens is projected like a real connection's.
+        events: Option<atlas_agent_servers::ThreadEventSink>,
     }
 
     impl CapabilityAgent {
@@ -5080,7 +5091,33 @@ mod tests {
                 id,
                 session_id,
                 advertised,
+                events: None,
             })
+        }
+
+        fn open(
+            self: Arc<Self>,
+            session_id: acp::SessionId,
+            work_dirs: Vec<PathBuf>,
+        ) -> BoxFuture<'static, anyhow::Result<AcpThreadHandle>> {
+            let hold = self.advertised.hold_opens.clone();
+            async move {
+                if let Some(hold) = hold {
+                    hold.notified().await;
+                }
+                let sink = match &self.events {
+                    Some(events) => events(&session_id),
+                    None => atlas_acp_thread::event_channel().0,
+                };
+                Ok(Arc::new(std::sync::Mutex::new(AcpThread::new(
+                    session_id,
+                    self.clone() as Arc<dyn AgentConnection>,
+                    work_dirs,
+                    None,
+                    sink,
+                ))) as AcpThreadHandle)
+            }
+            .boxed()
         }
     }
 
@@ -5182,14 +5219,35 @@ mod tests {
             self: Arc<Self>,
             work_dirs: Vec<PathBuf>,
         ) -> BoxFuture<'static, anyhow::Result<AcpThreadHandle>> {
-            let thread = Arc::new(std::sync::Mutex::new(AcpThread::new(
-                acp::SessionId::new(self.session_id),
-                self.clone() as Arc<dyn AgentConnection>,
-                work_dirs,
-                None,
-                atlas_acp_thread::event_channel().0,
-            )));
-            async move { Ok(thread) }.boxed()
+            let session_id = acp::SessionId::new(self.session_id);
+            self.open(session_id, work_dirs)
+        }
+
+        fn supports_load_session(&self) -> bool {
+            self.advertised.load
+        }
+
+        fn load_session(
+            self: Arc<Self>,
+            session_id: acp::SessionId,
+            work_dirs: Vec<PathBuf>,
+            _title: Option<Arc<str>>,
+        ) -> BoxFuture<'static, anyhow::Result<AcpThreadHandle>> {
+            self.open(session_id, work_dirs)
+        }
+
+        fn supports_close_session(&self) -> bool {
+            self.advertised.closes.is_some()
+        }
+
+        fn close_session(
+            self: Arc<Self>,
+            session_id: acp::SessionId,
+        ) -> BoxFuture<'static, anyhow::Result<()>> {
+            if let Some(closes) = &self.advertised.closes {
+                closes.lock().unwrap().push(session_id.to_string());
+            }
+            async { Ok(()) }.boxed()
         }
 
         fn auth_methods(&self) -> &[acp::AuthMethod] {
@@ -5253,10 +5311,14 @@ mod tests {
         fn connect(
             &self,
             _delegate: AgentServerDelegate,
-            _options: ConnectOptions,
+            options: ConnectOptions,
         ) -> BoxFuture<'static, anyhow::Result<Arc<dyn AgentConnection>>> {
-            let connection =
-                CapabilityAgent::new(self.id, self.session_id, self.advertised.clone());
+            let connection = Arc::new(CapabilityAgent {
+                id: self.id,
+                session_id: self.session_id,
+                advertised: self.advertised.clone(),
+                events: Some(options.thread_events),
+            });
             async move { Ok(connection as Arc<dyn AgentConnection>) }.boxed()
         }
 
@@ -5582,6 +5644,8 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    mod ending;
 
     /// Issue #56 (B1): the engine may answer a resume with a *different*
     /// session id than the stored one — its fresh-thread fallback for a
