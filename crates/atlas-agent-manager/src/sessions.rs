@@ -279,12 +279,16 @@ impl Drop for BindTicket {
 }
 
 /// A bind that landed after its session was ended. The session the agent
-/// opened is not bound; `follow_ups` discards what was set up for it.
+/// opened is not bound, and nothing was set up for it: a host asks the
+/// registry before it writes anything of its own for the session. What a host
+/// holds under this session id may belong to a newer bind of it, which is why
+/// a refusal never asks for anything to be undone by id.
 #[derive(Debug)]
 pub struct BindRefused {
     /// The end that covered the bind.
     pub ended_by: EndKind,
-    /// In the order they must be done.
+    /// [`FollowUp::CloseOnAgent`] or nothing: the agent's side of the session
+    /// it opened is all there is to discard.
     pub follow_ups: Vec<FollowUp>,
 }
 
@@ -381,11 +385,16 @@ impl<X: SessionExtra> SessionRegistry<X> {
 
     /// Register the session the agent opened on `thread`.
     ///
+    /// Call it before setting up anything else for the session (a wire
+    /// projection, a history binding): a refusal leaves all of that alone,
+    /// because by then it may be a newer bind's.
+    ///
     /// Refused when an end covered the bind while it was in flight: the
-    /// manager's handle on the thread is dropped here, and the refusal says
-    /// what else to undo. A session already bound under this id is replaced,
-    /// holds and all, exactly as a second `session/load` of it replaces the
-    /// thread underneath.
+    /// manager's handle on the thread is dropped here, and the agent is
+    /// asked to close its side unless a newer bind of the session is live on
+    /// it. A session already bound under this id is replaced, holds and all,
+    /// exactly as a second `session/load` of it replaces the thread
+    /// underneath.
     pub fn bind(
         &self,
         ticket: BindTicket,
@@ -393,7 +402,7 @@ impl<X: SessionExtra> SessionRegistry<X> {
         meta: SessionMeta,
     ) -> Result<(), BindRefused> {
         let session_id = lock(thread).session_id().clone();
-        let ended_by = {
+        let (ended_by, rebound) = {
             let mut state = lock(&self.state);
             let ended_by = lock(&self.binds)
                 .in_flight
@@ -421,13 +430,19 @@ impl<X: SessionExtra> SessionRegistry<X> {
                     // id may have registered since, and that one is live.
                     self.manager
                         .forget_session_if_same(&meta.agent, &session_id, thread);
-                    ended_by
+                    let rebound = state
+                        .records
+                        .get(session_id.0.as_ref())
+                        .is_some_and(|record| record.agent == meta.agent);
+                    (ended_by, rebound)
                 }
             }
         };
-        let mut follow_ups = vec![FollowUp::ForgetHistoryBinding, FollowUp::CloseProjection];
-        // An agent that is going is not asked to close anything.
-        if ended_by == EndKind::Closed {
+        let mut follow_ups = Vec::new();
+        // An agent that is going is not asked to close anything. Nor is one
+        // a newer bind of this session is live on: the agent knows one
+        // session by this id, and closing it would close that one.
+        if ended_by == EndKind::Closed && !rebound {
             follow_ups.extend(close_on_agent(thread));
         }
         Err(BindRefused {

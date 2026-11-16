@@ -1375,19 +1375,22 @@ impl AgentHost {
         Ok(key)
     }
 
-    /// Register a thread with the projector and the session registry.
+    /// Register a thread with the session registry, history and the
+    /// projector, in that order.
     ///
-    /// Order matters: the projector is attached before anything else can touch
-    /// the thread, because it drains the events buffered while `session/new`
-    /// was still in flight — the replay that `session/load` produces lands
-    /// there, and dropping it is the replay-loss bug this fixes.
-    ///
-    /// The registry comes last, and may refuse: the session was ended while
+    /// The registry comes first, and may refuse: the session was ended while
     /// it was opening (its agent was stopped, or the window closed the
     /// session being loaded). `ticket` is what tells it so, which is why the
-    /// caller takes it before asking the agent to open anything. What was set
-    /// up for the session above is then undone, by the same follow-ups an end
-    /// hands over.
+    /// caller takes it before asking the agent to open anything. Nothing has
+    /// been set up for the thread by then, so a refusal has nothing of the
+    /// host's to undo. That matters because the projection and the history
+    /// binding are kept by session id: a newer bind of the same session (the
+    /// row reopened after the close that covered this one) may already own
+    /// both, and undoing by id would take them from it.
+    ///
+    /// The projector comes last. Attaching drains the events buffered while
+    /// the open was still in flight (the replay `session/load` produces
+    /// lands there); they wait in the thread's channel until then.
     async fn bind(
         &self,
         ticket: BindTicket,
@@ -1398,25 +1401,6 @@ impl AgentHost {
     ) -> Result<SessionInit> {
         let session_id = lock_thread(&thread).session_id().clone();
 
-        // History first, then the projector. The conversation exists, so
-        // history knows about it before anything has been typed into it —
-        // a chat that emits no thread event would otherwise never appear at
-        // all. Before `attach` because `attach` starts draining events: a
-        // `NewEntry` that lands first would be followed by this draft write and
-        // pushed back to "nothing sent yet".
-        if let Some(history) = self.history() {
-            history.record_connected(
-                &record.plugin_id.as_str().into(),
-                &session_id,
-                snapshot_of(&thread),
-            );
-        }
-        // After `record_connected`, which is what binds the session to its
-        // row: the branch has somewhere to land by the time git answers.
-        self.refresh_branch(&session_id, &cwd.to_string_lossy());
-        self.projector.attach(agent_id, thread.clone());
-
-        let (current_mode, available_modes) = self.modes_of(&thread, &session_id);
         let bound = self.sessions.bind(
             ticket,
             &thread,
@@ -1436,6 +1420,47 @@ impl AgentHost {
             }
             return Err(HostError::new(refused.to_string(), ErrorClass::ProcessDead));
         }
+
+        // History first, then the projector. The conversation exists, so
+        // history knows about it before anything has been typed into it —
+        // a chat that emits no thread event would otherwise never appear at
+        // all. Before `attach` because `attach` starts draining events: a
+        // `NewEntry` that lands first would be followed by this draft write and
+        // pushed back to "nothing sent yet".
+        let history = self.history();
+        let had_row = history.is_some_and(|history| history.thread_for(&session_id).is_some());
+        if let Some(history) = history {
+            history.record_connected(
+                &record.plugin_id.as_str().into(),
+                &session_id,
+                snapshot_of(&thread),
+            );
+        }
+        // After `record_connected`, which is what binds the session to its
+        // row: the branch has somewhere to land by the time git answers.
+        self.refresh_branch(&session_id, &cwd.to_string_lossy());
+        self.projector.attach(agent_id, thread.clone());
+
+        // An end on another thread can take the session between the registry
+        // binding it and the lines above. Its follow-ups ran against a
+        // session with nothing set up yet, so what was set up since is still
+        // here: a projection that pins the thread, and through it the
+        // agent's process. Undo it, as that end would have. The history row
+        // goes only if this bind made it and nobody sent to it; one that was
+        // there before is the end's to decide, and it has.
+        if !self.sessions.contains(session_id.0.as_ref()) {
+            tracing::info!(session = %session_id, "the session ended as it was bound; it is discarded");
+            self.projector.close_session(&session_id);
+            if let (Some(history), false) = (history, had_row) {
+                history.forget(&session_id);
+            }
+            return Err(HostError::new(
+                "the session ended while it was opening",
+                ErrorClass::ProcessDead,
+            ));
+        }
+
+        let (current_mode, available_modes) = self.modes_of(&thread, &session_id);
         if let Some(lifecycle) = self.lifecycle() {
             lifecycle.session_started(
                 session_id.0.as_ref(),
