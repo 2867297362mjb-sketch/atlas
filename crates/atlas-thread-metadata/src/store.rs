@@ -124,7 +124,9 @@ struct Inner {
     cache: RwLock<Cache>,
     events: broadcast::Sender<ThreadStoreEvent>,
     ops_tx: Mutex<Option<Sender<DbOperation>>>,
-    progress: Progress,
+    /// Shared with the writer thread, which holds nothing else of the store:
+    /// see the note where it is spawned.
+    progress: Arc<Progress>,
     worker: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -253,19 +255,28 @@ impl ThreadMetadataStore {
             cache: RwLock::new(cache),
             events,
             ops_tx: Mutex::new(Some(ops_tx)),
-            progress: Progress::default(),
+            progress: Arc::new(Progress::default()),
             worker: Mutex::new(None),
         });
 
         // The writer owns the connection; nothing else may hold it, which is
         // what keeps one row's write one statement without a second lock.
-        let worker_inner = Arc::downgrade(&inner);
+        //
+        // It holds the progress counters and no reference to `Inner`, weak or
+        // strong, and it runs until the queue is closed and empty. Dropping
+        // the last store handle closes the queue and joins this thread, so
+        // the drop returns only once everything queued is written. A writer
+        // that looked at `Inner` to decide whether to go on would stop at
+        // that drop with writes still queued behind its batch; one that held
+        // `Inner` strongly, even for a moment, could be the thread that drops
+        // it and joins itself.
+        let progress = Arc::clone(&inner.progress);
         let worker = std::thread::Builder::new()
             .name("thread-metadata-writer".into())
             .spawn(move || {
                 // Whatever ends this thread — the queue closing, a panic in
                 // rusqlite — releases everyone waiting in `flush`.
-                let _release = WriterExit(worker_inner.clone());
+                let _release = WriterExit(Arc::clone(&progress));
                 while let Ok(first) = ops_rx.recv() {
                     // Take everything already waiting: a streaming turn queues
                     // many updates for one thread and only the last matters.
@@ -299,10 +310,7 @@ impl ThreadMetadataStore {
                             failures.push(e.to_string());
                         }
                     }
-                    let Some(inner) = worker_inner.upgrade() else {
-                        return;
-                    };
-                    inner.progress.record(queued, failures);
+                    progress.record(queued, failures);
                 }
             })
             .map_err(|e| Error::Storage(format!("spawn thread-metadata writer: {e}")))?;
@@ -1504,20 +1512,20 @@ fn dedup_operations(operations: Vec<DbOperation>) -> Vec<DbOperation> {
 }
 
 /// Releases every `flush` waiter when the writer thread leaves, by any route.
-struct WriterExit(std::sync::Weak<Inner>);
+struct WriterExit(Arc<Progress>);
 
 impl Drop for WriterExit {
     fn drop(&mut self) {
-        if let Some(inner) = self.0.upgrade() {
-            inner.progress.finish();
-        }
+        self.0.finish();
     }
 }
 
 impl Drop for Inner {
     fn drop(&mut self) {
         // Closing the queue is what tells the writer to finish and stop; it
-        // drains what is already queued before it sees the disconnect.
+        // writes everything already queued before it sees the disconnect, and
+        // the join waits for that. Never run on the writer thread: it holds
+        // no `Inner`.
         lock(&self.ops_tx).take();
         if let Some(worker) = lock(&self.worker).take() {
             let _ = worker.join();
