@@ -271,13 +271,17 @@ pub(crate) enum PauseScope {
 /// secondary limit (a `retry-after`, or the words). Anything less certain
 /// pauses both APIs, as every refusal once did.
 pub(crate) fn pause_scope(response: &HttpResponse) -> PauseScope {
-    let exhausted = response.header("x-ratelimit-remaining") == Some("0");
+    // Asked of every answered response, so the body is read only when the
+    // quota header already says it ran out.
+    if response.header("x-ratelimit-remaining") != Some("0") {
+        return PauseScope::BothApis;
+    }
     let secondary = response.headers.contains_key("retry-after")
         || response
             .body_text()
             .to_ascii_lowercase()
             .contains("secondary");
-    if exhausted && !secondary {
+    if !secondary {
         PauseScope::OwnApi
     } else {
         PauseScope::BothApis

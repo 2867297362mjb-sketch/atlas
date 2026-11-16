@@ -279,22 +279,27 @@ impl GhCommand {
             Intent::InteractiveRead | Intent::Write => Some(&INTERACTIVE_PERMITS),
             Intent::LongWrite | Intent::Unmetered => None,
         };
-        if matches!(
-            self.intent,
-            Intent::BackgroundRead | Intent::InteractiveRead
-        ) {
-            if let Some(until) = paused_for(api, now_ms()) {
-                return Err(GhError::RateLimited {
+        let held_back = || {
+            let read = matches!(
+                self.intent,
+                Intent::BackgroundRead | Intent::InteractiveRead
+            );
+            match paused_for(api, now_ms()) {
+                Some(until) if read => Err(GhError::RateLimited {
                     retry_at: Some(until),
-                });
+                }),
+                _ => Ok(()),
             }
-        }
+        };
+        held_back()?;
         let _permit = match pool {
             Some(pool) => Some(pool.acquire().await.map_err(|_| GhError::Failed {
                 message: "Atlas is shutting down.".into(),
             })?),
             None => None,
         };
+        // Again: a pause can start while this run waits for a permit.
+        held_back()?;
         let metered = self.intent != Intent::Unmetered;
         let output = self.spawn_and_wait().await?;
         if metered && !output.success() {
