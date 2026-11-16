@@ -5,19 +5,18 @@
 //! watching layer on top, mirroring the `commands::app_state` /
 //! `state::app_state` split.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use notify::RecursiveMode;
 use notify_debouncer_full::new_debouncer;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, State};
 
+use crate::settings_effects::{self, When};
 use crate::state::{
     AppSettings, AtlasConfigHandle, ConfigError, ConfigSnapshot, ConfigStatus, SettingsPatch,
     UpdateOutcome,
 };
-use crate::telemetry::TelemetryClient;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -78,7 +77,7 @@ pub async fn update_atlas_settings(
         generation,
     } = outcome
     {
-        notify_settings_changed(&app, settings, generation);
+        settings_effects::apply(&app, settings, When::Changed { generation });
     }
     Ok(outcome)
 }
@@ -96,7 +95,13 @@ pub async fn reset_atlas_config(
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())?;
-    notify_settings_changed(&app, &snapshot.settings, snapshot.generation);
+    settings_effects::apply(
+        &app,
+        &snapshot.settings,
+        When::Changed {
+            generation: snapshot.generation,
+        },
+    );
     Ok(snapshot)
 }
 
@@ -113,72 +118,6 @@ pub fn open_atlas_config(
     app.opener()
         .open_path(path, None::<&str>)
         .map_err(|e| e.to_string())
-}
-
-/// The one thing every committer of a new settings snapshot must do —
-/// whichever of the four paths produced it (a UI patch, `reset`, a hot
-/// reload, or an internal Rust-side write from `commands::models`/
-/// `commands::updater` via `state::atlas_config::update`):
-///
-/// 1. tell the frontend (`atlas:config-changed`), so its mirrored
-///    `settings`/`configGeneration` never goes stale — a stale generation on
-///    the frontend is exactly what turns its next legitimate edit into a
-///    spurious `Conflict`;
-/// 2. re-sync the live telemetry opt-in gate. `TelemetryClient::enabled` is a
-///    cached flag, not read fresh from settings per event; without this, a
-///    `shareTelemetry` change that didn't come from the Settings UI's own
-///    toggle handler (an external edit, the self-configure skill, "Recreate
-///    defaults") would leave telemetry emitting — or silently gated off —
-///    out of sync with what the file says until restart.
-pub fn notify_settings_changed(app: &AppHandle, settings: &AppSettings, generation: u64) {
-    let _ = app.emit(
-        "atlas:config-changed",
-        serde_json::json!({ "settings": settings, "generation": generation }),
-    );
-    if let Some(client) = app.try_state::<Arc<TelemetryClient>>() {
-        client.set_enabled(settings.share_telemetry);
-    }
-    // 3. re-apply `linkTelemetryToAccount`. It is read by
-    //    `commands::auth::sync_identity`, which otherwise only runs on an auth
-    //    *transition* — so without this, turning account linkage off while
-    //    signed in left PostHog attributing events to the account until the
-    //    next sign-out, which is the opposite of what the toggle says.
-    crate::commands::auth::resync_telemetry_identity(app, settings.link_telemetry_to_account);
-    // 4. re-apply the Atlas Agent's plugin-catalogue sync gate. The engine
-    //    reads it when the sync would start (its first connect), so it has
-    //    to be current before that — this covers every commit path, and
-    //    `lib.rs` applies it once at boot.
-    apply_curated_plugin_sync_gate(settings.curated_plugin_sync);
-    // 5. re-apply the app icon, so an external edit of `appIcon` takes
-    //    effect live like the Settings picker does. A no-op unless it changed.
-    crate::app_icon::apply(app, &settings.app_icon);
-    // 6. follow `instructionSync`: switched on, sync and watch each window's
-    //    active project; switched off, stop watching and take the mirrored
-    //    block back out. A no-op unless it changed.
-    if let Some(state) = app.try_state::<crate::commands::instruction_sync::InstructionSyncState>()
-    {
-        state.apply_setting(app, settings.instruction_sync);
-    }
-    // 7. re-sync the keep-awake manager with the live setting.
-    // The next agent session launches with its own memory on or off.
-    atlas_agent_servers::set_atlas_only_memory(settings.atlas_only_memory);
-    if let Some(keep_awake) = app.try_state::<Arc<crate::keep_awake::KeepAwakeManager>>() {
-        keep_awake.set_enabled(settings.keep_awake_while_running);
-    }
-}
-
-/// The gate for the engine's curated-plugin sync
-/// (`atlas-engine-core-plugins`, `start_curated_repo_sync`): a `git fetch` of
-/// github.com/openai/plugins at every launch, opt-in from Atlas via
-/// `curatedPluginSync`. The engine runs in this process and reads the
-/// variable itself, so the setting is carried as process environment rather
-/// than threaded through the engine's config.
-pub fn apply_curated_plugin_sync_gate(enabled: bool) {
-    if enabled {
-        std::env::set_var("ATLAS_CURATED_PLUGIN_SYNC", "1");
-    } else {
-        std::env::remove_var("ATLAS_CURATED_PLUGIN_SYNC");
-    }
 }
 
 fn emit_error(app: &AppHandle, error: &ConfigError) {
@@ -246,7 +185,11 @@ pub fn start_watcher(app: &AppHandle, handle: AtlasConfigHandle) {
                         let settings = guard.effective().clone();
                         let generation = guard.generation();
                         drop(guard);
-                        notify_settings_changed(&app_for_cb, &settings, generation);
+                        settings_effects::apply(
+                            &app_for_cb,
+                            &settings,
+                            When::Changed { generation },
+                        );
                     }
                     Ok(false) => {} // self-write echo or no-op — nothing to do
                     Err(e) => {

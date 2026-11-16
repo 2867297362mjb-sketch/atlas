@@ -174,10 +174,12 @@ pub(super) async fn update_ignore(version: String, app: AppHandle) -> Result<(),
     .await
     .map_err(|e| e.to_string())?
     .map_err(|e| e.to_string())?;
-    crate::commands::atlas_config::notify_settings_changed(
+    crate::settings_effects::apply(
         &app,
         &snapshot.settings,
-        snapshot.generation,
+        crate::settings_effects::When::Changed {
+            generation: snapshot.generation,
+        },
     );
     Ok(())
 }
