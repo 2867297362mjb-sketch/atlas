@@ -1,7 +1,7 @@
 //! Tauri command surface for the Rust-owned `AppState`.
 
 use serde::Serialize;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Runtime, State};
 use ts_rs::TS;
 
 use crate::state::{
@@ -95,10 +95,10 @@ pub fn app_profile() -> AppProfile {
 /// what stops a settings save from wiping Rust-owned fields. See that type's
 /// doc for the analytics bug this prevents.
 #[tauri::command]
-pub fn save_app_state(
+pub fn save_app_state<R: Runtime>(
     payload: AppStatePatch,
     state: State<'_, AppStateHandle>,
-    app: AppHandle,
+    app: AppHandle<R>,
 ) -> Result<(), String> {
     {
         let mut guard = state.lock();

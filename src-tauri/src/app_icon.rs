@@ -21,7 +21,7 @@
 
 use serde::Deserialize;
 use std::sync::{Mutex, OnceLock, PoisonError};
-use tauri::AppHandle;
+use tauri::{AppHandle, Runtime};
 
 #[derive(Deserialize)]
 struct Manifest {
@@ -64,7 +64,7 @@ static APPLIED: Mutex<Option<Option<String>>> = Mutex::new(None);
 /// Apply the icon `id`. Safe to call from any thread and on every settings
 /// commit — AppKit work is dispatched to the main thread, and re-applying the
 /// current icon is a no-op. No-op off macOS.
-pub fn apply(app: &AppHandle, id: &str) {
+pub fn apply<R: Runtime>(app: &AppHandle<R>, id: &str) {
     let custom = if id == default_id() {
         None
     } else if manifest().icons.iter().any(|icon| icon.id == id) {

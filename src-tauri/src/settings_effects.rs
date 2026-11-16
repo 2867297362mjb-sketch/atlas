@@ -33,7 +33,7 @@
 
 use std::sync::Arc;
 
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::state::atlas_config::ThemeMode;
 use crate::state::AppSettings;
@@ -159,7 +159,7 @@ pub fn effects(settings: &AppSettings, when: When) -> Vec<Effect> {
 /// mirrored `settings`/`configGeneration` never goes stale: a stale generation
 /// there is exactly what turns its next legitimate edit into a spurious
 /// `Conflict`.
-pub fn apply(app: &AppHandle, settings: &AppSettings, when: When) {
+pub fn apply<R: Runtime>(app: &AppHandle<R>, settings: &AppSettings, when: When) {
     if let When::Changed { generation } = when {
         let _ = app.emit(
             "atlas:config-changed",
@@ -171,7 +171,7 @@ pub fn apply(app: &AppHandle, settings: &AppSettings, when: When) {
     }
 }
 
-fn perform(app: &AppHandle, effect: Effect, when: When) {
+fn perform<R: Runtime>(app: &AppHandle<R>, effect: Effect, when: When) {
     if effect.apply_process_wide() {
         return;
     }
@@ -183,7 +183,7 @@ fn perform(app: &AppHandle, effect: Effect, when: When) {
         // telemetry emitting — or silently gated off — out of sync with what
         // the file says until restart.
         Effect::TelemetryGate(on) => {
-            if let Some(client) = target::<Arc<crate::telemetry::TelemetryClient>>(app) {
+            if let Some(client) = target::<Arc<crate::telemetry::TelemetryClient>, R>(app) {
                 match when {
                     When::Boot => client.init_enabled(on),
                     When::Changed { .. } => client.set_enabled(on),
@@ -222,13 +222,13 @@ fn perform(app: &AppHandle, effect: Effect, when: When) {
         // unless it changed, and at boot there is no active project yet.
         Effect::InstructionSync(on) => {
             if let Some(state) =
-                target::<crate::commands::instruction_sync::InstructionSyncState>(app)
+                target::<crate::commands::instruction_sync::InstructionSyncState, R>(app)
             {
                 state.apply_setting(app, on);
             }
         }
         Effect::KeepAwake(on) => {
-            if let Some(keep_awake) = target::<Arc<crate::keep_awake::KeepAwakeManager>>(app) {
+            if let Some(keep_awake) = target::<Arc<crate::keep_awake::KeepAwakeManager>, R>(app) {
                 keep_awake.set_enabled(on);
             }
         }
@@ -240,7 +240,7 @@ fn perform(app: &AppHandle, effect: Effect, when: When) {
 /// The managed state an effect acts on. A missing one means the effect was
 /// skipped, which nothing else would report: `setup` has to manage every
 /// target before it calls [`apply`].
-fn target<T: Send + Sync + 'static>(app: &AppHandle) -> Option<tauri::State<'_, T>> {
+fn target<T: Send + Sync + 'static, R: Runtime>(app: &AppHandle<R>) -> Option<tauri::State<'_, T>> {
     let state = app.try_state::<T>();
     if state.is_none() {
         tracing::error!(

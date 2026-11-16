@@ -46,7 +46,7 @@ use atlas_instruction_sync::{Outcome, SkipReason};
 use notify::RecursiveMode;
 use notify_debouncer_full::{new_debouncer_opt, NoCache};
 use parking_lot::Mutex;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Manager, Runtime, State};
 
 type Debouncer = notify_debouncer_full::Debouncer<notify::RecommendedWatcher, NoCache>;
 
@@ -163,7 +163,7 @@ impl InstructionSyncState {
     /// already on, switching it off must still take the blocks back out. On: sync and watch each window's active
     /// project, and nothing else. Off: stop every watcher and take the block
     /// back out of every project a sync wrote it into.
-    pub fn apply_setting(&self, app: &AppHandle, on: bool) {
+    pub fn apply_setting<R: Runtime>(&self, app: &AppHandle<R>, on: bool) {
         {
             let _gate = self.gate.lock();
             if self.enabled.swap(on, Ordering::SeqCst) == on {
@@ -205,7 +205,7 @@ impl InstructionSyncState {
     /// `AGENTS.md` changed mid-write (an editor save, a pack appending its
     /// rule): the newer text was kept, and the retry splices the block into
     /// it. Blocking.
-    fn sync(&self, app: &AppHandle, root: &Path) {
+    fn sync<R: Runtime>(&self, app: &AppHandle<R>, root: &Path) {
         self.retrying(root, |root| {
             let _gate = self.gate.lock();
             if !self.is_enabled() {
@@ -227,7 +227,7 @@ impl InstructionSyncState {
 
     /// Take the block back out of `root` while the setting is off, retrying
     /// like [`Self::sync`]. Blocking.
-    fn remove(&self, app: &AppHandle, root: &Path) {
+    fn remove<R: Runtime>(&self, app: &AppHandle<R>, root: &Path) {
         self.retrying(root, |root| {
             let _gate = self.gate.lock();
             if self.is_enabled() {
@@ -262,7 +262,7 @@ impl InstructionSyncState {
 
     /// Start watching `project` (re-arming what is missing when it already
     /// is). Blocking: call off the async runtime.
-    fn watch(&self, app: &AppHandle, project: &Project) {
+    fn watch<R: Runtime>(&self, app: &AppHandle<R>, project: &Project) {
         let (key, root) = (project.key.as_str(), project.root.as_path());
         // Checked under the map's lock: switching off clears the map after
         // turning `enabled` off, so a watcher added here is either cleared
@@ -314,8 +314,8 @@ impl InstructionSyncState {
     }
 }
 
-fn new_watcher(
-    app: AppHandle,
+fn new_watcher<R: Runtime>(
+    app: AppHandle<R>,
     key: String,
     root: PathBuf,
     imports: Arc<Mutex<HashSet<PathBuf>>>,
@@ -385,14 +385,14 @@ struct LedgerEntry {
     created: bool,
 }
 
-fn ledger_path(app: &AppHandle) -> Option<PathBuf> {
+fn ledger_path<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
     app.path()
         .app_config_dir()
         .ok()
         .map(|d| d.join("instruction-sync.json"))
 }
 
-fn read_ledger(app: &AppHandle) -> Vec<LedgerEntry> {
+fn read_ledger<R: Runtime>(app: &AppHandle<R>) -> Vec<LedgerEntry> {
     ledger_path(app)
         .and_then(|p| std::fs::read_to_string(p).ok())
         .and_then(|raw| serde_json::from_str(&raw).ok())
@@ -403,7 +403,7 @@ fn read_ledger(app: &AppHandle) -> Vec<LedgerEntry> {
 /// `AGENTS.md`; once true it stays true) or forget it (`None`). A failed
 /// write is logged and otherwise ignored: the ledger only widens what
 /// switching off cleans up.
-fn update_ledger(app: &AppHandle, root: &Path, synced: Option<bool>) {
+fn update_ledger<R: Runtime>(app: &AppHandle<R>, root: &Path, synced: Option<bool>) {
     let Some(path) = ledger_path(app) else {
         return;
     };

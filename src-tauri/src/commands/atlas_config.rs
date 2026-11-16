@@ -10,7 +10,7 @@ use std::time::Duration;
 use notify::RecursiveMode;
 use notify_debouncer_full::new_debouncer;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Runtime, State};
 
 use crate::settings_effects::{self, When};
 use crate::state::{
@@ -59,10 +59,10 @@ pub fn get_atlas_config_info(state: State<'_, AtlasConfigHandle>) -> ConfigInfo 
 /// frontend doesn't need the result), the caller here needs the validated
 /// outcome back, so this awaits the blocking task rather than detaching it.
 #[tauri::command]
-pub async fn update_atlas_settings(
+pub async fn update_atlas_settings<R: Runtime>(
     patch: SettingsPatch,
     expected_generation: u64,
-    app: AppHandle,
+    app: AppHandle<R>,
     state: State<'_, AtlasConfigHandle>,
 ) -> Result<UpdateOutcome, String> {
     let handle = state.inner().clone();

@@ -2338,7 +2338,7 @@ pub fn bootstrap() -> ConfigManager {
 }
 
 /// The path half of [`bootstrap`], testable against a temp dir.
-fn bootstrap_at(path: PathBuf) -> ConfigManager {
+pub(crate) fn bootstrap_at(path: PathBuf) -> ConfigManager {
     if path.exists() {
         return ConfigManager::load_at(path);
     }

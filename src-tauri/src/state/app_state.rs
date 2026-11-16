@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Runtime};
 use ts_rs::TS;
 
 /// Current schema version. Bump and migrate (or reset) when fields change
@@ -361,7 +361,7 @@ impl AppState {
     /// `<app_data_dir>/state.json`. Returns `None` if the data dir can't be
     /// resolved (no $HOME / no `APPDATA`, etc.) — caller falls back to
     /// `AppState::default()`.
-    fn path(app: &AppHandle) -> Option<PathBuf> {
+    fn path<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
         app.path().app_data_dir().ok().map(|d| d.join("state.json"))
     }
 
@@ -377,7 +377,7 @@ impl AppState {
     /// (issue #64) so `serde_json` would otherwise silently drop it on the
     /// floor as an unrecognized key. The caller feeds this to
     /// `atlas_config::bootstrap` for the one-time `config.toml` export.
-    pub fn load(app: &AppHandle) -> Self {
+    pub fn load<R: Runtime>(app: &AppHandle<R>) -> Self {
         match Self::path(app) {
             Some(path) => Self::load_at(&path),
             None => Self::from_raw(None),
@@ -451,7 +451,7 @@ impl AppState {
     /// `state.json` loses every project. `sync_all` before the rename is what
     /// makes the atomicity
     /// real — otherwise the rename can reach disk ahead of its bytes.
-    pub fn save(app: &AppHandle, state: &AppState) -> std::io::Result<()> {
+    pub fn save<R: Runtime>(app: &AppHandle<R>, state: &AppState) -> std::io::Result<()> {
         let Some(path) = Self::path(app) else {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
