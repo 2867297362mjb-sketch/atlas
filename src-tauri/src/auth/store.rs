@@ -235,33 +235,15 @@ pub(crate) fn load(dir: &Path) -> Option<StoredSession> {
 ///
 /// The old order — `fs::write` then chmod — left two gaps: the file existed
 /// at umask permissions for the window between the two calls, and rewriting
-/// a pre-existing file never resets its mode at all. Creating the temp file
-/// with 0600 in `OpenOptions` and renaming it into place closes both, and
-/// the rename keeps the update atomic.
+/// a pre-existing file never resets its mode at all.
+/// [`atlas_fs::replace_file_with_mode`] closes both: the temp file is created
+/// 0600, and the file that lands at the path is a new one with exactly that
+/// mode, whatever the one it replaces had.
 pub(crate) fn save(dir: &Path, session: &StoredSession) -> Result<(), String> {
     fs::create_dir_all(dir).map_err(|e| format!("create config dir: {e}"))?;
-    let path = session_path(dir);
     let json = serde_json::to_string_pretty(session).map_err(|e| e.to_string())?;
-
-    let tmp = path.with_extension("tmp");
-    {
-        let mut opts = fs::OpenOptions::new();
-        opts.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
-        }
-        use std::io::Write;
-        let mut f = opts.open(&tmp).map_err(|e| format!("write session: {e}"))?;
-        f.write_all(json.as_bytes())
-            .map_err(|e| format!("write session: {e}"))?;
-    }
-    fs::rename(&tmp, &path).map_err(|e| format!("write session: {e}"))?;
-    // Belt-and-braces for a file that predates this change and kept its old
-    // wider mode across the rename target's replacement.
-    restrict(&path);
-    Ok(())
+    atlas_fs::replace_file_with_mode(session_path(dir), json, 0o600)
+        .map_err(|e| format!("write session: {e}"))
 }
 
 /// Remove the credential. Absent is success — sign-out must be idempotent and
@@ -273,13 +255,3 @@ pub(crate) fn clear(dir: &Path) -> Result<(), String> {
         Err(e) => Err(format!("clear session: {e}")),
     }
 }
-
-/// Best-effort owner-only permissions.
-#[cfg(unix)]
-fn restrict(path: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-    let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
-}
-
-#[cfg(not(unix))]
-fn restrict(_path: &Path) {}
