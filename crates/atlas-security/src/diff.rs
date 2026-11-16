@@ -239,27 +239,51 @@ fn strip_side(rest: &str) -> Option<String> {
     )
 }
 
-/// Undo git's C-style path quoting for the common escapes.
+/// Undo git's C-style path quoting: `\"`, `\\`, `\a\b\t\n\v\f\r` and `\NNN`
+/// octal bytes, which together spell UTF-8. Git quotes a name with a quote, a
+/// backslash or a control character in it whatever `core.quotepath` says, and
+/// a non-ASCII one unless that is off. An escape git never writes keeps its
+/// character.
 fn unquote(raw: &str) -> String {
     let raw = raw.trim();
     let Some(inner) = raw.strip_prefix('"').and_then(|r| r.strip_suffix('"')) else {
         return raw.to_string();
     };
-    let mut out = String::new();
-    let mut chars = inner.chars();
-    while let Some(c) = chars.next() {
-        if c != '\\' {
-            out.push(c);
+    let mut out: Vec<u8> = Vec::with_capacity(inner.len());
+    let mut bytes = inner.bytes().peekable();
+    while let Some(b) = bytes.next() {
+        if b != b'\\' {
+            out.push(b);
             continue;
         }
-        match chars.next() {
-            Some('n') => out.push('\n'),
-            Some('t') => out.push('\t'),
+        match bytes.next() {
+            Some(b'a') => out.push(0x07),
+            Some(b'b') => out.push(0x08),
+            Some(b't') => out.push(b'\t'),
+            Some(b'n') => out.push(b'\n'),
+            Some(b'v') => out.push(0x0b),
+            Some(b'f') => out.push(0x0c),
+            Some(b'r') => out.push(b'\r'),
+            Some(first @ b'0'..=b'7') => {
+                let mut value = u32::from(first - b'0');
+                for _ in 0..2 {
+                    match bytes.peek() {
+                        Some(digit @ b'0'..=b'7') => {
+                            value = value * 8 + u32::from(digit - b'0');
+                            bytes.next();
+                        }
+                        _ => break,
+                    }
+                }
+                // Three octal digits can spell up to 0o777; a byte is the
+                // low eight bits, as in C.
+                out.push((value & 0xff) as u8);
+            }
             Some(other) => out.push(other),
             None => {}
         }
     }
-    out
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// `@@ -a[,b] +c[,d] @@ ctx` → (a, b, c, d, ctx). Omitted counts are 1.
