@@ -1,0 +1,460 @@
+[
+  {
+    "name": "modified",
+    "about": "two hunks, the second with a function heading after its @@",
+    "diff": "diff --git a/modified.txt b/modified.txt\nindex e031777..086b3da 100644\n--- a/modified.txt\n+++ b/modified.txt\n@@ -1,5 +1,5 @@\n one\n-two\n+2\n three\n four\n five\n@@ -10,3 +10,4 @@ nine\n ten\n eleven\n twelve\n+thirteen\n",
+    "files": [
+      {
+        "path": "modified.txt",
+        "hunks": [
+          {
+            "oldStart": 1,
+            "newStart": 1,
+            "lines": [" one", "-two", "+2", " three", " four", " five"]
+          },
+          {
+            "oldStart": 10,
+            "newStart": 10,
+            "lines": [" ten", " eleven", " twelve", "+thirteen"]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "zero-context",
+    "about": "-U0, what the editor gutter asks for: counts are omitted (`-2`) or zero (`-12,0`)",
+    "diff": "diff --git a/modified.txt b/modified.txt\nindex e031777..086b3da 100644\n--- a/modified.txt\n+++ b/modified.txt\n@@ -2 +2 @@ one\n-two\n+2\n@@ -12,0 +13 @@ twelve\n+thirteen\n",
+    "files": [
+      {
+        "path": "modified.txt",
+        "hunks": [
+          {
+            "oldStart": 2,
+            "newStart": 2,
+            "lines": ["-two", "+2"]
+          },
+          {
+            "oldStart": 12,
+            "newStart": 13,
+            "lines": ["+thirteen"]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "multi-file",
+    "about": "four files in one patch; one removes a line reading `-- a sql comment`, which prints as `--- a sql comment`",
+    "diff": "diff --git a/added.txt b/added.txt\nnew file mode 100644\nindex 0000000..39963cd\n--- /dev/null\n+++ b/added.txt\n@@ -0,0 +1,2 @@\n+brand new\n+file\ndiff --git a/dashes.sql b/dashes.sql\nindex a95501d..b414fb1 100644\n--- a/dashes.sql\n+++ b/dashes.sql\n@@ -1,2 +1,2 @@\n--- a sql comment\n select 1;\n+++counter;\ndiff --git a/deleted.txt b/deleted.txt\ndeleted file mode 100644\nindex e5e6fb7..0000000\n--- a/deleted.txt\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-bye\n-now\ndiff --git a/modified.txt b/modified.txt\nindex e031777..086b3da 100644\n--- a/modified.txt\n+++ b/modified.txt\n@@ -1,5 +1,5 @@\n one\n-two\n+2\n three\n four\n five\n@@ -10,3 +10,4 @@ nine\n ten\n eleven\n twelve\n+thirteen\n",
+    "files": [
+      {
+        "path": "added.txt",
+        "hunks": [
+          {
+            "oldStart": 0,
+            "newStart": 1,
+            "lines": ["+brand new", "+file"]
+          }
+        ]
+      },
+      {
+        "path": "dashes.sql",
+        "hunks": [
+          {
+            "oldStart": 1,
+            "newStart": 1,
+            "lines": ["--- a sql comment", " select 1;", "+++counter;"]
+          }
+        ]
+      },
+      {
+        "path": "deleted.txt",
+        "hunks": [
+          {
+            "oldStart": 1,
+            "newStart": 0,
+            "lines": ["-bye", "-now"]
+          }
+        ]
+      },
+      {
+        "path": "modified.txt",
+        "hunks": [
+          {
+            "oldStart": 1,
+            "newStart": 1,
+            "lines": [" one", "-two", "+2", " three", " four", " five"]
+          },
+          {
+            "oldStart": 10,
+            "newStart": 10,
+            "lines": [" ten", " eleven", " twelve", "+thirteen"]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "new-file",
+    "about": "added: the old side is /dev/null and `-0,0`",
+    "diff": "diff --git a/added.txt b/added.txt\nnew file mode 100644\nindex 0000000..39963cd\n--- /dev/null\n+++ b/added.txt\n@@ -0,0 +1,2 @@\n+brand new\n+file\n",
+    "files": [
+      {
+        "path": "added.txt",
+        "hunks": [
+          {
+            "oldStart": 0,
+            "newStart": 1,
+            "lines": ["+brand new", "+file"]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "new-empty-file",
+    "about": "an added empty file has headers and no hunk",
+    "diff": "diff --git a/added-empty.txt b/added-empty.txt\nnew file mode 100644\nindex 0000000..e69de29\n",
+    "files": [
+      {
+        "path": "added-empty.txt",
+        "hunks": []
+      }
+    ]
+  },
+  {
+    "name": "deleted-file",
+    "about": "deleted: the new side is /dev/null and `+0,0`",
+    "diff": "diff --git a/deleted.txt b/deleted.txt\ndeleted file mode 100644\nindex e5e6fb7..0000000\n--- a/deleted.txt\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-bye\n-now\n",
+    "files": [
+      {
+        "path": "deleted.txt",
+        "hunks": [
+          {
+            "oldStart": 1,
+            "newStart": 0,
+            "lines": ["-bye", "-now"]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "emptied-file",
+    "about": "every line removed, the file kept",
+    "diff": "diff --git a/to-empty.txt b/to-empty.txt\nindex 6c542ab..e69de29 100644\n--- a/to-empty.txt\n+++ b/to-empty.txt\n@@ -1 +0,0 @@\n-only\n",
+    "files": [
+      {
+        "path": "to-empty.txt",
+        "hunks": [
+          {
+            "oldStart": 1,
+            "newStart": 0,
+            "lines": ["-only"]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "pure-rename",
+    "about": "a rename with no edit has no ---/+++ and no hunk",
+    "diff": "diff --git a/renamed-old.txt b/renamed-new.txt\nsimilarity index 100%\nrename from renamed-old.txt\nrename to renamed-new.txt\n",
+    "files": [
+      {
+        "path": "renamed-new.txt",
+        "oldPath": "renamed-old.txt",
+        "hunks": []
+      }
+    ]
+  },
+  {
+    "name": "rename-with-edit",
+    "about": "renamed and edited",
+    "diff": "diff --git a/renamed-edit-old.rs b/renamed-edit-new.rs\nsimilarity index 78%\nrename from renamed-edit-old.rs\nrename to renamed-edit-new.rs\nindex c521009..9f85760 100644\n--- a/renamed-edit-old.rs\n+++ b/renamed-edit-new.rs\n@@ -1,5 +1,5 @@\n fn a() {}\n fn b() {}\n-fn c() {}\n+fn c2() {}\n fn d() {}\n fn e() {}\n",
+    "files": [
+      {
+        "path": "renamed-edit-new.rs",
+        "oldPath": "renamed-edit-old.rs",
+        "hunks": [
+          {
+            "oldStart": 1,
+            "newStart": 1,
+            "lines": [
+              " fn a() {}",
+              " fn b() {}",
+              "-fn c() {}",
+              "+fn c2() {}",
+              " fn d() {}",
+              " fn e() {}"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "mode-change",
+    "about": "chmod +x: `old mode` / `new mode` and no hunk",
+    "diff": "diff --git a/mode.sh b/mode.sh\nold mode 100644\nnew mode 100755\n",
+    "files": [
+      {
+        "path": "mode.sh",
+        "hunks": []
+      }
+    ]
+  },
+  {
+    "name": "binary",
+    "about": "git's one-line summary of a binary change",
+    "diff": "diff --git a/image.bin b/image.bin\nindex 0f49c4a..0d4028e 100644\nBinary files a/image.bin and b/image.bin differ\n",
+    "files": [
+      {
+        "path": "image.bin",
+        "binary": true,
+        "hunks": []
+      }
+    ]
+  },
+  {
+    "name": "binary-patch",
+    "about": "`git diff --binary`: a base85 payload, which is not diff content",
+    "diff": "diff --git a/image.bin b/image.bin\nindex 0f49c4ae77b43dff338093c78e009676e7e308ba..0d4028e90c42e17b17cb45ec56f977847a05caba 100644\nGIT binary patch\nliteral 10\nRcmZQzWKPP=ODw8X1ON+S0;>Q3\n\nliteral 9\nQcmZQzWJ=1+ODw7c00^)Gi2wiq\n\n",
+    "files": [
+      {
+        "path": "image.bin",
+        "binary": true,
+        "hunks": []
+      }
+    ]
+  },
+  {
+    "name": "no-newline-at-eof",
+    "about": "`\\ No newline at end of file` after the removed and the added last line",
+    "diff": "diff --git a/no-newline.txt b/no-newline.txt\nindex 3db2aff..b6626b5 100644\n--- a/no-newline.txt\n+++ b/no-newline.txt\n@@ -1,2 +1,2 @@\n first\n-last\n\\ No newline at end of file\n+final\n\\ No newline at end of file\n",
+    "files": [
+      {
+        "path": "no-newline.txt",
+        "hunks": [
+          {
+            "oldStart": 1,
+            "newStart": 1,
+            "lines": [" first", "-last", "+final"]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "path-with-spaces",
+    "about": "git ends a ---/+++ name that has a space in it with a tab",
+    "diff": "diff --git a/with space.txt b/with space.txt\nindex 94954ab..c4c0417 100644\n--- a/with space.txt\t\n+++ b/with space.txt\t\n@@ -1,2 +1,2 @@\n hello\n-world\n+there\n",
+    "files": [
+      {
+        "path": "with space.txt",
+        "hunks": [
+          {
+            "oldStart": 1,
+            "newStart": 1,
+            "lines": [" hello", "-world", "+there"]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "quoted-path-utf8",
+    "about": "core.quotePath (on by default) C-quotes a non-ASCII name, bytes in octal",
+    "diff": "diff --git \"a/caf\\303\\251.txt\" \"b/caf\\303\\251.txt\"\nindex 572eb43..bd4d203 100644\n--- \"a/caf\\303\\251.txt\"\n+++ \"b/caf\\303\\251.txt\"\n@@ -1 +1 @@\n-café\n+café!\n",
+    "files": [
+      {
+        "path": "café.txt",
+        "hunks": [
+          {
+            "oldStart": 1,
+            "newStart": 1,
+            "lines": ["-café", "+café!"]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "quoted-path-tab",
+    "about": "a control character in a name is C-quoted whatever core.quotePath says",
+    "diff": "diff --git \"a/tab\\tname.txt\" \"b/tab\\tname.txt\"\nindex 814f4a4..879de50 100644\n--- \"a/tab\\tname.txt\"\n+++ \"b/tab\\tname.txt\"\n@@ -1,2 +1,2 @@\n one\n-two\n+TWO\n",
+    "files": [
+      {
+        "path": "tab\tname.txt",
+        "hunks": [
+          {
+            "oldStart": 1,
+            "newStart": 1,
+            "lines": [" one", "-two", "+TWO"]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "crlf-file",
+    "about": "a CRLF file: each line's \\r is part of its text",
+    "diff": "diff --git a/crlf.txt b/crlf.txt\nindex b5eff57..d5a6cc6 100644\n--- a/crlf.txt\n+++ b/crlf.txt\n@@ -1,3 +1,3 @@\n a\r\n-b\r\n+B\r\n c\r\n",
+    "files": [
+      {
+        "path": "crlf.txt",
+        "hunks": [
+          {
+            "oldStart": 1,
+            "newStart": 1,
+            "lines": [" a\r", "-b\r", "+B\r", " c\r"]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "crlf-to-lf",
+    "about": "one line's ending converted: the \\r is the whole difference",
+    "diff": "diff --git a/crlf-to-lf.txt b/crlf-to-lf.txt\nindex 0aa0f34..28d493c 100644\n--- a/crlf-to-lf.txt\n+++ b/crlf-to-lf.txt\n@@ -1,2 +1,2 @@\n-x\r\n+x\n y\r\n",
+    "files": [
+      {
+        "path": "crlf-to-lf.txt",
+        "hunks": [
+          {
+            "oldStart": 1,
+            "newStart": 1,
+            "lines": ["-x\r", "+x", " y\r"]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "blank-context-line",
+    "about": "an empty context line is a lone space",
+    "diff": "diff --git a/blank-context.txt b/blank-context.txt\nindex 7fc722f..aa9c7fc 100644\n--- a/blank-context.txt\n+++ b/blank-context.txt\n@@ -1,4 +1,4 @@\n keep\n \n after blank\n-end\n+END\n",
+    "files": [
+      {
+        "path": "blank-context.txt",
+        "hunks": [
+          {
+            "oldStart": 1,
+            "newStart": 1,
+            "lines": [" keep", " ", " after blank", "-end", "+END"]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "content-like-headers",
+    "about": "a removed `-- …` line and an added `++…` line print as `--- …` and `+++…`",
+    "diff": "diff --git a/dashes.sql b/dashes.sql\nindex a95501d..b414fb1 100644\n--- a/dashes.sql\n+++ b/dashes.sql\n@@ -1,2 +1,2 @@\n--- a sql comment\n select 1;\n+++counter;\n",
+    "files": [
+      {
+        "path": "dashes.sql",
+        "hunks": [
+          {
+            "oldStart": 1,
+            "newStart": 1,
+            "lines": ["--- a sql comment", " select 1;", "+++counter;"]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "mnemonic-prefix",
+    "about": "diff.mnemonicPrefix=true: the prefixes are c/ and i/ (or w/), not a/ and b/",
+    "diff": "diff --git c/blank-context.txt i/blank-context.txt\nindex 7fc722f..aa9c7fc 100644\n--- c/blank-context.txt\n+++ i/blank-context.txt\n@@ -3,2 +3,2 @@ keep\n after blank\n-end\n+END\n",
+    "files": [
+      {
+        "path": "blank-context.txt",
+        "hunks": [
+          {
+            "oldStart": 3,
+            "newStart": 3,
+            "lines": [" after blank", "-end", "+END"]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "no-prefix",
+    "about": "diff.noprefix=true: no prefixes at all",
+    "diff": "diff --git blank-context.txt blank-context.txt\nindex 7fc722f..aa9c7fc 100644\n--- blank-context.txt\n+++ blank-context.txt\n@@ -3,2 +3,2 @@ keep\n after blank\n-end\n+END\n",
+    "files": [
+      {
+        "path": "blank-context.txt",
+        "hunks": [
+          {
+            "oldStart": 3,
+            "newStart": 3,
+            "lines": [" after blank", "-end", "+END"]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "combined-merge",
+    "about": "`git diff` in a conflicted merge: a combined diff, read against its first parent",
+    "diff": "diff --cc modified.txt\nindex 086b3da,e68fa66..0000000\n--- a/modified.txt\n+++ b/modified.txt\n@@@ -1,5 -1,5 +1,5 @@@\n  one\n- 2\n -TWO\n++merged\n  three\n  four\n  five\n",
+    "files": [
+      {
+        "path": "modified.txt",
+        "hunks": [
+          {
+            "oldStart": 1,
+            "newStart": 1,
+            "lines": [" one", "-2", "+merged", " three", " four", " five"]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "empty-hunk",
+    "about": "a hunk with no lines, then a real one",
+    "synthetic": true,
+    "diff": "diff --git a/e.txt b/e.txt\nindex 1111111..2222222 100644\n--- a/e.txt\n+++ b/e.txt\n@@ -3,0 +3,0 @@\n@@ -5 +5 @@\n-old\n+new\n",
+    "files": [
+      {
+        "path": "e.txt",
+        "hunks": [
+          {
+            "oldStart": 3,
+            "newStart": 3,
+            "lines": []
+          },
+          {
+            "oldStart": 5,
+            "newStart": 5,
+            "lines": ["-old", "+new"]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "stripped-blank-context",
+    "about": "some tools strip the space off an empty context line, leaving a truly empty line inside the hunk",
+    "synthetic": true,
+    "diff": "diff --git a/s.txt b/s.txt\nindex 1111111..2222222 100644\n--- a/s.txt\n+++ b/s.txt\n@@ -1,4 +1,4 @@\n keep\n\n after blank\n-end\n+END\n",
+    "files": [
+      {
+        "path": "s.txt",
+        "hunks": [
+          {
+            "oldStart": 1,
+            "newStart": 1,
+            "lines": [" keep", " ", " after blank", "-end", "+END"]
+          }
+        ]
+      }
+    ]
+  }
+]

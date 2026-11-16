@@ -378,6 +378,71 @@ mod tests {
         assert_eq!(kinds(&parsed.hunks[1]), [(M, "gone"), (P, "here")]);
     }
 
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct FixtureHunk {
+        old_start: u32,
+        new_start: u32,
+        lines: Vec<String>,
+    }
+    #[derive(serde::Deserialize)]
+    struct FixtureFile {
+        #[serde(default)]
+        binary: bool,
+        hunks: Vec<FixtureHunk>,
+    }
+    #[derive(serde::Deserialize)]
+    struct FixtureCase {
+        name: String,
+        diff: String,
+        files: Vec<FixtureFile>,
+    }
+
+    /// The cases every unified-diff parser in Atlas is held to; the docblock
+    /// of `src/features/git/lib/unified-diff.fixtures.test.ts` names the
+    /// others. This parser reads no paths, so a case is its files' hunks in
+    /// order and whether any of them is binary. It reads every case as the
+    /// fixtures state it: there is no table of differences here.
+    #[test]
+    fn it_reads_the_shared_fixtures_as_they_state() {
+        let cases: Vec<FixtureCase> = serde_json::from_str(include_str!(
+            "../../../src/features/git/lib/unified-diff.fixtures.json"
+        ))
+        .expect("the fixture table parses");
+        assert!(cases.len() >= 20);
+        for case in cases {
+            let parsed = parse_unified(&case.diff);
+            let got: Vec<(u32, u32, Vec<String>)> = parsed
+                .hunks
+                .iter()
+                .map(|h| {
+                    let lines = h.lines.iter().map(|l| {
+                        let marker = match l.kind {
+                            C => ' ',
+                            M => '-',
+                            P => '+',
+                        };
+                        format!("{marker}{}", l.text)
+                    });
+                    (h.old_start, h.new_start, lines.collect())
+                })
+                .collect();
+            let want: Vec<(u32, u32, Vec<String>)> = case
+                .files
+                .iter()
+                .flat_map(|f| &f.hunks)
+                .map(|h| (h.old_start, h.new_start, h.lines.clone()))
+                .collect();
+            assert_eq!(got, want, "{}", case.name);
+            assert_eq!(
+                parsed.is_binary,
+                case.files.iter().any(|f| f.binary),
+                "{}",
+                case.name
+            );
+        }
+    }
+
     /// Once a hunk is open, the next file's `--- a/…` and `+++ b/…` headers
     /// must not read as a removed and an added line of the previous file.
     #[test]
