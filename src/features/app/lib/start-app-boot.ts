@@ -50,9 +50,7 @@ export function startAppBoot(): () => void {
       }
     },
     applyEmptyState: (opts) => {
-      useAppStore
-        .getState()
-        .actions.hydrate({ currentProject: null, recentProjects: [], version: 1 }, opts);
+      useAppStore.getState().actions.hydrate({}, opts);
     },
     reportLoadFailure: (stage) => {
       logEvent({

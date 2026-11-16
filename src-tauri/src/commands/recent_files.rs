@@ -330,4 +330,66 @@ mod tests {
             .all(|(a, b)| a.abs_path == b.abs_path));
         assert!(!store_path(&root).with_extension("json.tmp").exists());
     }
+
+    /// A restart: the list a project had is the list it opens with. The row
+    /// is taken apart with no `..`, so a field added to `RecentFile` does not
+    /// compile until it is compared here.
+    #[test]
+    fn the_list_survives_a_restart_field_for_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let saved = vec![
+            RecentFile {
+                abs_path: "/p/src/main.rs".into(),
+                rel: "src/main.rs".into(),
+                touched_at: 1_762_000_000_123,
+            },
+            RecentFile {
+                abs_path: "/p/README.md".into(),
+                rel: "README.md".into(),
+                touched_at: 1_761_000_000_456,
+            },
+        ];
+
+        save_to_disk(dir.path(), &saved).unwrap();
+        let loaded = load_from_disk(dir.path());
+
+        assert_eq!(loaded.len(), saved.len());
+        for (got, want) in loaded.into_iter().zip(saved) {
+            let RecentFile {
+                abs_path,
+                rel,
+                touched_at,
+            } = got;
+            assert_eq!(abs_path, want.abs_path);
+            assert_eq!(rel, want.rel);
+            assert_eq!(touched_at, want.touched_at);
+        }
+    }
+
+    /// What the file tolerates today: no file is an empty list, a key this
+    /// build does not know is ignored, and one row missing a field empties
+    /// the whole list (no field has a default).
+    #[test]
+    fn a_missing_file_an_unknown_key_and_a_short_row_load_as_they_do_today() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(load_from_disk(dir.path()).is_empty());
+
+        let path = store_path(dir.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            r#"[{ "absPath": "/p/a.rs", "rel": "a.rs", "touchedAt": 5, "pinned": true }]"#,
+        )
+        .unwrap();
+        let loaded = load_from_disk(dir.path());
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].abs_path, "/p/a.rs");
+
+        std::fs::write(
+            &path,
+            r#"[{ "absPath": "/p/a.rs", "rel": "a.rs", "touchedAt": 5 }, { "absPath": "/p/b.rs" }]"#,
+        )
+        .unwrap();
+        assert!(load_from_disk(dir.path()).is_empty());
+    }
 }

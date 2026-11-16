@@ -749,6 +749,32 @@ mod sanitize_tests {
 }
 
 #[cfg(test)]
+mod editor_state_tests {
+    use super::{load_editor_state, save_editor_state};
+    use std::time::Duration;
+
+    /// The editor state is the frontend's: Rust keeps the string it was
+    /// handed and gives the same bytes back, so nothing in it can be dropped
+    /// or renamed here. A project never saved answers `{}`.
+    #[tokio::test]
+    async fn the_editor_state_is_returned_byte_for_byte_after_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().to_string_lossy().into_owned();
+        let saved = r#"{"tabs":[{"id":"t1","type":"file","path":"a.rs"}],"unknown":{"kept":true}}"#;
+
+        tokio::time::timeout(Duration::from_secs(10), async {
+            assert_eq!(load_editor_state(project.clone()).await.unwrap(), "{}");
+            save_editor_state(project.clone(), saved.to_string())
+                .await
+                .unwrap();
+            assert_eq!(load_editor_state(project).await.unwrap(), saved);
+        })
+        .await
+        .expect("the editor-state commands did not finish");
+    }
+}
+
+#[cfg(test)]
 mod kb_rel_tests {
     use super::*;
 

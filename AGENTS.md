@@ -98,7 +98,8 @@ bun run icons:render   # macOS app icons
 bun run settings:gen   # settings-registry.toml → TS, Rust, docs; then
                        # ATLAS_BLESS=1 cargo test -p atlas config_default
                        # for docs/reference/config.default.toml
-bun run bindings:gen   # atlas-agent-wire's Rust types → src/bindings/agent-wire/ (ts-rs)
+bun run bindings:gen   # ts-rs: atlas-agent-wire's Rust types → src/bindings/agent-wire/, and the
+                       # app-state payloads (src-tauri/src/state) → src/bindings/app-state/
 ```
 
 The design system (primitives, scales, theme engine, `keys.toml`, built-in themes,
@@ -144,10 +145,14 @@ free; xterm, pixi, recharts and friends cannot, so they must hear the change.
 
 **The IPC and event seams are opaque strings to `tsc`.** `invoke("name")`, the
 `atlas:*` channel names, and even the _field names_ inside a payload are checked by
-`ipc-contract`, `event-contract`, `state-payload-contract` and `wire-shape-contract`
-and by nothing else. The exception is the session-delta payload, whose TypeScript is
-generated from `crates/atlas-agent-wire` into `src/bindings/agent-wire/`, so `tsc`
-checks its fields. Check `event-contract.test.ts` before inventing a channel name.
+`ipc-contract`, `event-contract` and `wire-shape-contract` and by nothing else. The
+exceptions are the two payloads whose TypeScript is generated from the Rust types, so
+`tsc` checks their fields: the session-delta payload (`crates/atlas-agent-wire` →
+`src/bindings/agent-wire/`), and the app-state payloads, what `bootstrap_app_state`
+answers and `save_app_state` takes (`src-tauri/src/state/app_state_bindings.rs` →
+`src/bindings/app-state/`, with `fixtures.ts`: the JSON Rust writes, held to those
+types). A payload passed as an opaque string (`save_editor_state`,
+`save_project_session`) has no Rust type and no check at all. Check `event-contract.test.ts` before inventing a channel name.
 The window events that share the `atlas:` prefix are a separate, typed namespace:
 `window-event-contract.test.ts` keeps every one of them in the map in
 `src/lib/window-events.ts` and behind its helpers, and off the channel names.

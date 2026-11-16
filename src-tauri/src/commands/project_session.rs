@@ -47,3 +47,29 @@ pub async fn load_project_session(project_path: String) -> Result<String, String
     .await
     .map_err(|e| e.to_string())?
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// The file is the frontend's: Rust keeps the string it was handed and
+    /// gives the same bytes back, so nothing in it can be dropped or renamed
+    /// here. A project never saved answers `{}`.
+    #[tokio::test]
+    async fn a_session_is_returned_byte_for_byte_after_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().to_string_lossy().into_owned();
+        let saved = r#"{"version":3,"tabs":[{"id":"t1","kind":"chat"}],"unknown":{"kept":true}}"#;
+
+        tokio::time::timeout(Duration::from_secs(10), async {
+            assert_eq!(load_project_session(project.clone()).await.unwrap(), "{}");
+            save_project_session(project.clone(), saved.to_string())
+                .await
+                .unwrap();
+            assert_eq!(load_project_session(project).await.unwrap(), saved);
+        })
+        .await
+        .expect("the session commands did not finish");
+    }
+}

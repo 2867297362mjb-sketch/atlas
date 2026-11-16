@@ -6,6 +6,7 @@
 // files exist.
 
 import type { AppStateWire } from "@/features/app/stores/app-store";
+import { DEFAULT_SETTINGS } from "@/features/settings/lib/app-settings";
 import type { Project } from "@/features/projects/stores/project-store";
 
 export const MOCK_ORG_ID = "org-mock";
@@ -62,6 +63,7 @@ export function appState(overrides: Partial<AppStateWire> = {}): AppStateWire {
       },
     ],
     activeOrganisationId: MOCK_ORG_ID,
+    settings: DEFAULT_SETTINGS,
     configStatus: { status: "ok" },
     configGeneration: 1,
     version: 3,

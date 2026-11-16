@@ -336,3 +336,122 @@ pub fn knowledge_meta_delete(
     schedule_flush(Arc::clone(state.inner()), app, project_path);
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn project() -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_string_lossy().into_owned();
+        (dir, path)
+    }
+
+    /// Compare one page's metadata a field at a time, with no `..`: a field
+    /// added to `PageMeta` does not compile until it is compared here.
+    fn assert_same_page(got: PageMeta, want: PageMeta) {
+        let PageMeta {
+            icon,
+            cover,
+            title,
+            status,
+            tags,
+            owner,
+            created_at,
+            updated_at,
+        } = got;
+        assert_eq!(icon, want.icon, "icon");
+        assert_eq!(cover, want.cover, "cover");
+        assert_eq!(title, want.title, "title");
+        assert_eq!(status, want.status, "status");
+        assert_eq!(tags, want.tags, "tags");
+        assert_eq!(owner, want.owner, "owner");
+        assert_eq!(created_at, want.created_at, "created_at");
+        assert_eq!(updated_at, want.updated_at, "updated_at");
+    }
+
+    /// A restart: what was written for a page is what the next launch reads,
+    /// for a page with every field set and for one with none.
+    #[test]
+    fn page_metadata_survives_a_restart_field_for_field() {
+        let (_dir, path) = project();
+        let full = PageMeta {
+            icon: Some("🧠".into()),
+            cover: Some("covers/abc.jpg".into()),
+            title: Some("Agent runtime".into()),
+            status: Some("Draft".into()),
+            tags: vec!["agents".into(), "runtime".into()],
+            owner: Some("sayan".into()),
+            created_at: Some("2026-05-25T10:00:00+00:00".into()),
+            updated_at: Some("2026-05-26T11:30:00+00:00".into()),
+        };
+        let empty = PageMeta {
+            icon: None,
+            cover: None,
+            title: None,
+            status: None,
+            tags: Vec::new(),
+            owner: None,
+            created_at: None,
+            updated_at: None,
+        };
+        let saved = KnowledgeMetaFile {
+            version: 1,
+            pages: HashMap::from([
+                ("full".to_string(), full.clone()),
+                ("empty".to_string(), empty.clone()),
+            ]),
+        };
+
+        write_to_disk(&path, &saved).unwrap();
+        let KnowledgeMetaFile { version, mut pages } = load_from_disk(&path);
+
+        assert_eq!(version, 1);
+        assert_eq!(pages.len(), 2);
+        assert_same_page(pages.remove("full").unwrap(), full);
+        assert_same_page(pages.remove("empty").unwrap(), empty);
+        assert!(!meta_path(&path).with_extension("json.tmp").exists());
+    }
+
+    /// What the file tolerates today. No file, and a file that does not
+    /// parse, are both an empty version-1 file. A missing field is its
+    /// default and an unknown key is ignored. And a version this build does
+    /// not know is loaded as it stands: nothing reads `version` back.
+    #[test]
+    fn a_missing_file_a_short_page_and_a_newer_version_load_as_they_do_today() {
+        let (_dir, path) = project();
+        let missing = load_from_disk(&path);
+        assert_eq!((missing.version, missing.pages.len()), (1, 0));
+
+        let file = meta_path(&path);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(&file, "{ not json").unwrap();
+        let corrupt = load_from_disk(&path);
+        assert_eq!((corrupt.version, corrupt.pages.len()), (1, 0));
+
+        fs::write(
+            &file,
+            r#"{ "pages": { "a": { "status": "Draft", "pinned": true } } }"#,
+        )
+        .unwrap();
+        let mut short = load_from_disk(&path);
+        assert_eq!(short.version, 1);
+        assert_same_page(
+            short.pages.remove("a").unwrap(),
+            PageMeta {
+                icon: None,
+                cover: None,
+                title: None,
+                status: Some("Draft".into()),
+                tags: Vec::new(),
+                owner: None,
+                created_at: None,
+                updated_at: None,
+            },
+        );
+
+        fs::write(&file, r#"{ "version": 2, "pages": { "a": {} } }"#).unwrap();
+        let newer = load_from_disk(&path);
+        assert_eq!((newer.version, newer.pages.len()), (2, 1));
+    }
+}

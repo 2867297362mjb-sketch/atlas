@@ -1868,7 +1868,7 @@ fn theme_override_item(theme_override: &ThemeOverride) -> toml_edit::Item {
 /// discriminated union in `atlas-config-api.ts`. Deriving `Serialize` here
 /// rather than mirroring the enum into a separate wire type in
 /// `commands::atlas_config` keeps one definition of the three states.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase", tag = "status")]
 pub enum ConfigStatus {
     Ok,
