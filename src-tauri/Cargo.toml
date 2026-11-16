@@ -158,6 +158,9 @@ atlas-gitdiff = { path = "../crates/atlas-gitdiff" }
 # output. Drives `commands::git`, `commands::git_ops`, `commands::git_snapshot`.
 atlas-git = { path = "../crates/atlas-git" }
 atlas-gh = { path = "../crates/atlas-gh" }
+# The skill store: `.agents/skills`, its projection into each agent's skills
+# directory, bundled skills and packs. `commands::skills` is its IPC adapter.
+atlas-skills = { path = "../crates/atlas-skills" }
 # Single source of truth for secret redaction. Capture scrubs agent content on
 # the way *into* the local store rather than on the way out to the network, so
 # nothing downstream — sync, export, share, support bundles — has to remember to

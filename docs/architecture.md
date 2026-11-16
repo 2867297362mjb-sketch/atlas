@@ -356,6 +356,7 @@ All wired in as `path` dependencies from `src-tauri/Cargo.toml`, and all members
 | `atlas-embed` | On-device text embeddings (BERT-family sentence-transformers) and a small vector store, isolated so `candle`'s heavy dependency tree doesn't slow everything else's incremental builds. Embedding only — on-device generation was removed 2026-08-22. |
 | `atlas-search` | In-process code search: grep on ripgrep's crates and glob/fuzzy file finding over a session root, with one compact, byte-budgeted output format for the `atlas_code` tools (ADR-0015). On demand only — nothing is indexed, cached or watched (ADR-0021). |
 | `atlas-retrieval` | Memory's retrieval core: content-keyed embedding cache codec, per-model usearch vector files that heal on open, RRF fusion, the `Embedder` trait. |
+| `atlas-skills` | The skill store, Tauri-free: the canonical `.agents/skills` tree (ADR-0005), its projection into each agent's own skills directory with a ledger, reconcile, freeze and promote, the skills the binary ships, and packs (parse, install from a source, lockfile, per-component projection). `SkillStore` is the whole interface, one method per thing a user does. It is handed the home directory, a `PackSource` (GitHub over `atlas-git` in the app, a directory in a test), a clock and the config file's name, and looks nothing up itself. `commands::skills` is its adapter: it opens the store, hops to a blocking thread, and sends the telemetry event. |
 | `atlas-profile` | Which data this process owns: the default profile or the dev profile `bun run dev:app` runs under. Derived once from the bundle identifier; every `.atlas` and `~/.config/atlas` name goes through it. Names only — no I/O, no dependencies. |
 | `atlas-fs` | Crash-safe file replacement (`replace_file`): unique sibling temp file, fsync, rename, directory fsync, temp removed on failure. The one implementation for stores that rewrite a file in place. No dependencies. |
 | `atlas-kb-server` | Standalone static-server binary produced by the knowledge base's "Export server" action. Embeds the exported HTML/CSS via `include_dir!`, serves on `localhost:4747`. |
@@ -459,6 +460,7 @@ atlas/
 │   ├── atlas-embed                on-device embeddings (candle)
 │   ├── atlas-search               in-process grep / find_files
 │   ├── atlas-retrieval            memory's retrieval core (vectors, RRF)
+│   ├── atlas-skills               the skill store: .agents/skills, projection, bundled skills, packs
 │   ├── atlas-profile              default vs dev data profile (directory names)
 │   ├── atlas-fs                   crash-safe file replacement (replace_file)
 │   └── atlas-kb-server            self-contained KB static-server binary

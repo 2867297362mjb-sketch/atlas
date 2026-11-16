@@ -757,15 +757,15 @@ fn rel_path(root: &Path, path: &Path) -> Option<String> {
 }
 
 /// The marker a pack writes around a rule it appends to `AGENTS.md`. Must
-/// match `rule_marker_start` in `src-tauri/src/commands/skills.rs`, which
-/// asserts that it does.
+/// match `rule_marker_start` in `crates/atlas-skills` (`packs/projection.rs`),
+/// which asserts that it does.
 pub fn pack_rule_marker(pack: &str, rule: &str) -> String {
     format!("<!-- atlas-pack:{pack}:{rule} START -->")
 }
 
 /// A rule's marker name derived from its file stem, the way the pack
 /// installer's `sanitize_name` derives it from the component name, which
-/// `skills.rs` asserts.
+/// `atlas-skills` asserts.
 pub fn pack_rule_name(stem: &str) -> String {
     let mut out = String::with_capacity(stem.len());
     let mut prev_dash = false;

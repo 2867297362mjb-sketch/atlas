@@ -13,7 +13,7 @@ import type {
 
 /**
  * Packs on-disk bridge. The pack store (`<root>/.atlas/packs/<repo>/`), the
- * lockfile, and every projection are owned Rust-side (`commands/skills.rs`,
+ * lockfile, and every projection are owned Rust-side (`crates/atlas-skills`,
  * Phases 2–3). The frontend only searches, previews, installs, lists, and
  * projects through these wrappers. Disk *is* the state — mutations refetch.
  *
