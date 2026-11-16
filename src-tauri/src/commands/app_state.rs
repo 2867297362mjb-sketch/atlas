@@ -2,6 +2,7 @@
 
 use serde::Serialize;
 use tauri::{AppHandle, State};
+use ts_rs::TS;
 
 use crate::state::{
     AppSettings, AppState, AppStateHandle, AppStatePatch, AtlasConfigHandle, ConfigStatus,
@@ -13,11 +14,15 @@ use crate::state::{
 /// stored/versioned on the Rust side — this struct exists only at the wire
 /// boundary, matching the issue #64 design record's "bootstrap may combine
 /// state and config for latency; they still don't share a source of truth".
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct BootstrapPayload {
     #[serde(flatten)]
     pub state: AppState,
+    /// The settings' TypeScript is `settings:gen`'s, written from the same
+    /// registry as the Rust struct, so the generated payload names that type
+    /// instead of generating a second copy of it.
+    #[ts(type = "import(\"../../features/settings/lib/app-settings\").AppSettings")]
     pub settings: AppSettings,
     pub config_generation: u64,
     /// Whether `config.toml` actually loaded. This is the ONLY signal the UI

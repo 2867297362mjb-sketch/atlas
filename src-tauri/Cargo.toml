@@ -76,6 +76,10 @@ tauri-plugin-notification = "2"
 tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The frontend's types for the app-state payloads are generated from the Rust
+# structs (`state/app_state_bindings.rs`), as `atlas-agent-wire` does for the
+# session-delta wire. Already in the graph through that crate.
+ts-rs = { workspace = true }
 # Bundled so the Memory panel's reader of a third-party CLI's history database (in-process, WAL-concurrent) is
 # self-contained and doesn't shell out to the `sqlite3` CLI.
 # Pinned to rusqlite 0.39 because its `libsqlite3-sys` is 0.37, the major the

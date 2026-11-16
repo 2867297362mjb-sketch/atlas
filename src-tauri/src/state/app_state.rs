@@ -2,6 +2,10 @@
 //! used to persist via zustand's localStorage middleware. Shape matches the
 //! JS side via `#[serde(rename_all = "camelCase")]` so the frontend can use
 //! the deserialized payload verbatim.
+//!
+//! The frontend's TypeScript for these structs is generated from them
+//! (`app_state_bindings.rs` → `src/bindings/app-state/`): after changing a
+//! field or a serde attribute here, run `bun run bindings:gen`.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -9,6 +13,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
+use ts_rs::TS;
 
 /// Current schema version. Bump and migrate (or reset) when fields change
 /// shape. Older payloads with a smaller `version` are loadable as long as
@@ -31,14 +36,14 @@ pub const SCHEMA_VERSION: u32 = 4;
 /// Just enough to name a project: the {name, path} pair the legacy v1
 /// `current_project` field and the recents list carry. `Project` proper is
 /// below.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectRef {
     pub name: String,
     pub path: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RecentProject {
     pub name: String,
@@ -53,6 +58,7 @@ pub struct RecentProject {
     /// put one org's project names and absolute paths in front of every other
     /// org, one click away from being forked into the wrong one.
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub org_id: Option<String>,
 }
 
@@ -60,7 +66,7 @@ pub struct RecentProject {
 /// `id` is the stable key that replaces `webview.label()` everywhere Rust
 /// state used to be keyed per-window (file index, git watcher, mention
 /// cache, recent files).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Project {
     pub id: String,
@@ -69,15 +75,18 @@ pub struct Project {
     /// Owning Organisation. `None` on pre-v3 payloads — `migrate()` backfills
     /// it to the default org. The sidebar filters projects by the active org.
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub org_id: Option<String>,
     /// Optional git remote. The ONLY field (besides id/name) that syncs to the
     /// server (`workspace_refs.git_url`) for one-click clone; the source tree
     /// itself never syncs. `None` for local-only projects.
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub git_url: Option<String>,
     /// ISO-8601 timestamp of the last time this project was the active
     /// one; used to order the sidebar / pick a fallback on close.
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub last_active_at: Option<String>,
 }
 
@@ -86,7 +95,7 @@ pub struct Project {
 /// user opts into sync per org (Chrome-profile model). The shape is a superset
 /// of the server `organization` row so cloud sync is a thin adapter:
 /// `{ id, name, slug, logo, metadata }` map to the server; the rest is local.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Organisation {
     pub id: String,
@@ -95,15 +104,19 @@ pub struct Organisation {
     /// from `name` at create time; kept stable thereafter.
     pub slug: String,
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub color: Option<String>,
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub logo: Option<String>,
     /// ISO-8601 creation timestamp.
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub created_at: Option<String>,
     /// Per-org memory of the last active project, so an org switch restores
     /// the user where they left off. Local-only (the server has no such notion).
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub active_workspace_id: Option<String>,
     /// Opt-in cloud sync flag (Chrome-profile model). `false` = local-only.
     #[serde(default)]
@@ -112,16 +125,18 @@ pub struct Organisation {
     /// "Turn on sync". `None` while local-only. Reconciliation seam for the
     /// auth branch.
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub remote_id: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AppState {
     /// Legacy single-project field. Kept for migration from v1 `state.json`;
     /// the frontend now derives "current project" from
     /// `active_workspace_id`. New writes leave this `None`.
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub current_project: Option<ProjectRef>,
     #[serde(default)]
     pub recent_projects: Vec<RecentProject>,
@@ -131,17 +146,20 @@ pub struct AppState {
     #[serde(default)]
     pub workspaces: Vec<Project>,
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub active_workspace_id: Option<String>,
     /// The Organisation layer above projects (v3). Each project is
     /// tagged with an `org_id`; the sidebar shows only the active org's set.
     #[serde(default)]
     pub organisations: Vec<Organisation>,
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub active_organisation_id: Option<String>,
     /// Stable anonymous id for opt-in product telemetry (PostHog `distinct_id`).
     /// Generated once on first launch (see `lib.rs` setup); never contains PII.
     /// `None` on old `state.json` files — backfilled + persisted at startup.
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub telemetry_anon_id: Option<String>,
     #[serde(default = "default_version")]
     pub version: u32,
@@ -163,7 +181,7 @@ fn default_version() -> u32 {
 /// Listing the frontend-owned fields here — rather than special-casing the one
 /// field that got bitten — means the next Rust-owned field added to `AppState`
 /// is safe by construction instead of by remembering.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, TS)]
 #[cfg_attr(test, derive(Serialize))]
 #[serde(rename_all = "camelCase")]
 pub struct AppStatePatch {
@@ -175,10 +193,12 @@ pub struct AppStatePatch {
     #[serde(default)]
     pub workspaces: Vec<Project>,
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub active_workspace_id: Option<String>,
     #[serde(default)]
     pub organisations: Vec<Organisation>,
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub active_organisation_id: Option<String>,
 }
 

@@ -137,6 +137,12 @@ export const EXTRA_INPUTS = [
     testOnly: true,
     why: "tests/bindings.rs compares the committed TypeScript with what the types generate",
   },
+  {
+    path: "src/bindings/app-state/",
+    packages: ["atlas"],
+    testOnly: true,
+    why: "src-tauri/src/state/app_state_bindings.rs compares the committed TypeScript and fixtures with what the types generate",
+  },
   // tests/spawn_audit.rs walks every Rust source in the workspace.
   ...["src-tauri/src/", "crates/", "vendor/atlas-engine/"].map((p) => ({
     path: p,
