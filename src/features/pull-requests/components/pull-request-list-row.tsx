@@ -58,7 +58,7 @@ function StackChip(props: ComponentProps<"button">) {
   );
 }
 
-/** `2/3` with a popover listing the chain, base first. The list inside is
+/** `2/3` with a popover listing the stack, base first. The list inside is
  *  mounted only while open, so rows in a stack cost one trigger each. */
 function StackPopover({
   number,
@@ -83,7 +83,7 @@ function StackPopover({
         {open ? (
           <div className="flex flex-col gap-0.5">
             <p className="caption pb-1">Stacked on base branches, base first</p>
-            {membership.chain.layers.map((layer, index) => {
+            {membership.stack.layers.map((layer, index) => {
               const state = resolveStatePresentation(layer);
               const current = layer.number === number;
               return (
@@ -100,7 +100,7 @@ function StackPopover({
                     current ? "bg-element-selected" : "hover:bg-element-hover",
                   )}
                   style={{
-                    paddingLeft: `${0.375 + (membership.chain.depths[index] ?? 0) * 0.75}rem`,
+                    paddingLeft: `${0.375 + (membership.stack.depths[index] ?? 0) * 0.75}rem`,
                   }}
                 >
                   <state.Icon aria-hidden className={cn("size-3 shrink-0", state.toneClassName)} />
@@ -131,7 +131,7 @@ function PullRequestListRowImpl({
   /** A search hit whose match is somewhere the row does not show. */
   matchedElsewhere: boolean;
   onOpen: (entry: PrListEntry) => void;
-  /** The chain this pull request sits in, derived from base branches. */
+  /** The stack this pull request sits in, derived from base branches. */
   stack?: PullRequestStackMembership;
   /** The line counts split by kind; `undefined` until read. */
   breakdown?: PullRequestChangeBreakdown | null;

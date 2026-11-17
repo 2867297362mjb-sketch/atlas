@@ -1,6 +1,5 @@
 import { create } from "zustand";
 import { toast } from "sonner";
-import { createSelectors } from "@/lib/create-selectors";
 import { auth, type OrgInvitation, type OrgMember, type Role } from "@/features/auth/lib/auth-api";
 
 /** One org's cached roster. Keyed by the SERVER org id (`remoteId`). */
@@ -78,122 +77,120 @@ function clearRetry(orgId: string): void {
   }
 }
 
-export const useMembersStore = createSelectors(
-  create<MembersState>()((set, get) => {
-    const roster = (orgId: string): OrgRoster => get().byOrg[orgId] ?? EMPTY;
-    const patch = (orgId: string, next: Partial<OrgRoster>) =>
-      set((s) => ({
-        byOrg: { ...s.byOrg, [orgId]: { ...(s.byOrg[orgId] ?? EMPTY), ...next } },
-      }));
+export const useMembersStore = create<MembersState>()((set, get) => {
+  const roster = (orgId: string): OrgRoster => get().byOrg[orgId] ?? EMPTY;
+  const patch = (orgId: string, next: Partial<OrgRoster>) =>
+    set((s) => ({
+      byOrg: { ...s.byOrg, [orgId]: { ...(s.byOrg[orgId] ?? EMPTY), ...next } },
+    }));
 
-    return {
-      byOrg: {},
-      actions: {
-        load: async (orgId, opts) => {
-          if (!orgId) return;
-          const current = roster(orgId);
-          const fresh = current.loadedAt !== null && Date.now() - current.loadedAt < FRESH_MS;
-          if (!opts?.force && (fresh || inFlight.has(orgId))) return;
-          if (inFlight.has(orgId)) return;
-          if (opts?.force) attempts.delete(orgId);
-          clearRetry(orgId);
+  return {
+    byOrg: {},
+    actions: {
+      load: async (orgId, opts) => {
+        if (!orgId) return;
+        const current = roster(orgId);
+        const fresh = current.loadedAt !== null && Date.now() - current.loadedAt < FRESH_MS;
+        if (!opts?.force && (fresh || inFlight.has(orgId))) return;
+        if (inFlight.has(orgId)) return;
+        if (opts?.force) attempts.delete(orgId);
+        clearRetry(orgId);
 
-          inFlight.add(orgId);
-          patch(orgId, { loading: true });
-          try {
-            // Invitations are admin-scoped, so a non-admin's call rejects while
-            // members still resolves. Settling both independently keeps the
-            // members tab working for everyone instead of failing as one unit.
-            const [membersRes, invitesRes] = await Promise.allSettled([
-              auth.listMembers(orgId),
-              auth.listInvitations(orgId),
-            ]);
+        inFlight.add(orgId);
+        patch(orgId, { loading: true });
+        try {
+          // Invitations are admin-scoped, so a non-admin's call rejects while
+          // members still resolves. Settling both independently keeps the
+          // members tab working for everyone instead of failing as one unit.
+          const [membersRes, invitesRes] = await Promise.allSettled([
+            auth.listMembers(orgId),
+            auth.listInvitations(orgId),
+          ]);
 
-            if (membersRes.status === "rejected") {
-              const e = membersRes.reason;
-              patch(orgId, {
-                loading: false,
-                error: typeof e === "string" ? e : "Couldn't load members.",
-              });
-              const n = (attempts.get(orgId) ?? 0) + 1;
-              attempts.set(orgId, n);
-              if (n <= 5) {
-                const delay = Math.min(30_000, 2_000 * 2 ** (n - 1));
-                retryTimers.set(
-                  orgId,
-                  window.setTimeout(() => {
-                    retryTimers.delete(orgId);
-                    void get().actions.load(orgId);
-                  }, delay),
-                );
-              }
-              return;
-            }
+          if (membersRes.status === "rejected") {
+            const e = membersRes.reason;
             patch(orgId, {
-              members: membersRes.value,
-              invitations: invitesRes.status === "fulfilled" ? invitesRes.value : [],
-              loadedAt: Date.now(),
               loading: false,
-              error: null,
+              error: typeof e === "string" ? e : "Couldn't load members.",
             });
-            attempts.delete(orgId);
-          } finally {
-            inFlight.delete(orgId);
+            const n = (attempts.get(orgId) ?? 0) + 1;
+            attempts.set(orgId, n);
+            if (n <= 5) {
+              const delay = Math.min(30_000, 2_000 * 2 ** (n - 1));
+              retryTimers.set(
+                orgId,
+                window.setTimeout(() => {
+                  retryTimers.delete(orgId);
+                  void get().actions.load(orgId);
+                }, delay),
+              );
+            }
+            return;
           }
-        },
-
-        setRole: async (orgId, memberId, role) => {
-          const before = roster(orgId).members;
           patch(orgId, {
-            members: before.map((m) => (m.id === memberId ? { ...m, role } : m)),
+            members: membersRes.value,
+            invitations: invitesRes.status === "fulfilled" ? invitesRes.value : [],
+            loadedAt: Date.now(),
+            loading: false,
+            error: null,
           });
-          try {
-            await auth.updateMemberRole(orgId, memberId, role);
-          } catch (e) {
-            patch(orgId, { members: before }); // put it back exactly as it was
-            toast.error(typeof e === "string" ? e : "Couldn't change that role.");
-          }
-        },
-
-        remove: async (orgId, member) => {
-          const before = roster(orgId).members;
-          patch(orgId, { members: before.filter((m) => m.id !== member.id) });
-          try {
-            // Address by membership id; the server also accepts an email, but
-            // the id is unambiguous when two accounts share an address.
-            await auth.removeMember(orgId, member.id);
-          } catch (e) {
-            patch(orgId, { members: before });
-            toast.error(typeof e === "string" ? e : "Couldn't remove that member.");
-          }
-        },
-
-        invite: async (orgId, email, role) => {
-          try {
-            const invitation = await auth.inviteMember(orgId, email, role);
-            patch(orgId, {
-              invitations: [invitation, ...roster(orgId).invitations],
-            });
-            return invitation;
-          } catch (e) {
-            toast.error(typeof e === "string" ? e : "Couldn't send that invite.");
-            return null;
-          }
-        },
-
-        cancelInvite: async (orgId, invitationId) => {
-          const before = roster(orgId).invitations;
-          patch(orgId, {
-            invitations: before.filter((i) => i.id !== invitationId),
-          });
-          try {
-            await auth.cancelInvitation(invitationId);
-          } catch (e) {
-            patch(orgId, { invitations: before });
-            toast.error(typeof e === "string" ? e : "Couldn't cancel that invite.");
-          }
-        },
+          attempts.delete(orgId);
+        } finally {
+          inFlight.delete(orgId);
+        }
       },
-    };
-  }),
-);
+
+      setRole: async (orgId, memberId, role) => {
+        const before = roster(orgId).members;
+        patch(orgId, {
+          members: before.map((m) => (m.id === memberId ? { ...m, role } : m)),
+        });
+        try {
+          await auth.updateMemberRole(orgId, memberId, role);
+        } catch (e) {
+          patch(orgId, { members: before }); // put it back exactly as it was
+          toast.error(typeof e === "string" ? e : "Couldn't change that role.");
+        }
+      },
+
+      remove: async (orgId, member) => {
+        const before = roster(orgId).members;
+        patch(orgId, { members: before.filter((m) => m.id !== member.id) });
+        try {
+          // Address by membership id; the server also accepts an email, but
+          // the id is unambiguous when two accounts share an address.
+          await auth.removeMember(orgId, member.id);
+        } catch (e) {
+          patch(orgId, { members: before });
+          toast.error(typeof e === "string" ? e : "Couldn't remove that member.");
+        }
+      },
+
+      invite: async (orgId, email, role) => {
+        try {
+          const invitation = await auth.inviteMember(orgId, email, role);
+          patch(orgId, {
+            invitations: [invitation, ...roster(orgId).invitations],
+          });
+          return invitation;
+        } catch (e) {
+          toast.error(typeof e === "string" ? e : "Couldn't send that invite.");
+          return null;
+        }
+      },
+
+      cancelInvite: async (orgId, invitationId) => {
+        const before = roster(orgId).invitations;
+        patch(orgId, {
+          invitations: before.filter((i) => i.id !== invitationId),
+        });
+        try {
+          await auth.cancelInvitation(invitationId);
+        } catch (e) {
+          patch(orgId, { invitations: before });
+          toast.error(typeof e === "string" ? e : "Couldn't cancel that invite.");
+        }
+      },
+    },
+  };
+});

@@ -56,13 +56,13 @@ function useSurfacesPaneWidth(active: boolean): number {
 }
 
 export function NotificationPanel() {
-  const open = useNotificationsStore.use.panelOpen();
-  const allItems = useNotificationsStore.use.items();
-  const activeOrgId = useOrgStore.use.activeOrganisationId();
+  const open = useNotificationsStore((s) => s.panelOpen);
+  const allItems = useNotificationsStore((s) => s.items);
+  const activeOrgId = useOrgStore((s) => s.activeOrganisationId);
   // Org-scoped view over a global list: switching organisations must not
   // lose the other org's items, only hide them.
   const items = useMemo(() => visibleItems(allItems, activeOrgId), [allItems, activeOrgId]);
-  const { close, clearAll, dismiss } = useNotificationsStore.use.actions();
+  const { close, clearAll, dismiss } = useNotificationsStore((s) => s.actions);
   const width = useSurfacesPaneWidth(open);
 
   // Preserve first-seen order within each day bucket (items are newest-first).

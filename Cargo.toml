@@ -35,6 +35,8 @@ members = [
   "crates/atlas-checkpoint",
   "crates/atlas-comms",
   "crates/atlas-embed",
+  "crates/atlas-fs",
+  "crates/atlas-gh",
   "crates/atlas-git",
   "crates/atlas-gitdiff",
   "crates/atlas-icon-theme",
@@ -48,6 +50,7 @@ members = [
   "crates/atlas-retrieval",
   "crates/atlas-search",
   "crates/atlas-security",
+  "crates/atlas-skills",
   "crates/atlas-terminal",
   "crates/atlas-theme",
   "crates/atlas-thread-metadata",
@@ -817,6 +820,10 @@ opt-level = 1
 opt-level = 1
 [profile.dev.package.atlas-embed]
 opt-level = 1
+[profile.dev.package.atlas-fs]
+opt-level = 1
+[profile.dev.package.atlas-gh]
+opt-level = 1
 [profile.dev.package.atlas-git]
 opt-level = 1
 [profile.dev.package.atlas-gitdiff]
@@ -842,6 +849,8 @@ opt-level = 1
 [profile.dev.package.atlas-search]
 opt-level = 1
 [profile.dev.package.atlas-security]
+opt-level = 1
+[profile.dev.package.atlas-skills]
 opt-level = 1
 [profile.dev.package.atlas-terminal]
 opt-level = 1

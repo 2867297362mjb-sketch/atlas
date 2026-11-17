@@ -14,6 +14,10 @@ const SETTINGS_DOCS: &[(&str, &str)] = &[
         "# Record Atlas-internal events (sign-in, agent lifecycle, file and browser\n# opens) into the Logs panel. (default: true)",
     ),
     (
+        "logRetentionDays",
+        "# How many days of Atlas's own log files to keep. A new file starts each day,\n# and files past this count are deleted. Must be between 1 and 90. Takes\n# effect the next time Atlas starts. (default: 7)",
+    ),
+    (
         "showHiddenFiles",
         "# Show dotfiles and dot-directories in the explorer file tree. (default: true)",
     ),
@@ -254,6 +258,10 @@ const SETTINGS_DOCS: &[(&str, &str)] = &[
         "# The terminal's font size, in pixels. The interface zoom scales it along with\n# everything else. (default: 13)",
     ),
     (
+        "terminalScreenReader",
+        "# Keep an accessible copy of the terminal's screen, so a screen reader or an\n# assistive tool can read its lines and hear new output. Off by default: the\n# copy costs work on every write. (default: false)",
+    ),
+    (
         "diffIgnoreWhitespace",
         "# Leave out changes that are only whitespace in diffs you read: a file's diff,\n# a commit, and a chat's changes. Diffs you stage from always show every\n# change, since a patch without the whitespace no longer applies. (default:\n# false)",
     ),
@@ -324,6 +332,10 @@ const SETTINGS_DOCS: &[(&str, &str)] = &[
     (
         "securityScan",
         "# Scan each new checkpoint's commit in the background for leaked credentials,\n# risky calls and dependencies with known advisories. Runs entirely on this\n# machine; only the public advisory lists are downloaded. Results are stored\n# with the checkpoint and not shown yet. Commits from before it was turned on\n# are not scanned. Off in released builds and on in development builds unless\n# this key is set. (default: false)",
+    ),
+    (
+        "modelPriceOverrides",
+        "# modelPriceOverrides: Per-model input, output, cacheRead and cacheWrite\n# prices in USD per million tokens. Replaces models.dev prices, including for\n# models absent from its catalog. Names match exactly, then without a provider\n# prefix, then without an eight-digit date suffix. All four rates are\n# required; zero is allowed. Atlas Agent turns are billed against the account\n# cap; an override changes only the estimate shown for them. Example:\n# modelPriceOverrides = { \"my-model\" = { input = 1.0, output = 2.0, cacheRead\n# = 0.1, cacheWrite = 0.2 } }. An empty table uses models.dev prices.",
     ),
 ];
 

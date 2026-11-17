@@ -56,18 +56,18 @@ const COL = {
 const TABLE_MIN_W = 180 + 280 + 150 + 64 + 40;
 
 export function MemoryPolicyView() {
-  const projectPath = useAppStore.use.currentProject()?.path ?? null;
+  const projectPath = useAppStore((s) => s.currentProject)?.path ?? null;
   // Cached in the module-level memory store so jumping sub-tabs / leaving and
   // returning doesn't re-run the (expensive) policy indexing.
-  const phase = useMemoryStore.use.policyPhase();
-  const policies = useMemoryStore.use.policies() ?? [];
-  const error = useMemoryStore.use.policyError();
+  const phase = useMemoryStore((s) => s.policyPhase);
+  const policies = useMemoryStore((s) => s.policies) ?? [];
+  const error = useMemoryStore((s) => s.policyError);
   const {
     ensureProject,
     loadPolicies: storeLoadPolicies,
     setPolicyPhase,
     updatePolicyValue,
-  } = useMemoryStore.use.actions();
+  } = useMemoryStore((s) => s.actions);
   const [progress, setProgress] = useState<DownloadProgress | null>(null);
 
   // ── Filters ──────────────────────────────────────────────────────────────

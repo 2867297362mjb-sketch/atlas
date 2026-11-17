@@ -12,7 +12,8 @@ import {
   type RefObject,
   type SetStateAction,
 } from "react";
-import type { Projection, Row } from "../lib/turn-rows";
+import type { Projection } from "../lib/turn-rows";
+import type { Row } from "@tryatlas/design/session";
 import { revealStep } from "../lib/jump-reveal";
 import {
   deriveTurnRailItems,
@@ -21,6 +22,7 @@ import {
   type TurnRailItem,
 } from "../lib/turn-rail";
 import { SCROLL_BOTTOM } from "./use-transcript-window";
+import { useWindowEvent } from "@/lib/window-events";
 
 export interface TranscriptJumpsInput {
   tabId: string;
@@ -163,35 +165,28 @@ export function useTranscriptJumps({
     [scrollToMessage],
   );
 
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const detail = (
-        e as CustomEvent<{ index: number; tabId?: string; highlightRowIds?: string[] }>
-      ).detail;
-      // A jump addressed to another chat is not ours (an unaddressed one, from
-      // an older sender, still is).
-      if (detail?.tabId && detail.tabId !== tabId) return;
-      if (typeof detail?.index !== "number") return;
-      const ids = detail.highlightRowIds;
-      if (ids?.length) {
-        // The first id is the row itself; a `wk:` one names its turn's fold.
-        pendingRevealRef.current = {
-          index: detail.index,
-          target: ids[0],
-          workFoldId: ids.find((id) => id.startsWith("wk:")),
-          highlight: ids,
-          steps: 0,
-        };
-        continueReveal();
-        return;
-      }
-      pendingRevealRef.current = null;
-      pendingHighlightRef.current = null;
-      scrollToMessage(detail.index);
-    };
-    window.addEventListener("atlas:chat-jump", handler);
-    return () => window.removeEventListener("atlas:chat-jump", handler);
-  }, [scrollToMessage, continueReveal, tabId]);
+  useWindowEvent("atlas:chat-jump", (detail) => {
+    // A jump addressed to another chat is not ours (an unaddressed one, from
+    // an older sender, still is).
+    if (detail?.tabId && detail.tabId !== tabId) return;
+    if (typeof detail?.index !== "number") return;
+    const ids = detail.highlightRowIds;
+    if (ids?.length) {
+      // The first id is the row itself; a `wk:` one names its turn's fold.
+      pendingRevealRef.current = {
+        index: detail.index,
+        target: ids[0],
+        workFoldId: ids.find((id) => id.startsWith("wk:")),
+        highlight: ids,
+        steps: 0,
+      };
+      continueReveal();
+      return;
+    }
+    pendingRevealRef.current = null;
+    pendingHighlightRef.current = null;
+    scrollToMessage(detail.index);
+  });
 
   return {
     scrollToBottom,

@@ -27,7 +27,7 @@ export const SessionSearchResultRow = memo(function SessionSearchResultRow(props
     heldWorking: session.heldWorking,
     watching: session.pullRequests.some((p) => p.watching),
   });
-  const listScrolling = useSessionListScroll.use.scrolling();
+  const listScrolling = useSessionListScroll((s) => s.scrolling);
   return (
     <li role="presentation" className="list-none">
       <TooltipPrimitive.Root disabled={listScrolling}>
@@ -80,7 +80,7 @@ export const SessionSearchResultRow = memo(function SessionSearchResultRow(props
           >
             {session.title}
           </span>
-          <span className="w-8 shrink-0 text-right text-xs tabular-nums text-muted-foreground/55">
+          <span className="w-8 shrink-0 text-right text-xs tabular-nums text-disabled">
             <RelativeTime iso={session.updatedAt} />
           </span>
         </TooltipPrimitive.Trigger>

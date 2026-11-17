@@ -5,7 +5,7 @@
  */
 
 import { useLayoutStore } from "@/features/layout/stores/layout-store";
-import type { TabType } from "@/lib/constants";
+import type { TabType } from "@/lib/tab-registry";
 import { openFile, type RevealTarget } from "@/lib/open-file";
 import { openGitDiff } from "@/features/git/lib/git-diff-api";
 import { openSettingsSection } from "@/features/settings/lib/open-settings";
@@ -23,6 +23,7 @@ import { openSpaceOnPage } from "@/features/spaces/lib/open-space";
 import { readArgs, refuse } from "./args";
 import { activeProject, resolvePath, tabInScope } from "./scope";
 import type { UiActionRequest } from "./types";
+import { emitWindowEvent } from "@/lib/window-events";
 
 const TARGETS = [
   "file",
@@ -136,8 +137,7 @@ export async function performOpen(request: UiActionRequest): Promise<unknown> {
       );
       const tabId = openPlainTab("browser", { url });
       // A mounted browser tab read its URL once, when it mounted.
-      if (existing)
-        window.dispatchEvent(new CustomEvent("atlas:browser-navigate", { detail: { tabId, url } }));
+      if (existing) emitWindowEvent("atlas:browser-navigate", { tabId, url });
       return { tabId, url };
     }
     case "knowledge": {

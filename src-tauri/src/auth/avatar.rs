@@ -90,7 +90,9 @@ impl CachedAvatar {
     /// tool can delete it behind our back, and a path to nothing would render
     /// as a broken image.
     fn existing_path(&self) -> Option<&str> {
-        self.path.as_deref().filter(|p| Path::new(p).exists())
+        self.path
+            .as_deref()
+            .filter(|p| atlas_fs::cache_file_present(p))
     }
 }
 
@@ -180,9 +182,9 @@ async fn fetch(http: &reqwest::Client, dir: &Path, url: &str) -> Option<String> 
         return None;
     }
 
-    std::fs::create_dir_all(dir).ok()?;
     let path = cache_path(dir, url, ext);
-    std::fs::write(&path, &bytes).ok()?;
+    // A cache of a download: atomic, but not flushed to disk.
+    atlas_fs::replace_cache_file(&path, &bytes).ok()?;
     Some(path.to_string_lossy().into_owned())
 }
 
@@ -195,7 +197,7 @@ const EXTENSIONS: [&str; 4] = ["png", "jpg", "webp", "gif"];
 fn cached_for(dir: &Path, url: &str) -> Option<String> {
     EXTENSIONS.iter().find_map(|ext| {
         let path = cache_path(dir, url, ext);
-        path.exists().then(|| path.to_string_lossy().into_owned())
+        atlas_fs::cache_file_present(&path).then(|| path.to_string_lossy().into_owned())
     })
 }
 

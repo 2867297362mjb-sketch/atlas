@@ -11,8 +11,8 @@ import type { Comment, CommentThreads } from "./comments-api";
 const listMock = vi.hoisted(() => vi.fn());
 const voteMock = vi.hoisted(() => vi.fn());
 
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => undefined) }));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
 vi.mock("@/features/organisations/lib/use-org-directory", () => ({
   useOrgDirectory: () => ({ byId: new Map(), currentUserId: "u_me" }),
 }));

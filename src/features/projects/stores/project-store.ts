@@ -1,6 +1,5 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
-import { createSelectors } from "@/lib/create-selectors";
 import { basename } from "@/lib/paths";
 import { toast } from "sonner";
 import { logEvent } from "@/features/log/lib/log";
@@ -30,6 +29,8 @@ import {
 } from "../lib/stop-agents-confirm";
 import { markFileIndexClosedFor } from "@/features/file-picker/lib/file-picker-api";
 import { instructionSync } from "../lib/instruction-sync-api";
+import type { Project as ProjectWire } from "@/bindings/app-state/Project";
+import type { NullsDropped } from "@/lib/drop-nulls";
 
 /** The org id used to tag newly-created projects so they belong to
  *  the org the user is currently in. Read lazily to avoid an import-time
@@ -68,27 +69,19 @@ const DEFAULT_MAX_MOUNTED = 8;
 /**
  * A single open project = one project + its UI-state identity. `id` is the
  * stable key that replaces the per-window `webview.label()` everywhere Rust
- * keyed state (file index, git watcher, mention cache, recent files). Mirrors
- * `src-tauri/src/state/app_state.rs:Project`.
+ * keyed state (file index, git watcher, mention cache, recent files).
+ *
+ * The fields are `src-tauri/src/state/app_state.rs:Project`'s, generated into
+ * `@/bindings/app-state/Project`, with one difference: the stores hold an
+ * empty value as an absent key, not `null` (`dropNulls`, where the boot
+ * payload enters).
+ *
+ * `orgId`: every render surface filters STRICTLY by
+ * `orgId === activeOrganisationId`, so an untagged row is invisible. Creation
+ * always tags (see `requireActiveOrgId`), Rust `migrate()` backfills legacy
+ * null rows at boot, and the add actions adopt an in-memory null row in place.
  */
-export interface Project {
-  id: string;
-  name: string;
-  path: string;
-  /** Owning Organisation (mirrors `app_state.rs:Project::org_id`). Every
-   *  render surface filters STRICTLY by `orgId === activeOrganisationId` —
-   *  an untagged row is invisible. Creation always tags (see
-   *  `requireActiveOrgId`), Rust `migrate()` backfills legacy null rows at
-   *  boot, and the add actions adopt an in-memory null row in place. The
-   *  field stays optional only because rows can transit through JSON where
-   *  `undefined` is dropped. */
-  orgId?: string;
-  /** Optional git remote — the only field besides id/name that syncs to the
-   *  server (`project_refs.git_url`) for one-click clone. */
-  gitUrl?: string;
-  /** ISO-8601 of the last time this was the active project. */
-  lastActiveAt?: string;
-}
+export type Project = NullsDropped<ProjectWire>;
 
 interface ProjectState {
   /** The full project REGISTRY — every known project (opened, recent, or
@@ -216,326 +209,322 @@ function writeSidebarOpen(open: boolean) {
   }
 }
 
-export const useProjectStore = createSelectors(
-  create<ProjectState>()((set, get) => ({
-    projects: [],
-    activeProjectId: null,
-    mountedProjectIds: [],
-    maxMounted: DEFAULT_MAX_MOUNTED,
-    sidebarOpen: readSidebarOpen(),
-    switching: false,
-    actions: {
-      addProject: async (path: string) => {
-        // Dedup by (path, ORG) — not path alone. Project identity is
-        // per-organisation in the tag-in-place model: the sidebar filters by
-        // `orgId === activeOrganisationId`, so matching a same-path project
-        // that belongs to ANOTHER org and switching to it left the project
-        // rendered in the center panel (currentProject is not org-filtered)
-        // while invisible in the new org's switcher — the "added a project in
-        // a fresh org and it never appeared" bug. Opening the same folder
-        // from a second org now creates that org's own project row.
-        const org = requireActiveOrgId();
-        if (!org) {
-          return refuseWithoutOrg("no organisation available to own a new project", { path });
-        }
-        const existing = get().projects.find((w) => w.path === path && w.orgId === org);
-        if (existing) {
-          await get().actions.switchTo(existing.id);
-          return existing.id;
-        }
-        // Legacy untagged row for this path (predates the Rust org backfill):
-        // adopt it into the active org in place instead of duplicating it.
-        const legacy = get().projects.find((w) => w.path === path && w.orgId == null);
-        if (legacy) {
-          set((s) => ({
-            projects: s.projects.map((w) => (w.id === legacy.id ? { ...w, orgId: org } : w)),
-          }));
-          scheduleAppStateSave();
-          await get().actions.switchTo(legacy.id);
-          return legacy.id;
-        }
-        const ws: Project = {
-          id: uuid(),
-          name: nameOf(path),
-          path,
-          orgId: org,
-        };
-        set((s) => ({ projects: [...s.projects, ws] }));
-        scheduleAppStateSave();
-        await get().actions.switchTo(ws.id);
-        return ws.id;
-      },
-
-      addProjectEntry: (path: string) => {
-        // Same (path, org) identity + legacy-adopt rules as addProject above.
-        const org = requireActiveOrgId();
-        if (!org) {
-          return refuseWithoutOrg("no organisation available to own a new project entry", { path });
-        }
-        const existing = get().projects.find((w) => w.path === path && w.orgId === org);
-        if (existing) return existing.id;
-        const legacy = get().projects.find((w) => w.path === path && w.orgId == null);
-        if (legacy) {
-          set((s) => ({
-            projects: s.projects.map((w) => (w.id === legacy.id ? { ...w, orgId: org } : w)),
-          }));
-          scheduleAppStateSave();
-          return legacy.id;
-        }
-        const ws: Project = {
-          id: uuid(),
-          name: nameOf(path),
-          path,
-          orgId: org,
-        };
-        set((s) => ({ projects: [...s.projects, ws] }));
-        scheduleAppStateSave();
-        return ws.id;
-      },
-
-      ensureMounted: (id: string) => {
-        const st = get();
-        if (st.mountedProjectIds.includes(id)) return;
-        let mounted = [...st.mountedProjectIds, id];
-        const byId = (wid: string) => st.projects.find((w) => w.id === wid);
-        const evictable = (wid: string): boolean => {
-          if (wid === id || wid === st.activeProjectId) return false;
-          const w = byId(wid);
-          if (!w) return true;
-          if (isProjectRunning(w.path)) return false;
-          return true;
-        };
-        // Evict the least-recently-active evictable projects until under cap.
-        // LRU-by-lastActiveAt naturally protects the just-left (2nd-newest)
-        // project, so A→B→A stays warm.
-        while (mounted.length > st.maxMounted) {
-          const candidates = mounted
-            .filter(evictable)
-            .sort((a, b) =>
-              (byId(a)?.lastActiveAt ?? "").localeCompare(byId(b)?.lastActiveAt ?? ""),
-            );
-          if (candidates.length === 0) break; // all running — exceed cap
-          const lru = candidates[0];
-          teardownHot(lru);
-          mounted = mounted.filter((x) => x !== lru);
-        }
-        set({ mountedProjectIds: mounted });
-      },
-
-      switchTo: async (id: string) => {
-        const { activeProjectId, switching, projects } = get();
-        const target = projects.find((w) => w.id === id);
-        if (!target) return;
-
-        // A switch already in flight → don't DROP the click; remember the latest
-        // target and run it when the current one settles (coalesce).
-        if (switching) {
-          pendingSwitchTarget = id;
-          return;
-        }
-        if (id === activeProjectId) {
-          // Already active — make sure currentProject reflects it (covers
-          // the very first switch after boot) but skip the flush dance.
-          useAppStore.getState().actions.setActiveProject({
-            name: target.name,
-            path: target.path,
-          });
-          return;
-        }
-
-        set({ switching: true });
-        try {
-          // 1) Commit the OUTGOING project's tab/split VIEW into the layout
-          //    store (its tab subtree stays MOUNTED + hidden in CenterPanel),
-          //    snapshot its light panel-data, and kick its disk flush
-          //    fire-and-forget. We do NOT reset chat/editor/terminal — they
-          //    stay resident across switches so nothing remounts.
-          const layout = useLayoutStore.getState().actions;
-          const outgoingPath = useAppStore.getState().currentProject?.path ?? null;
-          if (activeProjectId) {
-            layout.commitProjectView(activeProjectId);
-            // Flush the OUTGOING project's pending writes (notably the KB
-            // editor's unsaved buffer) to disk BEFORE snapshotting and swapping.
-            // Awaited — not fire-and-forget — so a note edited/saved in this
-            // project can never be stranded or overwritten by the switch race.
-            // The snapshot is then taken AFTER the flush so it reflects the
-            // just-saved state. `flushAll` swallows per-store errors, so a bad
-            // flush can't block the switch.
-            await flushAll({
-              projectId: activeProjectId,
-              path: outgoingPath,
-              reason: "switch",
-            });
-            captureSnapshot(activeProjectId);
-          }
-
-          // 2) Make the switch authoritative.
-          const nowIso = new Date().toISOString();
-          set((s) => ({
-            activeProjectId: id,
-            projects: s.projects.map((w) => (w.id === id ? { ...w, lastActiveAt: nowIso } : w)),
-          }));
-
-          // 3) Point the project store at the incoming project. This sets
-          //    `currentProject`, which the App-level effects observe to drive
-          //    the per-project Rust lifecycle (file index, git watch,
-          //    recent files) keyed by `activeProjectId`.
-          useAppStore.getState().actions.setActiveProject({
-            name: target.name,
-            path: target.path,
-          });
-
-          // 4) Residency: a project already in the HOT set is instant; a
-          //    cold one joins the hot set (evicting the LRU evictable if that
-          //    exceeds the cap) and loads from disk/Rust.
-          const wasHot = get().mountedProjectIds.includes(id);
-          get().actions.ensureMounted(id);
-
-          if (wasHot) {
-            // WARM: its subtree is already mounted — swap light panel data +
-            // make its column-set visible. No remount.
-            restoreSnapshot(id);
-            layout.loadProjectView(id);
-            revalidateProject(id, target.path);
-          } else {
-            // COLD: mount fresh. `loadEditorState` (inside loadProjectStores)
-            // appends saved tabs by id — idempotent against the seeded view.
-            layout.loadProjectView(id);
-            await loadProjectStores(target.path);
-            captureSnapshot(id);
-            layout.commitProjectView(id);
-          }
-
-          scheduleAppStateSave();
-          logEvent({
-            source: "project",
-            kind: "project-switch",
-            summary: target.name,
-            projectPath: target.path,
-            projectName: target.name,
-            // `projectId`, not the `workspaceId` this used to say. The frozen
-            // storage keys are frozen because a READER exists on the other
-            // side; the activity log has none — the payload is free-form JSON
-            // rendered for a human, and nothing groups, filters or joins on it.
-            // Historic rows therefore reconcile exactly as well either way,
-            // and keeping the old spelling would leave the only frontend
-            // surface still saying "workspace" without a reason.
-            payload: { projectId: id },
-          });
-        } finally {
-          set({ switching: false });
-          // Drain a coalesced click: jump straight to the LATEST target the user
-          // selected while this switch ran.
-          const next = pendingSwitchTarget;
-          pendingSwitchTarget = null;
-          if (next && next !== get().activeProjectId) {
-            void get().actions.switchTo(next);
-          }
-        }
-      },
-
-      closeProject: async (id: string) => {
-        const { projects, activeProjectId } = get();
-        const closing = projects.find((w) => w.id === id);
-        if (!closing) return;
-
-        const isActive = id === activeProjectId;
-        const closingPath = closing.path;
-
-        // Closing kills this project's running agents — confirm, then cancel
-        // their turns so the adapters actually stop (drop alone leaves them
-        // editing files headless).
-        const busy = busySessions(closingPath).length;
-        if (busy > 0) {
-          const ok = await useStopAgentsConfirmStore.getState().actions.ask({
-            count: busy,
-            actionLabel: "Closing this project",
-            confirmLabel: "Stop agents & close",
-          });
-          if (!ok) return;
-          await cancelBusySessions(closingPath);
-        }
-
-        if (isActive) {
-          // Active project: the layout mirror is its tabs, so flush is correct.
-          await flushAll({ projectId: id, path: closingPath });
-        }
-
-        // Free RAM + unmount its subtree (closes PTYs) + stop Rust watchers,
-        // then drop it from the hot set AND the registry.
-        teardownHot(id);
-        const remaining = projects.filter((w) => w.id !== id);
+export const useProjectStore = create<ProjectState>()((set, get) => ({
+  projects: [],
+  activeProjectId: null,
+  mountedProjectIds: [],
+  maxMounted: DEFAULT_MAX_MOUNTED,
+  sidebarOpen: readSidebarOpen(),
+  switching: false,
+  actions: {
+    addProject: async (path: string) => {
+      // Dedup by (path, ORG) — not path alone. Project identity is
+      // per-organisation in the tag-in-place model: the sidebar filters by
+      // `orgId === activeOrganisationId`, so matching a same-path project
+      // that belongs to ANOTHER org and switching to it left the project
+      // rendered in the center panel (currentProject is not org-filtered)
+      // while invisible in the new org's switcher — the "added a project in
+      // a fresh org and it never appeared" bug. Opening the same folder
+      // from a second org now creates that org's own project row.
+      const org = requireActiveOrgId();
+      if (!org) {
+        return refuseWithoutOrg("no organisation available to own a new project", { path });
+      }
+      const existing = get().projects.find((w) => w.path === path && w.orgId === org);
+      if (existing) {
+        await get().actions.switchTo(existing.id);
+        return existing.id;
+      }
+      // Legacy untagged row for this path (predates the Rust org backfill):
+      // adopt it into the active org in place instead of duplicating it.
+      const legacy = get().projects.find((w) => w.path === path && w.orgId == null);
+      if (legacy) {
         set((s) => ({
-          projects: remaining,
-          mountedProjectIds: s.mountedProjectIds.filter((x) => x !== id),
+          projects: s.projects.map((w) => (w.id === legacy.id ? { ...w, orgId: org } : w)),
         }));
-
-        if (isActive) {
-          // Switch to the most-recently-active remaining project IN THIS ORG,
-          // or clear. Unscoped, closing an org's last project opened another
-          // org's — invisible in this org's switcher, so it could not be
-          // closed from here either (same strict rule as `org-scope.ts`).
-          const orgId = useOrgStore.getState().activeOrganisationId;
-          const inOrg = orgId == null ? [] : remaining.filter((w) => w.orgId === orgId);
-          const next = [...inOrg].sort((a, b) =>
-            (b.lastActiveAt ?? "").localeCompare(a.lastActiveAt ?? ""),
-          )[0];
-          if (next) {
-            set({ activeProjectId: null });
-            await get().actions.switchTo(next.id);
-          } else {
-            clearPanelStores();
-            set({ activeProjectId: null });
-            useAppStore.getState().actions.setActiveProject(null);
-          }
-        }
         scheduleAppStateSave();
-      },
-
-      teardownForOrgSwitch: () => {
-        const { mountedProjectIds } = get();
-        for (const id of mountedProjectIds) teardownHot(id);
-        clearPanelStores();
-        set({
-          mountedProjectIds: [],
-          activeProjectId: null,
-        });
-      },
-
-      removeProjectsForOrg: (orgId: string) => {
-        const { projects, mountedProjectIds } = get();
-        const removedIds = new Set(projects.filter((w) => w.orgId === orgId).map((w) => w.id));
-        // Tear down any that are still mounted (defensive — a deleted org is
-        // normally switched away from first, so its set is already cold).
-        for (const id of mountedProjectIds) {
-          if (removedIds.has(id)) teardownHot(id);
-        }
-        set((s) => ({
-          projects: s.projects.filter((w) => w.orgId !== orgId),
-          mountedProjectIds: s.mountedProjectIds.filter((x) => !removedIds.has(x)),
-        }));
-      },
-
-      toggleSidebar: () =>
-        set((s) => {
-          writeSidebarOpen(!s.sidebarOpen);
-          return { sidebarOpen: !s.sidebarOpen };
-        }),
-      setSidebarOpen: (open) => {
-        writeSidebarOpen(open);
-        set({ sidebarOpen: open });
-      },
-
-      hydrate: (payload) => {
-        set({
-          // Names used to be the last `/`-segment of the path, which on
-          // Windows is the whole path — re-derive those so saved rows heal.
-          projects: (payload.projects ?? []).map((w) =>
-            w.name === w.path ? { ...w, name: nameOf(w.path) } : w,
-          ),
-          activeProjectId: payload.activeProjectId ?? null,
-        });
-      },
+        await get().actions.switchTo(legacy.id);
+        return legacy.id;
+      }
+      const ws: Project = {
+        id: uuid(),
+        name: nameOf(path),
+        path,
+        orgId: org,
+      };
+      set((s) => ({ projects: [...s.projects, ws] }));
+      scheduleAppStateSave();
+      await get().actions.switchTo(ws.id);
+      return ws.id;
     },
-  })),
-);
+
+    addProjectEntry: (path: string) => {
+      // Same (path, org) identity + legacy-adopt rules as addProject above.
+      const org = requireActiveOrgId();
+      if (!org) {
+        return refuseWithoutOrg("no organisation available to own a new project entry", { path });
+      }
+      const existing = get().projects.find((w) => w.path === path && w.orgId === org);
+      if (existing) return existing.id;
+      const legacy = get().projects.find((w) => w.path === path && w.orgId == null);
+      if (legacy) {
+        set((s) => ({
+          projects: s.projects.map((w) => (w.id === legacy.id ? { ...w, orgId: org } : w)),
+        }));
+        scheduleAppStateSave();
+        return legacy.id;
+      }
+      const ws: Project = {
+        id: uuid(),
+        name: nameOf(path),
+        path,
+        orgId: org,
+      };
+      set((s) => ({ projects: [...s.projects, ws] }));
+      scheduleAppStateSave();
+      return ws.id;
+    },
+
+    ensureMounted: (id: string) => {
+      const st = get();
+      if (st.mountedProjectIds.includes(id)) return;
+      let mounted = [...st.mountedProjectIds, id];
+      const byId = (wid: string) => st.projects.find((w) => w.id === wid);
+      const evictable = (wid: string): boolean => {
+        if (wid === id || wid === st.activeProjectId) return false;
+        const w = byId(wid);
+        if (!w) return true;
+        if (isProjectRunning(w.path)) return false;
+        return true;
+      };
+      // Evict the least-recently-active evictable projects until under cap.
+      // LRU-by-lastActiveAt naturally protects the just-left (2nd-newest)
+      // project, so A→B→A stays warm.
+      while (mounted.length > st.maxMounted) {
+        const candidates = mounted
+          .filter(evictable)
+          .sort((a, b) => (byId(a)?.lastActiveAt ?? "").localeCompare(byId(b)?.lastActiveAt ?? ""));
+        if (candidates.length === 0) break; // all running — exceed cap
+        const lru = candidates[0];
+        teardownHot(lru);
+        mounted = mounted.filter((x) => x !== lru);
+      }
+      set({ mountedProjectIds: mounted });
+    },
+
+    switchTo: async (id: string) => {
+      const { activeProjectId, switching, projects } = get();
+      const target = projects.find((w) => w.id === id);
+      if (!target) return;
+
+      // A switch already in flight → don't DROP the click; remember the latest
+      // target and run it when the current one settles (coalesce).
+      if (switching) {
+        pendingSwitchTarget = id;
+        return;
+      }
+      if (id === activeProjectId) {
+        // Already active — make sure currentProject reflects it (covers
+        // the very first switch after boot) but skip the flush dance.
+        useAppStore.getState().actions.setActiveProject({
+          name: target.name,
+          path: target.path,
+        });
+        return;
+      }
+
+      set({ switching: true });
+      try {
+        // 1) Commit the OUTGOING project's tab/split VIEW into the layout
+        //    store (its tab subtree stays MOUNTED + hidden in CenterPanel),
+        //    snapshot its light panel-data, and kick its disk flush
+        //    fire-and-forget. We do NOT reset chat/editor/terminal — they
+        //    stay resident across switches so nothing remounts.
+        const layout = useLayoutStore.getState().actions;
+        const outgoingPath = useAppStore.getState().currentProject?.path ?? null;
+        if (activeProjectId) {
+          layout.commitProjectView(activeProjectId);
+          // Flush the OUTGOING project's pending writes (notably the KB
+          // editor's unsaved buffer) to disk BEFORE snapshotting and swapping.
+          // Awaited — not fire-and-forget — so a note edited/saved in this
+          // project can never be stranded or overwritten by the switch race.
+          // The snapshot is then taken AFTER the flush so it reflects the
+          // just-saved state. `flushAll` swallows per-store errors, so a bad
+          // flush can't block the switch.
+          await flushAll({
+            projectId: activeProjectId,
+            path: outgoingPath,
+            reason: "switch",
+          });
+          captureSnapshot(activeProjectId);
+        }
+
+        // 2) Make the switch authoritative.
+        const nowIso = new Date().toISOString();
+        set((s) => ({
+          activeProjectId: id,
+          projects: s.projects.map((w) => (w.id === id ? { ...w, lastActiveAt: nowIso } : w)),
+        }));
+
+        // 3) Point the project store at the incoming project. This sets
+        //    `currentProject`, which the App-level effects observe to drive
+        //    the per-project Rust lifecycle (file index, git watch,
+        //    recent files) keyed by `activeProjectId`.
+        useAppStore.getState().actions.setActiveProject({
+          name: target.name,
+          path: target.path,
+        });
+
+        // 4) Residency: a project already in the HOT set is instant; a
+        //    cold one joins the hot set (evicting the LRU evictable if that
+        //    exceeds the cap) and loads from disk/Rust.
+        const wasHot = get().mountedProjectIds.includes(id);
+        get().actions.ensureMounted(id);
+
+        if (wasHot) {
+          // WARM: its subtree is already mounted — swap light panel data +
+          // make its column-set visible. No remount.
+          restoreSnapshot(id);
+          layout.loadProjectView(id);
+          revalidateProject(id, target.path);
+        } else {
+          // COLD: mount fresh. `loadEditorState` (inside loadProjectStores)
+          // appends saved tabs by id — idempotent against the seeded view.
+          layout.loadProjectView(id);
+          await loadProjectStores(target.path);
+          captureSnapshot(id);
+          layout.commitProjectView(id);
+        }
+
+        scheduleAppStateSave();
+        logEvent({
+          source: "project",
+          kind: "project-switch",
+          summary: target.name,
+          projectPath: target.path,
+          projectName: target.name,
+          // `projectId`, not the `workspaceId` this used to say. The frozen
+          // storage keys are frozen because a READER exists on the other
+          // side; the activity log has none — the payload is free-form JSON
+          // rendered for a human, and nothing groups, filters or joins on it.
+          // Historic rows therefore reconcile exactly as well either way,
+          // and keeping the old spelling would leave the only frontend
+          // surface still saying "workspace" without a reason.
+          payload: { projectId: id },
+        });
+      } finally {
+        set({ switching: false });
+        // Drain a coalesced click: jump straight to the LATEST target the user
+        // selected while this switch ran.
+        const next = pendingSwitchTarget;
+        pendingSwitchTarget = null;
+        if (next && next !== get().activeProjectId) {
+          void get().actions.switchTo(next);
+        }
+      }
+    },
+
+    closeProject: async (id: string) => {
+      const { projects, activeProjectId } = get();
+      const closing = projects.find((w) => w.id === id);
+      if (!closing) return;
+
+      const isActive = id === activeProjectId;
+      const closingPath = closing.path;
+
+      // Closing kills this project's running agents — confirm, then cancel
+      // their turns so the adapters actually stop (drop alone leaves them
+      // editing files headless).
+      const busy = busySessions(closingPath).length;
+      if (busy > 0) {
+        const ok = await useStopAgentsConfirmStore.getState().actions.ask({
+          count: busy,
+          actionLabel: "Closing this project",
+          confirmLabel: "Stop agents & close",
+        });
+        if (!ok) return;
+        await cancelBusySessions(closingPath);
+      }
+
+      if (isActive) {
+        // Active project: the layout mirror is its tabs, so flush is correct.
+        await flushAll({ projectId: id, path: closingPath });
+      }
+
+      // Free RAM + unmount its subtree (closes PTYs) + stop Rust watchers,
+      // then drop it from the hot set AND the registry.
+      teardownHot(id);
+      const remaining = projects.filter((w) => w.id !== id);
+      set((s) => ({
+        projects: remaining,
+        mountedProjectIds: s.mountedProjectIds.filter((x) => x !== id),
+      }));
+
+      if (isActive) {
+        // Switch to the most-recently-active remaining project IN THIS ORG,
+        // or clear. Unscoped, closing an org's last project opened another
+        // org's — invisible in this org's switcher, so it could not be
+        // closed from here either (same strict rule as `org-scope.ts`).
+        const orgId = useOrgStore.getState().activeOrganisationId;
+        const inOrg = orgId == null ? [] : remaining.filter((w) => w.orgId === orgId);
+        const next = [...inOrg].sort((a, b) =>
+          (b.lastActiveAt ?? "").localeCompare(a.lastActiveAt ?? ""),
+        )[0];
+        if (next) {
+          set({ activeProjectId: null });
+          await get().actions.switchTo(next.id);
+        } else {
+          clearPanelStores();
+          set({ activeProjectId: null });
+          useAppStore.getState().actions.setActiveProject(null);
+        }
+      }
+      scheduleAppStateSave();
+    },
+
+    teardownForOrgSwitch: () => {
+      const { mountedProjectIds } = get();
+      for (const id of mountedProjectIds) teardownHot(id);
+      clearPanelStores();
+      set({
+        mountedProjectIds: [],
+        activeProjectId: null,
+      });
+    },
+
+    removeProjectsForOrg: (orgId: string) => {
+      const { projects, mountedProjectIds } = get();
+      const removedIds = new Set(projects.filter((w) => w.orgId === orgId).map((w) => w.id));
+      // Tear down any that are still mounted (defensive — a deleted org is
+      // normally switched away from first, so its set is already cold).
+      for (const id of mountedProjectIds) {
+        if (removedIds.has(id)) teardownHot(id);
+      }
+      set((s) => ({
+        projects: s.projects.filter((w) => w.orgId !== orgId),
+        mountedProjectIds: s.mountedProjectIds.filter((x) => !removedIds.has(x)),
+      }));
+    },
+
+    toggleSidebar: () =>
+      set((s) => {
+        writeSidebarOpen(!s.sidebarOpen);
+        return { sidebarOpen: !s.sidebarOpen };
+      }),
+    setSidebarOpen: (open) => {
+      writeSidebarOpen(open);
+      set({ sidebarOpen: open });
+    },
+
+    hydrate: (payload) => {
+      set({
+        // Names used to be the last `/`-segment of the path, which on
+        // Windows is the whole path — re-derive those so saved rows heal.
+        projects: (payload.projects ?? []).map((w) =>
+          w.name === w.path ? { ...w, name: nameOf(w.path) } : w,
+        ),
+        activeProjectId: payload.activeProjectId ?? null,
+      });
+    },
+  },
+}));

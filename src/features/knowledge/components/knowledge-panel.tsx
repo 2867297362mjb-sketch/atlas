@@ -50,10 +50,10 @@ const RECENTS_MAX = 5;
 /** `tabId` scopes the panel's shortcuts to its own tab — it stays mounted
  *  while hidden (a persistent tab type), so it must not answer ⌘S elsewhere. */
 export function KnowledgePanel({ tabId }: { tabId?: string }) {
-  const entries = useKnowledgeStore.use.entries();
-  const activeEntryId = useKnowledgeStore.use.activeEntryId();
-  const editContent = useKnowledgeStore.use.editContent();
-  const pendingOpenId = useKnowledgeStore.use.pendingOpenId();
+  const entries = useKnowledgeStore((s) => s.entries);
+  const activeEntryId = useKnowledgeStore((s) => s.activeEntryId);
+  const editContent = useKnowledgeStore((s) => s.editContent);
+  const pendingOpenId = useKnowledgeStore((s) => s.pendingOpenId);
   const {
     loadEntries,
     selectEntry,
@@ -63,8 +63,8 @@ export function KnowledgePanel({ tabId }: { tabId?: string }) {
     createEntry,
     deleteEntry,
     createDir,
-  } = useKnowledgeStore.use.actions();
-  const currentProject = useAppStore.use.currentProject();
+  } = useKnowledgeStore((s) => s.actions);
+  const currentProject = useAppStore((s) => s.currentProject);
 
   const editorRef = useRef<TiptapEditorHandle>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -90,7 +90,7 @@ export function KnowledgePanel({ tabId }: { tabId?: string }) {
     toggleKnowledgeInspector,
     setKnowledgeSidebarWidth,
     setKnowledgeInspectorWidth,
-  } = useLayoutStore.use.actions();
+  } = useLayoutStore((s) => s.actions);
 
   // Drag-resize helpers (see `useKnowledgeResize`).
   const startResize = useKnowledgeResize(
@@ -122,12 +122,12 @@ export function KnowledgePanel({ tabId }: { tabId?: string }) {
     bind: bindMeta,
     unbind: unbindMeta,
     drop: dropMeta,
-  } = useKnowledgeMetaStore.use.actions();
+  } = useKnowledgeMetaStore((s) => s.actions);
   const {
     bind: bindLinks,
     unbind: unbindLinks,
     invalidate: invalidateLinks,
-  } = useKnowledgeLinksStore.use.actions();
+  } = useKnowledgeLinksStore((s) => s.actions);
   const referencesLabel = useReferencesLabel(activeEntryId);
   const backlinksFooter = useBacklinks(activeEntryId);
 
@@ -380,7 +380,7 @@ export function KnowledgePanel({ tabId }: { tabId?: string }) {
   // Sidebar uses meta.title when set so the tree reflects the user's
   // explicit title input. Falls back to the Rust-derived title (which
   // is either the first `#` line or filename) for legacy entries.
-  const metaPages = useKnowledgeMetaStore.use.pages();
+  const metaPages = useKnowledgeMetaStore((s) => s.pages);
   const sidebarEntries = useMemo(
     () =>
       entries.map((e) => {
@@ -460,7 +460,7 @@ export function KnowledgePanel({ tabId }: { tabId?: string }) {
       )}
 
       {/* Main */}
-      <main className="flex min-w-0 flex-1 flex-col bg-background">
+      <div className="flex min-w-0 flex-1 flex-col bg-background">
         {activeRepoName ? (
           <>
             <RepoTopbar
@@ -556,6 +556,7 @@ export function KnowledgePanel({ tabId }: { tabId?: string }) {
                   }}
                   documentId={`note:${activeEntryId}`}
                   initialMarkdown={editContent}
+                  label={pageTitle || "Page"}
                   onDirty={() => {
                     setIsDirty(true);
                   }}
@@ -580,7 +581,7 @@ export function KnowledgePanel({ tabId }: { tabId?: string }) {
             Select or create a note
           </div>
         )}
-      </main>
+      </div>
 
       {showInspector && activeEntry && !activeRepoName && (
         <>

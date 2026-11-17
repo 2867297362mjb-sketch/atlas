@@ -24,7 +24,7 @@ import {
 } from "@tryatlas/design";
 
 export function CreatePrDialogHost() {
-  const request = useSessionDetailsStore.use.createPr();
+  const request = useSessionDetailsStore((s) => s.createPr);
   if (!request) return null;
   return (
     <CreatePrDialog

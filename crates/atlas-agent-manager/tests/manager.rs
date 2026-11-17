@@ -10,9 +10,8 @@ use std::time::Duration;
 
 use agent_client_protocol::schema::v1 as acp;
 use anyhow::{anyhow, Result};
-use atlas_acp_thread::{
-    AcpThread, AcpThreadHandle, AgentConnection, AgentId, AgentThreadEntry, LoadError,
-};
+use atlas_acp_thread::test_support::FakeConnection;
+use atlas_acp_thread::{AgentConnection, AgentId, AgentThreadEntry, LoadError};
 use atlas_agent_manager::{
     Agent, AgentCatalog, AgentConnectedState, AgentConnectionEntry, AgentConnectionStatus,
     AgentManager, AgentManagerEvent,
@@ -176,78 +175,19 @@ impl AgentServer for FakeServer {
         async move {
             match outcome {
                 Ok(()) => {
-                    Ok(Arc::new(FakeConnection { id, prompt_fails }) as Arc<dyn AgentConnection>)
+                    let mut connection = FakeConnection::builder()
+                        .agent(id.as_str())
+                        .version("1.0.0");
+                    if prompt_fails {
+                        connection = connection.fail_prompts("the model refused");
+                    }
+                    Ok(connection.build().0 as Arc<dyn AgentConnection>)
                 }
                 Err(error) => Err(anyhow::Error::from(error)),
             }
         }
         .boxed()
     }
-
-    fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
-        self
-    }
-}
-
-struct FakeConnection {
-    id: AgentId,
-    prompt_fails: bool,
-}
-
-impl AgentConnection for FakeConnection {
-    fn agent_id(&self) -> AgentId {
-        self.id.clone()
-    }
-
-    fn telemetry_id(&self) -> Arc<str> {
-        self.id.0.clone()
-    }
-
-    fn agent_version(&self) -> Option<Arc<str>> {
-        Some("1.0.0".into())
-    }
-
-    fn new_session(
-        self: Arc<Self>,
-        work_dirs: Vec<PathBuf>,
-    ) -> BoxFuture<'static, Result<AcpThreadHandle>> {
-        let session_id = acp::SessionId::new(format!("session-{}", self.id));
-        async move {
-            let thread = AcpThread::new(
-                session_id,
-                self.clone() as Arc<dyn AgentConnection>,
-                work_dirs,
-                None,
-                atlas_acp_thread::event_channel().0,
-            );
-            Ok(Arc::new(Mutex::new(thread)) as AcpThreadHandle)
-        }
-        .boxed()
-    }
-
-    fn auth_methods(&self) -> &[acp::AuthMethod] {
-        &[]
-    }
-
-    fn authenticate(&self, _method: acp::AuthMethodId) -> BoxFuture<'static, Result<()>> {
-        async { Ok(()) }.boxed()
-    }
-
-    fn prompt(
-        &self,
-        _params: acp::PromptRequest,
-    ) -> BoxFuture<'static, Result<acp::PromptResponse>> {
-        let fails = self.prompt_fails;
-        async move {
-            if fails {
-                return Err(anyhow!("the model refused"));
-            }
-            Ok(acp::PromptResponse::new(acp::StopReason::EndTurn))
-        }
-        .boxed()
-    }
-
-    fn cancel(&self, _session_id: &acp::SessionId) {}
 
     fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
         self

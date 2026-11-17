@@ -51,8 +51,8 @@ function DurationSelect({
  *  it, each with its own switch (`notifyDisabledKinds`). Everything here is
  *  derived from the catalog — a new kind appears with no change to this file. */
 function TierSection({ tier, masterOn }: { tier: NotificationTier; masterOn: boolean }) {
-  const settings = useSettingsStore.use.settings();
-  const { updateSettings } = useSettingsStore.use.actions();
+  const settings = useSettingsStore((s) => s.settings);
+  const { updateSettings } = useSettingsStore((s) => s.actions);
   const group = TIER_SETTINGS[tier];
   const kinds = kindsInTier(tier);
   const disabled = new Set(settings.notifyDisabledKinds);
@@ -124,8 +124,8 @@ function TierSection({ tier, masterOn }: { tier: NotificationTier; masterOn: boo
 }
 
 export function NotificationsSettings() {
-  const settings = useSettingsStore.use.settings();
-  const { updateSettings } = useSettingsStore.use.actions();
+  const settings = useSettingsStore((s) => s.settings);
+  const { updateSettings } = useSettingsStore((s) => s.actions);
   const masterOn = settings.notificationsEnabled;
   return (
     <SettingsPage

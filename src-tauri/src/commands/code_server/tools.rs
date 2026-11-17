@@ -15,21 +15,18 @@ use atlas_search::{
 };
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::{
-    CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock as Content,
-    JsonObject, ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
-    ToolAnnotations,
+    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock as Content, JsonObject,
+    ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool, ToolAnnotations,
 };
 use rmcp::service::{RequestContext, RoleServer};
-use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
-use rmcp::transport::{StreamableHttpServerConfig, StreamableHttpService};
 use rmcp::ErrorData as McpError;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use super::{CodeToolsGate, CODE_PATH};
-use crate::commands::memory_server::{Grant, TOOLS_LIST_TTL_MS};
+use super::{CodeToolsGate, CODE_PATH, CODE_SERVER_NAME};
 use crate::commands::session_projects::ProjectAccessBroker;
 use crate::commands::session_pull_requests::{repository_of_url, PullRequestBroker};
+use crate::commands::tool_servers::{self, require_grant, Grant, Tenant};
 use atlas_thread_metadata::ProjectAccess;
 
 /// What the server tells the agent about itself. The engine shows it as the
@@ -266,11 +263,9 @@ pub(super) fn tool_names() -> Vec<String> {
     tools().into_iter().map(|t| t.name.to_string()).collect()
 }
 
-/// The `tools/list` answer, cached as the memory and UI servers' are.
+/// The `tools/list` answer.
 pub(super) fn tools_list() -> ListToolsResult {
-    ListToolsResult::with_all_items(tools())
-        .with_ttl_ms(TOOLS_LIST_TTL_MS)
-        .with_cache_scope(CacheScope::Private)
+    tool_servers::tools_list(tools())
 }
 
 fn tool_error(message: impl Into<String>) -> CallToolResult {
@@ -597,12 +592,7 @@ impl ServerHandler for CodeTools {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
-        let grant = context
-            .extensions
-            .get::<axum::http::request::Parts>()
-            .and_then(|parts| parts.extensions.get::<Grant>())
-            .cloned()
-            .ok_or_else(|| McpError::invalid_request("no session token", None))?;
+        let grant = require_grant(&context)?;
         let ct = context.ct.clone();
         Ok(self
             .dispatch(grant, request, async move { ct.cancelled().await })
@@ -611,17 +601,10 @@ impl ServerHandler for CodeTools {
     }
 }
 
-/// The service, routed at [`CODE_PATH`], for the tool-server listener to
-/// merge in front of its token check.
-pub fn router(tools: CodeTools) -> axum::Router {
-    // No idle timeout, as for the memory server: an agent can go many
-    // minutes between code tool calls.
-    let mut sessions = LocalSessionManager::default();
-    sessions.session_config.keep_alive = None;
-    let service = StreamableHttpService::new(
-        move || Ok(tools.clone()),
-        Arc::new(sessions),
-        StreamableHttpServerConfig::default(),
-    );
-    axum::Router::new().nest_service(CODE_PATH, service)
+/// The code tool server as a tenant of the tool server host: for every
+/// agent, while the user lets agents use the code tools. Not decided by the
+/// shared-memory toggle — code search holds no memory.
+pub fn tenant(tools: CodeTools) -> Tenant {
+    let gate = tools.gate.clone();
+    Tenant::new(CODE_SERVER_NAME, CODE_PATH, tools).gated_by(gate, "code tools are off in Settings")
 }

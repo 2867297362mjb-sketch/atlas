@@ -94,8 +94,9 @@ reviews:
     - path: "src/**"
       instructions: |
         Frontend conventions (CONTRIBUTING.md, "New features"): feature code
-        lives under `src/features/<feature>/`; Zustand stores are wrapped in
-        `createSelectors` (src/lib/create-selectors.ts); Tailwind classes are
+        lives under `src/features/<feature>/`; Zustand stores are read as
+        `useXStore((s) => s.x)`, never through a hook with a non-`useX` name,
+        because the React Compiler caches such a call; Tailwind classes are
         composed through `cn()` (src/lib/utils.ts). Flag new code that
         bypasses these without a stated reason.
 

@@ -72,11 +72,13 @@ function message(e: unknown, fallback: string): string {
 }
 
 export function OrgAgentLoops() {
-  const loops = useOrgAgentStore.use.loops();
-  const loopsError = useOrgAgentStore.use.loopsError();
-  const atlas = useOrgAgentStore.use.atlas();
-  const connection = useOrgAgentStore.use.connection();
-  const { loadLoops, setLoopStatus, deleteLoop, refreshStatus } = useOrgAgentStore.use.actions();
+  const loops = useOrgAgentStore((s) => s.loops);
+  const loopsError = useOrgAgentStore((s) => s.loopsError);
+  const atlas = useOrgAgentStore((s) => s.atlas);
+  const connection = useOrgAgentStore((s) => s.connection);
+  const { loadLoops, setLoopStatus, deleteLoop, refreshStatus } = useOrgAgentStore(
+    (s) => s.actions,
+  );
   const directory = useOrgDirectory();
   const conversations = useCommsStore((s) => s.conversations);
   const [creating, setCreating] = useState(false);
@@ -304,7 +306,7 @@ export function LoopForm({
   people: Option[];
   onDone: () => void;
 }) {
-  const { createLoop } = useOrgAgentStore.use.actions();
+  const { createLoop } = useOrgAgentStore((s) => s.actions);
   const zones = useMemo(timeZones, []);
   const [name, setName] = useState("");
   const [instruction, setInstruction] = useState("");

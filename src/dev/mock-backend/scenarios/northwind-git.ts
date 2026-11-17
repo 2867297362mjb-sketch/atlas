@@ -24,7 +24,7 @@ import type {
   FolderMatch,
 } from "@/features/file-picker/lib/file-picker-api";
 import type { RecentFile } from "@/features/chat/stores/recent-files-store";
-import type { CodeGrepMatch, CodeGrepResult } from "@/components/code-search-api";
+import type { CodeGrepMatch, CodeGrepResult } from "@/lib/code-search-api";
 import type { BlameLine } from "@/features/git/lib/git-blame-api";
 import type { DiffLineStatus } from "@/features/git/lib/git-diff-api";
 import type {

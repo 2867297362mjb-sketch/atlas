@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { matchesAction } from "@/features/keybindings/lib/use-scoped-hotkeys";
 import { useActionShortcut } from "@/features/keybindings/lib/use-action-shortcut";
-import { invoke } from "@tauri-apps/api/core";
+import { readFileBase64 } from "@/features/editor/lib/editor-fs-api";
 import { toast } from "sonner";
 import { useLayoutStore } from "@/features/layout/stores/layout-store";
 import { usePdfAnnotationStore } from "../stores/pdf-annotation-store";
@@ -21,11 +21,11 @@ export function PdfViewer({ filePath, tabId }: PdfViewerProps) {
   const [zoom, setZoom] = useState(1); // 1 = fit-to-width
   const [saving, setSaving] = useState(false);
 
-  const dirtyMap = usePdfAnnotationStore.use.dirty();
-  const tool = usePdfAnnotationStore.use.tool();
-  const color = usePdfAnnotationStore.use.color();
-  const selectedId = usePdfAnnotationStore.use.selectedId();
-  const annotations = usePdfAnnotationStore.use.byPath()[filePath] ?? NO_ANNOTATIONS;
+  const dirtyMap = usePdfAnnotationStore((s) => s.dirty);
+  const tool = usePdfAnnotationStore((s) => s.tool);
+  const color = usePdfAnnotationStore((s) => s.color);
+  const selectedId = usePdfAnnotationStore((s) => s.selectedId);
+  const annotations = usePdfAnnotationStore((s) => s.byPath)[filePath] ?? NO_ANNOTATIONS;
   const {
     load,
     save: saveAnnotations,
@@ -35,7 +35,7 @@ export function PdfViewer({ filePath, tabId }: PdfViewerProps) {
     remove,
     select,
     updateNoteText,
-  } = usePdfAnnotationStore.use.actions();
+  } = usePdfAnnotationStore((s) => s.actions);
   const saveShortcut = useActionShortcut("pdf.save");
   const isDirty = !!dirtyMap[filePath];
 
@@ -47,7 +47,7 @@ export function PdfViewer({ filePath, tabId }: PdfViewerProps) {
     let cancelled = false;
     setFileData(null);
     setError(null);
-    void invoke<string>("read_file_base64", { path: filePath })
+    void readFileBase64(filePath)
       .then((b64) => {
         if (cancelled) return;
         setFileData(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)));

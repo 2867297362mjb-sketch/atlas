@@ -24,16 +24,13 @@ import { useExternalEditorStore } from "@/features/external-editor/stores/extern
 import { resolvePreferredEditor } from "@/features/external-editor/lib/preferred-editor";
 import { cn } from "@/lib/utils";
 
-import {
-  OPEN_SESSION_IN_EDITOR_EVENT,
-  TOGGLE_SESSION_DETAILS_EVENT,
-} from "../lib/details-commands";
 import { DETAILS_CARD_GAP } from "../lib/details-density";
 import { useDetailsProjectPath } from "../lib/details-project-path";
 import { useSessionWorkPath } from "../lib/session-work-path";
 import { selectDockedOpen, useSessionDetailsStore } from "../stores/session-details-store";
 import { openWithPreference } from "./workspace-section";
 import { HintItem, IconButton } from "@tryatlas/design";
+import { onWindowEvent } from "@/lib/window-events";
 
 const loadCard = () => import("./session-details-card");
 const SessionDetailsCard = lazy(() => loadCard().then((m) => ({ default: m.SessionDetailsCard })));
@@ -90,11 +87,11 @@ function useDetailsShortcuts(tabId: string, scope: string, docked: boolean) {
       const editors = useExternalEditorStore.getState().editors;
       void openWithPreference(resolvePreferredEditor(setting, editors)?.id ?? null, workPath);
     };
-    window.addEventListener(TOGGLE_SESSION_DETAILS_EVENT, toggle);
-    window.addEventListener(OPEN_SESSION_IN_EDITOR_EVENT, openInEditor);
+    const offToggleSessionDetails = onWindowEvent("atlas:toggle-session-details", toggle);
+    const offOpenSessionInEditor = onWindowEvent("atlas:open-session-in-editor", openInEditor);
     return () => {
-      window.removeEventListener(TOGGLE_SESSION_DETAILS_EVENT, toggle);
-      window.removeEventListener(OPEN_SESSION_IN_EDITOR_EVENT, openInEditor);
+      offToggleSessionDetails();
+      offOpenSessionInEditor();
     };
   }, [tabId, scope, docked, workPath]);
 }
@@ -102,7 +99,7 @@ function useDetailsShortcuts(tabId: string, scope: string, docked: boolean) {
 /** Docked: the button shows or hides the card drawn into the panel's room. */
 function DockToggle({ scope }: { scope: string }) {
   const open = useSessionDetailsStore((s) => selectDockedOpen(s, scope));
-  const { toggle } = useSessionDetailsStore.use.actions();
+  const { toggle } = useSessionDetailsStore((s) => s.actions);
   return (
     <HintItem label={DETAILS_LABEL}>
       <IconButton
@@ -131,7 +128,7 @@ function DetailsPopover({
 }) {
   const open = useSessionDetailsStore((s) => s.popoverFor === scope);
   const instant = useSessionDetailsStore((s) => s.instant);
-  const { setPopover } = useSessionDetailsStore.use.actions();
+  const { setPopover } = useSessionDetailsStore((s) => s.actions);
   // Measured only while open: the room under the title bar, down to the
   // composer, less the gap the card keeps from it.
   const stage = useElementHeight(stageRef, open);

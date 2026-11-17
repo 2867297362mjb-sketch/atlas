@@ -338,11 +338,8 @@ fn write_marker(roots: &Roots, profile: Profile, scope: ResetScope) -> Result<()
     let marker = roots
         .marker(profile)
         .ok_or("couldn't find Atlas's config directory")?;
-    if let Some(dir) = marker.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
     let contents = format!("{}\n{}\n", scope.as_str(), std::process::id());
-    std::fs::write(&marker, contents).map_err(|e| e.to_string())
+    atlas_fs::replace_file(&marker, contents).map_err(|e| e.to_string())
 }
 
 /// Schedule `scope` for the next launch and restart into it. Returns once the

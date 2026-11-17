@@ -1,6 +1,6 @@
 # ADR-0008: Every hop on an external agent's start path has a deadline, and the user can always get out
 
-**Status:** Accepted (2026-09-12). Working tree of `0.3.2`; not yet released. Plan: `~/.claude/plans/zed-industries-zed-file-users-adib-desk-staged-rocket.md`.
+**Status:** Accepted (2026-09-12). Shipped. The frontend file map in layer 3 is as of the decision: `BIND_DEADLINE_MS` now lives in `src/features/chat/hooks/use-agent-bind.ts`, `handleCopyDiagnostics` in `src/features/chat/lib/chat-panel-handlers.ts`, and `loading-state.tsx` is gone. The Rust constants are unchanged. Log retention is the `logRetentionDays` setting, and the crates are members of one cargo workspace. Plan: `~/.claude/plans/zed-industries-zed-file-users-adib-desk-staged-rocket.md`.
 
 **For agents:** this document is the revert map. The change is four independent layers. If a regression is traced to one layer, revert that layer alone using the section "Reverting" below; do not unwind all four. Each layer's files, constants, and the exact pre-change behaviour are listed so a revert can be done from this page without archaeology.
 

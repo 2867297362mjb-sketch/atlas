@@ -30,7 +30,7 @@ export function ScopeSentence({
 } = {}) {
   const scope = useSettingsNav((s) => s.scope);
   const setScope = useSettingsNav((s) => s.setScope);
-  const projects = useProjectStore.use.projects();
+  const projects = useProjectStore((s) => s.projects);
   const orgId = useOrgStore((s) => s.activeOrganisationId);
   const info = useProjectSettingsStore((s) => (scope ? s.byPath[scope] : undefined));
   useLoadProjectSettings(scope);

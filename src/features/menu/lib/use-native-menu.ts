@@ -27,7 +27,7 @@ export function useNativeMenu(): void {
   // that rebuilds binding objects without changing a chord, so this costs one
   // IPC call per actual rebind. A menu item carries one chord; the first is
   // the one Settings shows.
-  const loaded = useKeybindingsStore.use.loaded();
+  const loaded = useKeybindingsStore((s) => s.loaded);
   const accelerators = useKeybindingsStore((s) =>
     JSON.stringify(
       Object.fromEntries(

@@ -49,7 +49,7 @@ import {
   TextSearch,
 } from "lucide-react";
 import { AgentIcon } from "@/features/org-agent/lib/agent-icon";
-import type { TabType } from "@/lib/constants";
+import type { TabType } from "@/lib/tab-registry";
 import { useAppStore } from "@/features/app/stores/app-store";
 import { recentsForOrg } from "@/features/app/lib/recent-projects";
 import { useLayoutStore } from "@/features/layout/stores/layout-store";
@@ -117,8 +117,8 @@ import { Icon, CommandDialog, CommandDialogPopup } from "@tryatlas/design";
 
 /** The overlay, mounted once at the app root. */
 export function CommandPalette() {
-  const ui = useCommandPaletteStore.use.ui();
-  const { dispatch, setOpen } = useCommandPaletteStore.use.actions();
+  const ui = useCommandPaletteStore((s) => s.ui);
+  const { dispatch, setOpen } = useCommandPaletteStore((s) => s.actions);
   const escape = useCommandEscape();
 
   return (
@@ -209,7 +209,7 @@ function OpenCommandPalette(props: {
   onClose: () => void;
 }) {
   const { onClose } = props;
-  const { dispatch } = useCommandPaletteStore.use.actions();
+  const { dispatch } = useCommandPaletteStore((s) => s.actions);
   const [search, dispatchSearch] = useReducer(
     reduceCommandPaletteSearchState,
     props.initialContext?.query ?? "",
@@ -219,12 +219,12 @@ function OpenCommandPalette(props: {
   const currentView = views[views.length - 1]?.view ?? null;
   const isSubmenu = currentView !== null;
 
-  const currentProject = useAppStore.use.currentProject();
+  const currentProject = useAppStore((s) => s.currentProject);
   const projectPath = currentProject?.path ?? null;
   const orgProjects = useActiveOrgProjects();
-  const allRecents = useAppStore.use.recentProjects();
-  const registry = useProjectStore.use.projects();
-  const activeOrgId = useOrgStore.use.activeOrganisationId();
+  const allRecents = useAppStore((s) => s.recentProjects);
+  const registry = useProjectStore((s) => s.projects);
+  const activeOrgId = useOrgStore((s) => s.activeOrganisationId);
   const sessions = usePaletteSessions();
   const activeSessionId = useActiveSessionId();
   const { changeThemeItem, changeAppearanceItem, themeEditorItem } = usePaletteThemeItems();

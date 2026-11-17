@@ -24,6 +24,11 @@ autoAddAtlasGitignore = true
 # opens) into the Logs panel. (default: true)
 enableAtlasLogs = true
 
+# How many days of Atlas's own log files to keep. A new file starts each day,
+# and files past this count are deleted. Must be between 1 and 90. Takes
+# effect the next time Atlas starts. (default: 7)
+logRetentionDays = 7
+
 # Show dotfiles and dot-directories in the explorer file tree. (default: true)
 showHiddenFiles = true
 
@@ -317,6 +322,11 @@ editorFontSize = 13
 # everything else. (default: 13)
 terminalFontSize = 13
 
+# Keep an accessible copy of the terminal's screen, so a screen reader or an
+# assistive tool can read its lines and hear new output. Off by default: the
+# copy costs work on every write. (default: false)
+terminalScreenReader = false
+
 # Leave out changes that are only whitespace in diffs you read: a file's diff,
 # a commit, and a chat's changes. Diffs you stage from always show every
 # change, since a patch without the whitespace no longer applies. (default:
@@ -424,3 +434,13 @@ pullRequestGuideInstructions = ""
 # are not scanned. Off in released builds and on in development builds unless
 # this key is set. (default: false)
 securityScan = false
+
+# modelPriceOverrides: Per-model input, output, cacheRead and cacheWrite
+# prices in USD per million tokens. Replaces models.dev prices, including for
+# models absent from its catalog. Names match exactly, then without a provider
+# prefix, then without an eight-digit date suffix. All four rates are
+# required; zero is allowed. Atlas Agent turns are billed against the account
+# cap; an override changes only the estimate shown for them. Example:
+# modelPriceOverrides = { "my-model" = { input = 1.0, output = 2.0, cacheRead
+# = 0.1, cacheWrite = 0.2 } }. An empty table uses models.dev prices.
+modelPriceOverrides = {}

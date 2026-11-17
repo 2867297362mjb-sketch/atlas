@@ -10,6 +10,10 @@
 //! and this crate disagree, and neither side can drift without one of them
 //! going red.
 //!
+//! Re-copy with `node scripts/sync-rc-fixtures.mjs`, which also rewrites
+//! `fixtures/source.json` (the server commit and a hash of each copy);
+//! `tests/rc-fixture-parity.test.ts` fails a copy changed any other way.
+//!
 //! What this covers is the *envelope* — the binary header and the control
 //! frames. The payload inside a delta batch (`SessionDelta` with `seq`) is
 //! held by `crates/atlas-agent-wire/tests/contract.rs` and

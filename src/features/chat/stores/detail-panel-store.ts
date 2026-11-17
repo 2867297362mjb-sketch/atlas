@@ -9,7 +9,6 @@
 // `getState()` and never subscribe here.
 
 import { create } from "zustand";
-import { createSelectors } from "@/lib/create-selectors";
 
 /**
  * The sidebar handles TOOL OUTPUT only.
@@ -58,40 +57,38 @@ function sameTarget(a: PanelTarget, b: PanelTarget): boolean {
   return false;
 }
 
-export const useDetailPanelStore = createSelectors(
-  create<DetailPanelState>()((set) => ({
-    targets: {},
-    width: DEFAULT_WIDTH,
-    actions: {
-      open: (tabId, target) => set((s) => ({ targets: { ...s.targets, [tabId]: target } })),
-      close: (tabId) =>
-        set((s) => {
-          if (!s.targets[tabId]) return s;
+export const useDetailPanelStore = create<DetailPanelState>()((set) => ({
+  targets: {},
+  width: DEFAULT_WIDTH,
+  actions: {
+    open: (tabId, target) => set((s) => ({ targets: { ...s.targets, [tabId]: target } })),
+    close: (tabId) =>
+      set((s) => {
+        if (!s.targets[tabId]) return s;
+        const next = { ...s.targets };
+        delete next[tabId];
+        return { targets: next };
+      }),
+    toggle: (tabId, target) =>
+      set((s) => {
+        const current = s.targets[tabId] ?? null;
+        if (sameTarget(current, target)) {
           const next = { ...s.targets };
           delete next[tabId];
           return { targets: next };
-        }),
-      toggle: (tabId, target) =>
-        set((s) => {
-          const current = s.targets[tabId] ?? null;
-          if (sameTarget(current, target)) {
-            const next = { ...s.targets };
-            delete next[tabId];
-            return { targets: next };
-          }
-          return { targets: { ...s.targets, [tabId]: target } };
-        }),
-      setWidth: (w) => set({ width: Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, w)) }),
-      forget: (tabId) =>
-        set((s) => {
-          if (!(tabId in s.targets)) return s;
-          const next = { ...s.targets };
-          delete next[tabId];
-          return { targets: next };
-        }),
-    },
-  })),
-);
+        }
+        return { targets: { ...s.targets, [tabId]: target } };
+      }),
+    setWidth: (w) => set({ width: Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, w)) }),
+    forget: (tabId) =>
+      set((s) => {
+        if (!(tabId in s.targets)) return s;
+        const next = { ...s.targets };
+        delete next[tabId];
+        return { targets: next };
+      }),
+  },
+}));
 
 /** Imperative open — for rows, which must never subscribe to this store. */
 export function openDetail(tabId: string, target: NonNullable<PanelTarget>): void {

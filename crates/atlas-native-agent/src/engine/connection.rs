@@ -38,14 +38,13 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
 
-use crate::AgentSessionEffort;
 use agent_client_protocol::schema::v1 as acp;
 use anyhow::anyhow;
 use anyhow::Result;
 use atlas_acp_thread::{
-    AcpThread, AcpThreadHandle, AgentConnection, AgentId, AgentModelId, AgentModelInfo,
-    AgentModelList, AgentModelSelector, AgentSessionModes, AgentSessionRewind, AuthorizationKind,
-    SessionRoots,
+    AcpThread, AcpThreadHandle, AgentConnection, AgentId, AgentModelCatalogue, AgentModelId,
+    AgentModelInfo, AgentModelList, AgentModelSelector, AgentSessionEffort, AgentSessionFork,
+    AgentSessionModes, AgentSessionRewind, AuthorizationKind, SessionRoots,
 };
 use atlas_agent_servers::{SessionMcpOffer, SessionMcpRequest, SessionMcpServers, ThreadEventSink};
 use atlas_engine_app_server_client::InProcessAppServerClient;
@@ -326,7 +325,7 @@ impl LiveCatalogue {
         }
     }
 
-    fn from_projection(
+    pub(crate) fn from_projection(
         projected: catalog_cache::ProjectedCatalogue,
         fetched_at: u64,
         stale: bool,
@@ -353,6 +352,11 @@ pub struct EngineConnection {
     /// the host reads it under `futures::executor::block_on` on the send
     /// path, where a lock that parks the runtime would deadlock it.
     catalogue: Arc<RwLock<LiveCatalogue>>,
+    /// How the catalogue was fetched, kept so it can be fetched again
+    /// ([`AgentConnection::model_catalogue`]). `None` on the Responses
+    /// dialect: that list is one pinned model the seam does not own, so
+    /// there is nothing to refresh.
+    catalogue_fetcher: Option<Arc<dyn CatalogueFetcher>>,
     /// The pump. Held so it is aborted when the connection is dropped rather
     /// than outliving it against a dead runtime.
     _pump: Arc<PumpHandle>,
@@ -433,7 +437,7 @@ impl EngineConnection {
         session_mcp: Option<Arc<dyn SessionMcpServers>>,
         catalogue: Option<Arc<dyn CatalogueFetcher>>,
     ) -> Result<Arc<Self>> {
-        let (live, response) = match settings.provider.wire {
+        let (live, response, catalogue_fetcher) = match settings.provider.wire {
             WireDialect::Chat => {
                 let Some(fetcher) = catalogue else {
                     return Err(anyhow!(
@@ -456,13 +460,14 @@ impl EngineConnection {
                 (
                     LiveCatalogue::from_projection(projected, cache.fetched_at, stale),
                     Some(response),
+                    Some(fetcher),
                 )
             }
             WireDialect::Responses => {
                 let Some(model) = settings.model.clone() else {
                     return Err(anyhow!("the Responses dialect needs a configured model"));
                 };
-                (LiveCatalogue::single(model), None)
+                (LiveCatalogue::single(model), None, None)
             }
         };
         tracing::info!(
@@ -513,6 +518,7 @@ impl EngineConnection {
             request_ids: Arc::new(RequestIds::default()),
             settings,
             catalogue: Arc::new(RwLock::new(live)),
+            catalogue_fetcher,
             _pump: Arc::new(PumpHandle(pump)),
             runtime: Arc::new(runtime),
             session_modes: Arc::new(Mutex::new(HashMap::new())),
@@ -549,17 +555,7 @@ impl EngineConnection {
     /// invent metadata for (`model_info_from_slug`) and the gateway would
     /// `400`. That case is a reconnect, and this refuses it.
     pub fn replace_catalogue_metadata(&self, next: LiveCatalogue) -> Result<()> {
-        let mut live = self
-            .catalogue
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if live.fingerprint != next.fingerprint {
-            return Err(anyhow!(
-                "the model list changed in a way the running engine cannot pick up; reconnect"
-            ));
-        }
-        *live = next;
-        Ok(())
+        swap_catalogue_metadata(&self.catalogue, next).map(|_| ())
     }
 
     /// The engine's private home — where the catalogue cache lives.
@@ -609,46 +605,6 @@ impl EngineConnection {
         Ok(())
     }
 
-    /// Branch a stored conversation into a new thread — `thread/fork`.
-    ///
-    /// Returns the new thread's id. Only the fork happens here: the host opens
-    /// the branch through the normal reopen path, which replays the forked
-    /// history the same way any reopened session's is replayed.
-    pub async fn fork_thread(&self, session_id: &acp::SessionId) -> Result<String> {
-        let model = self
-            .sessions
-            .selected_model(session_id)
-            .unwrap_or_else(|| self.default_model());
-        let response: v2::ThreadForkResponse = self
-            .call(|request_id| ClientRequest::ThreadFork {
-                request_id,
-                params: v2::ThreadForkParams {
-                    thread_id: session_id.to_string(),
-                    last_turn_id: None,
-                    before_turn_id: None,
-                    path: None,
-                    model: Some(model),
-                    model_provider: Some(self.settings.provider.id.clone()),
-                    service_tier: None,
-                    cwd: self.sessions.cwd(session_id),
-                    runtime_workspace_roots: None,
-                    approval_policy: None,
-                    approvals_reviewer: None,
-                    sandbox: None,
-                    permissions: None,
-                    config: None,
-                    base_instructions: None,
-                    developer_instructions: None,
-                    ephemeral: false,
-                    thread_source: None,
-                    exclude_turns: true,
-                    defer_goal_continuation: false,
-                },
-            })
-            .await?;
-        Ok(response.thread.id)
-    }
-
     /// Discover the cwd's skills and re-publish the command list with them.
     ///
     /// User- and repo-scope only: the engine's bundled system skills lean on
@@ -693,20 +649,6 @@ impl EngineConnection {
                     acp::AvailableCommandsUpdate::new(crate::engine::commands::available(&skills)),
                 ));
         }
-    }
-
-    /// Reasoning effort for one session — native-only, like the previous native path.
-    pub fn session_effort(
-        &self,
-        session_id: &acp::SessionId,
-    ) -> Option<Arc<dyn AgentSessionEffort>> {
-        self.sessions.thread(session_id)?;
-        Some(Arc::new(EngineSessionControls {
-            requests: self.requests.clone(),
-            session_id: session_id.clone(),
-            request_ids: self.request_ids.clone(),
-            runtime: self.runtime.handle(),
-        }))
     }
 
     /// What the host offers the thread about to open in `cwd`, and its config
@@ -2247,6 +2189,46 @@ impl AgentConnection for EngineConnection {
         }))
     }
 
+    fn supports_fork(&self) -> bool {
+        true
+    }
+
+    /// `thread/fork`. Offered for any session id, not only an open one: the
+    /// engine branches a stored conversation, and whether the id names one
+    /// is the engine's to say.
+    fn fork(&self, session_id: &acp::SessionId) -> Option<Arc<dyn AgentSessionFork>> {
+        Some(Arc::new(EngineSessionFork {
+            requests: self.requests.clone(),
+            request_ids: self.request_ids.clone(),
+            sessions: self.sessions.clone(),
+            catalogue: self.catalogue.clone(),
+            provider_id: self.settings.provider.id.clone(),
+            session_id: session_id.clone(),
+        }))
+    }
+
+    fn session_effort(&self, session_id: &acp::SessionId) -> Option<Arc<dyn AgentSessionEffort>> {
+        self.sessions.thread(session_id)?;
+        Some(Arc::new(EngineSessionControls {
+            requests: self.requests.clone(),
+            session_id: session_id.clone(),
+            request_ids: self.request_ids.clone(),
+            runtime: self.runtime.handle(),
+        }))
+    }
+
+    /// The picker's Refresh (ADR-0007, decision 5), for a running engine.
+    fn model_catalogue(&self) -> Option<Arc<dyn AgentModelCatalogue>> {
+        let fetcher = self.catalogue_fetcher.clone()?;
+        Some(Arc::new(
+            crate::engine::catalogue_refresh::CatalogueRefresh {
+                home: self.settings.home.clone(),
+                fetcher,
+                live: Some(self.catalogue.clone()),
+            },
+        ))
+    }
+
     fn session_modes(&self, session_id: &acp::SessionId) -> Option<Arc<dyn AgentSessionModes>> {
         self.sessions.thread(session_id)?;
         Some(Arc::new(EngineSessionModes {
@@ -2272,10 +2254,6 @@ impl AgentConnection for EngineConnection {
             sessions: self.sessions.clone(),
             catalogue: self.catalogue.clone(),
         }))
-    }
-
-    fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
-        self
     }
 
     fn cancel(&self, session_id: &acp::SessionId) {
@@ -3801,6 +3779,97 @@ fn extra_writable_roots(sessions: &EngineSessions, session_id: &acp::SessionId) 
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Swaps refreshed labels into a live catalogue, and hands back what was
+/// there.
+///
+/// Only for a catalogue with the **same fingerprint**: the engine loaded
+/// its rows once, at startup, so a list with a different slug set or a
+/// different context window is a list the engine does not know, and
+/// offering it would let the user pick a model the engine would invent
+/// metadata for (`model_info_from_slug`) and the gateway would `400`. That
+/// case is a reconnect, and this refuses it. The compare and the swap are one
+/// step under the write lock, so two refreshes cannot interleave.
+pub(crate) fn swap_catalogue_metadata(
+    live: &RwLock<LiveCatalogue>,
+    next: LiveCatalogue,
+) -> Result<LiveCatalogue> {
+    let mut live = live
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if live.fingerprint != next.fingerprint {
+        return Err(anyhow!(
+            "the model list changed in a way the running engine cannot pick up; reconnect"
+        ));
+    }
+    Ok(std::mem::replace(&mut *live, next))
+}
+
+/// What a fork needs, and no more — parts rather than the connection, for the
+/// reason the other session controls hold parts (see `ConnectionHandle`).
+struct EngineSessionFork {
+    requests: InProcessAppServerRequestHandle,
+    request_ids: Arc<RequestIds>,
+    sessions: Arc<EngineSessions>,
+    catalogue: Arc<RwLock<LiveCatalogue>>,
+    provider_id: String,
+    session_id: acp::SessionId,
+}
+
+impl AgentSessionFork for EngineSessionFork {
+    /// Branch a stored conversation into a new thread — `thread/fork`.
+    ///
+    /// Returns the new thread's id. Only the fork happens here: the host opens
+    /// the branch through the normal reopen path, which replays the forked
+    /// history the same way any reopened session's is replayed.
+    fn run(&self) -> BoxFuture<'static, Result<acp::SessionId>> {
+        let session_id = self.session_id.clone();
+        let model = self
+            .sessions
+            .selected_model(&session_id)
+            .unwrap_or_else(|| {
+                self.catalogue
+                    .read()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .default_model
+                    .clone()
+            });
+        let request = ClientRequest::ThreadFork {
+            request_id: self.request_ids.next(),
+            params: v2::ThreadForkParams {
+                thread_id: session_id.to_string(),
+                last_turn_id: None,
+                before_turn_id: None,
+                path: None,
+                model: Some(model),
+                model_provider: Some(self.provider_id.clone()),
+                service_tier: None,
+                cwd: self.sessions.cwd(&session_id),
+                runtime_workspace_roots: None,
+                approval_policy: None,
+                approvals_reviewer: None,
+                sandbox: None,
+                permissions: None,
+                config: None,
+                base_instructions: None,
+                developer_instructions: None,
+                ephemeral: false,
+                thread_source: None,
+                exclude_turns: true,
+                defer_goal_continuation: false,
+            },
+        };
+        let requests = self.requests.clone();
+        async move {
+            let response = requests
+                .request_typed::<v2::ThreadForkResponse>(request)
+                .await
+                .map_err(|e| anyhow!("{e}"))?;
+            Ok(acp::SessionId::new(response.thread.id))
+        }
+        .boxed()
+    }
 }
 
 /// What a rewind needs, and no more: the request channel to reach the engine

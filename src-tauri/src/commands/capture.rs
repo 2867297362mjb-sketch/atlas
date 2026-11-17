@@ -7,13 +7,12 @@
 //! Three decisions here are not obvious from the crate's API, and all three come
 //! from how the runtime actually behaves rather than from how it reads:
 //!
-//! **Capture is a pipeline stage, not a bus subscriber.** The `atlas-bus`
-//! broadcast drops events for a subscriber that lags past the ring capacity —
-//! correct for the UI fan-out, where a dropped frame is invisible, and wrong
-//! here, where a dropped event is a turn missing from the permanent record. The
-//! [`OutboundPipeline`] slot runs synchronously on the emit thread and cannot
-//! lag by construction. (`atlas_bus::middleware` has a test pinning that
-//! contrast.)
+//! **Capture is a pipeline stage, not a subscriber to a broadcast.** A
+//! broadcast channel drops events for a subscriber that lags past its ring
+//! capacity, and here a dropped event is a turn missing from the permanent
+//! record. The [`OutboundPipeline`] slot runs synchronously on the emit thread
+//! and cannot lag by construction. (`atlas_bus::middleware` has a test pinning
+//! that every event of a burst arrives.)
 //!
 //! **The user's prompt does not arrive on the delta stream.** The session actor
 //! deliberately skips emitting a message-appended delta for user messages — the
@@ -1452,14 +1451,11 @@ pub async fn capture_git_init(
     app: AppHandle,
 ) -> Result<Option<atlas_checkpoint::Binding>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let status = atlas_process::command("git")
-            .arg("-C")
-            .arg(&project_path)
-            .arg("init")
+        let status = atlas_git::GitCommand::without_repo(&["-C", &project_path, "init"])
             .output()
             .map_err(|e| format!("git init: {e}"))?;
-        if !status.status.success() {
-            return Err(String::from_utf8_lossy(&status.stderr).trim().to_string());
+        if !status.success() {
+            return Err(status.stderr_text().trim().to_string());
         }
         refresh_inner(&project_path, &app)
     })
@@ -3182,11 +3178,9 @@ pub struct ConnectResult {
 #[tauri::command]
 pub async fn capture_git_available() -> bool {
     tauri::async_runtime::spawn_blocking(|| {
-        atlas_process::command("git")
-            .arg("--version")
+        atlas_git::GitCommand::without_repo(&["--version"])
             .output()
-            .map(|out| out.status.success())
-            .unwrap_or(false)
+            .is_ok_and(|out| out.success())
     })
     .await
     .unwrap_or(false)

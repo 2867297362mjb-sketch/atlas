@@ -22,7 +22,7 @@ import { cn } from "@/lib/utils";
 import { useSubagent } from "../hooks/use-subagents";
 import { elapsedMs } from "../lib/subagents";
 import { CachedMarkdown } from "@/lib/markdown-cache";
-import { settledFigure, SUBAGENT_STATE } from "./transcript-rows";
+import { settledFigure, SUBAGENT_STATE } from "@tryatlas/design/session";
 import { usePaneTopInset } from "@/features/layout/lib/pane-top-inset";
 import type { ChatMessage, ToolCallDisplay } from "@/types/agent";
 import {
@@ -66,7 +66,7 @@ function useToolCalls(messages: ChatMessage[]) {
 export function DetailPanel({ tabId, messages }: { tabId: string; messages: ChatMessage[] }) {
   const target = useDetailPanelStore((s) => s.targets[tabId] ?? null);
   const width = useDetailPanelStore((s) => s.width);
-  const { close, setWidth } = useDetailPanelStore.use.actions();
+  const { close, setWidth } = useDetailPanelStore((s) => s.actions);
   const byId = useToolCalls(messages);
   // The session column's window bar floats over this pane (z-titlebar); start
   // below it, or the bar covers this panel's header and eats its clicks.

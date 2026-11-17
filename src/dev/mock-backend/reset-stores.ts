@@ -45,9 +45,8 @@ function isStore(value: unknown): value is ResettableStore {
  * Every store a module exports, by export name.
  *
  * Exported separately from the glob so it can be unit-tested without loading
- * the app. `createSelectors` (`src/lib/create-selectors.ts`) returns the store
- * itself with a `.use` proxy bolted on, so the wrapped and unwrapped forms are
- * the same object and duck-typing on the vanilla API finds both.
+ * the app. A Zustand hook carries the vanilla API (`getState`, `setState`,
+ * `subscribe`) on itself, so duck-typing on that API finds every store.
  */
 export function collectStores(module: Record<string, unknown>): Map<string, ResettableStore> {
   const found = new Map<string, ResettableStore>();

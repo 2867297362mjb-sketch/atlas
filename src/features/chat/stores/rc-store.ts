@@ -8,7 +8,6 @@
  */
 
 import { create } from "zustand";
-import { createSelectors } from "@/lib/create-selectors";
 import { drivenElsewhere, type RcDriver, type RcRoom } from "../lib/rc-api";
 
 interface RcStoreState {
@@ -77,40 +76,36 @@ function same(a: RcRoom | undefined, b: RcRoom): boolean {
   );
 }
 
-export const useRcStore = createSelectors(
-  create<RcStoreState>((set) => ({
-    bySession: {},
-    actions: {
-      upsert: (room) =>
-        set((s) => {
-          const current = s.bySession[room.sessionId];
-          // A deleted room the window already forgot (the delete's answer
-          // landed before its event): not brought back as a dead pill.
-          if (!current && room.state === "ended" && room.endReason === "deleted") return s;
-          return same(current, room)
-            ? s
-            : { bySession: { ...s.bySession, [room.sessionId]: room } };
-        }),
-      seed: (rooms) =>
-        set((s) => {
-          const next: Record<string, RcRoom> = {};
-          for (const [id, room] of Object.entries(s.bySession)) {
-            if (room.state === "ended") next[id] = room;
-          }
-          for (const room of rooms) {
-            next[room.sessionId] = s.bySession[room.sessionId] ?? room;
-          }
-          return { bySession: next };
-        }),
-      forget: (sessionId) =>
-        set((s) => {
-          if (!(sessionId in s.bySession)) return s;
-          const { [sessionId]: _gone, ...rest } = s.bySession;
-          return { bySession: rest };
-        }),
-    },
-  })),
-);
+export const useRcStore = create<RcStoreState>((set) => ({
+  bySession: {},
+  actions: {
+    upsert: (room) =>
+      set((s) => {
+        const current = s.bySession[room.sessionId];
+        // A deleted room the window already forgot (the delete's answer
+        // landed before its event): not brought back as a dead pill.
+        if (!current && room.state === "ended" && room.endReason === "deleted") return s;
+        return same(current, room) ? s : { bySession: { ...s.bySession, [room.sessionId]: room } };
+      }),
+    seed: (rooms) =>
+      set((s) => {
+        const next: Record<string, RcRoom> = {};
+        for (const [id, room] of Object.entries(s.bySession)) {
+          if (room.state === "ended") next[id] = room;
+        }
+        for (const room of rooms) {
+          next[room.sessionId] = s.bySession[room.sessionId] ?? room;
+        }
+        return { bySession: next };
+      }),
+    forget: (sessionId) =>
+      set((s) => {
+        if (!(sessionId in s.bySession)) return s;
+        const { [sessionId]: _gone, ...rest } = s.bySession;
+        return { bySession: rest };
+      }),
+  },
+}));
 
 /** The session's room, if it has (or had) one. */
 export function useRcRoom(sessionId: string | null | undefined): RcRoom | undefined {

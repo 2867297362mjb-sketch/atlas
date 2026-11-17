@@ -50,7 +50,7 @@ export function CommitAvatar({ email, name, repoPath, size = 16, className }: Co
     key ? (hashCache.get(key) ?? null) : null,
   );
   const [failed, setFailed] = useState<ReadonlySet<string>>(new Set());
-  const activeRepo = useGitStore.use.repoPath();
+  const activeRepo = useGitStore((s) => s.repoPath);
   const byEmail = useGithubAvatars(repoPath ?? activeRepo ?? "");
 
   useEffect(() => {

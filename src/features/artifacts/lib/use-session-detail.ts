@@ -14,12 +14,12 @@ import {
   type TimelineEntry,
   type TimelineFilters,
 } from "../types";
-import { JUMP_EVENT, type JumpDetail } from "../components/session-chat-message";
 import { filterKeyForKind } from "./comment-threads";
 import { animatedScrollTo } from "./scroll-to";
 import { createFocusStore } from "./session-detail-context";
 import { foldRuns, groupEntries, matches, passes, type Group } from "./session-timeline";
 import { useTimelineScroll } from "./use-timeline-scroll";
+import { useWindowEvent } from "@/lib/window-events";
 
 /**
  * How many visible entries render before the window has to grow.
@@ -398,24 +398,19 @@ export function useSessionDetail({
   // A citation chip in the chat jumps the timeline. An event rather than a prop
   // so the chat needs no handle on this component's internals — the same
   // machinery that serves an arrival from the git panel serves this.
-  useEffect(() => {
-    const onJump = (e: Event) => {
-      const detailPayload = (e as CustomEvent<JumpDetail>).detail;
-      if (!detailPayload) return;
-      if (detailPayload.entryId) {
-        setPendingJump(detailPayload.entryId);
-        return;
-      }
-      if (detailPayload.commitSha) {
-        const target = detail.entries.find(
-          (entry) => entry.kind === "checkpoint" && entry.commitSha === detailPayload.commitSha,
-        );
-        if (target) setPendingJump(target.id);
-      }
-    };
-    window.addEventListener(JUMP_EVENT, onJump);
-    return () => window.removeEventListener(JUMP_EVENT, onJump);
-  }, [detail.entries]);
+  useWindowEvent("atlas:session-chat-jump", (detailPayload) => {
+    if (!detailPayload) return;
+    if (detailPayload.entryId) {
+      setPendingJump(detailPayload.entryId);
+      return;
+    }
+    if (detailPayload.commitSha) {
+      const target = detail.entries.find(
+        (entry) => entry.kind === "checkpoint" && entry.commitSha === detailPayload.commitSha,
+      );
+      if (target) setPendingJump(target.id);
+    }
+  });
 
   const honouredFocus = useRef<string | null>(null);
   useEffect(() => {

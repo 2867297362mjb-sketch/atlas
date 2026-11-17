@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { writeFileBase64 } from "@/features/editor/lib/editor-fs-api";
 import { save } from "@tauri-apps/plugin-dialog";
 
 import { themeBase } from "@/features/theme/theme-values";
@@ -39,7 +39,7 @@ async function exportPng(svg: string): Promise<void> {
     });
     if (!path) return;
     const base64 = await svgToPngBase64(svg);
-    await invoke("write_file_base64", { path, contents: base64 });
+    await writeFileBase64(path, base64);
   } catch {
     /* a cancelled dialog and a failed raster both leave the diagram intact */
   }

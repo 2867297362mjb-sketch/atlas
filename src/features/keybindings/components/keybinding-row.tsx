@@ -59,7 +59,7 @@ export function KeybindingRow({
   onRecord: (which: Recording | null) => void;
   onShowSame: (combo: Combo) => void;
 }) {
-  const { resetBinding, removeBinding, setWhen } = useKeybindingsStore.use.actions();
+  const { resetBinding, removeBinding, setWhen } = useKeybindingsStore((s) => s.actions);
   const clash = rowClash(row, conflicts);
   const phrase = WHEN_PHRASES[row.def.when];
   const first = row.bindings[0]?.combo ?? null;
@@ -98,7 +98,9 @@ export function KeybindingRow({
                       <IconButton
                         icon={Undo2}
                         size="xs"
-                        label={`${row.def.title}: reset to default`}
+                        label={`Reset ${row.def.title} to default`}
+                        // Named here too: Hint names an unnamed trigger after its own label.
+                        aria-label={`Reset ${row.def.title} to default`}
                         onClick={(e) => {
                           e.stopPropagation();
                           resetBinding(row.id);
@@ -197,17 +199,24 @@ export function KeybindingRow({
           </div>
         }
       />
-      <ContextMenuContent>
-        <ContextMenuItem onClick={() => onRecord(row.bindings.length ? 0 : "add")}>
+      <ContextMenuContent aria-label="Keybinding actions">
+        <ContextMenuItem
+          aria-keyshortcuts="Enter"
+          onClick={() => onRecord(row.bindings.length ? 0 : "add")}
+        >
           Change shortcut…
-          <ContextMenuShortcut>↩</ContextMenuShortcut>
+          <ContextMenuShortcut aria-hidden>↩</ContextMenuShortcut>
         </ContextMenuItem>
         {row.bindings.length > 0 && (
           <ContextMenuItem onClick={() => onRecord("add")}>Add another shortcut…</ContextMenuItem>
         )}
-        <ContextMenuItem disabled={!row.bindings.length} onClick={() => removeBinding(row.id)}>
+        <ContextMenuItem
+          aria-keyshortcuts="Backspace"
+          disabled={!row.bindings.length}
+          onClick={() => removeBinding(row.id)}
+        >
           Remove {row.bindings.length > 1 ? "shortcuts" : "shortcut"}
-          <ContextMenuShortcut>⌫</ContextMenuShortcut>
+          <ContextMenuShortcut aria-hidden>⌫</ContextMenuShortcut>
         </ContextMenuItem>
         <ContextMenuItem disabled={!row.changed} onClick={() => resetBinding(row.id)}>
           Reset to default
@@ -216,9 +225,9 @@ export function KeybindingRow({
         <ContextMenuItem disabled={!first} onClick={() => first && onShowSame(first)}>
           Show commands with this shortcut
         </ContextMenuItem>
-        <ContextMenuItem onClick={() => void copyRow(row)}>
+        <ContextMenuItem aria-keyshortcuts="Meta+C" onClick={() => void copyRow(row)}>
           Copy
-          <ContextMenuShortcut>⌘C</ContextMenuShortcut>
+          <ContextMenuShortcut aria-hidden>⌘C</ContextMenuShortcut>
         </ContextMenuItem>
         <ContextMenuItem onClick={() => void copyText(row.id)}>Copy command ID</ContextMenuItem>
       </ContextMenuContent>
@@ -281,8 +290,9 @@ function ShortcutCapture({
   replace?: string;
   onDone: () => void;
 }) {
-  const { setRecording, setBinding, addBinding, removeBinding, resetChords } =
-    useKeybindingsStore.use.actions();
+  const { setRecording, setBinding, addBinding, removeBinding, resetChords } = useKeybindingsStore(
+    (s) => s.actions,
+  );
   const [held, setHeld] = useState<string[]>([]);
   const ref = useRef<HTMLSpanElement>(null);
   const done = useRef(onDone);

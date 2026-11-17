@@ -13,6 +13,7 @@ import { projectIdForTab, projectPathForTab } from "@/features/chat/lib/tab-proj
 import { sessionWorkPath } from "@/features/session-context/lib/session-work-path";
 import { useTerminalStore } from "../stores/terminal-store";
 import { drawerTabId, useSessionDrawerStore } from "../stores/session-drawer-store";
+import { emitWindowEvent } from "@/lib/window-events";
 
 export { DRAWER_TAB_PREFIX, drawerTabId, isDrawerTab } from "../stores/session-drawer-store";
 
@@ -87,7 +88,7 @@ export function closeSessionDrawer(chatTabId: string): void {
   const drawer = useSessionDrawerStore.getState();
   drawer.actions.setOpen(scope, false);
   if (drawer.focusedTab === drawerTabId(scope)) drawer.actions.setFocusedTab(null);
-  window.dispatchEvent(new CustomEvent("atlas:chat-focus", { detail: { tabId: chatTabId } }));
+  emitWindowEvent("atlas:chat-focus", { tabId: chatTabId });
 }
 
 /** The session ⋯ menu's Terminal item and the shortcut. Returns whether it is now open. */

@@ -70,6 +70,7 @@ import {
   resetOrgAgentSessionForTests,
   useOrgAgentStore,
 } from "./org-agent-store";
+import { onWindowEvent } from "@/lib/window-events";
 
 const ORG = "org_1";
 const actions = () => useOrgAgentStore.getState().actions;
@@ -515,7 +516,7 @@ describe("Deep research", () => {
     vi.useFakeTimers();
     const { askId } = await startAsk("Research", "a1");
     const heard = vi.fn();
-    window.addEventListener("atlas:org-agent-report", heard);
+    const off = onWindowEvent("atlas:org-agent-report", heard);
     api.effort.mockClear();
     api.notifications.mockClear();
     frame(askId, 2, "report", {
@@ -533,11 +534,11 @@ describe("Deep research", () => {
     expect(api.effort).toHaveBeenCalled();
     expect(api.notifications).toHaveBeenCalled();
     expect(heard).toHaveBeenCalledTimes(1);
-    expect((heard.mock.calls[0]![0] as CustomEvent).detail).toMatchObject({
+    expect(heard.mock.calls[0]![0]).toMatchObject({
       askId,
       title: "Payments",
     });
-    window.removeEventListener("atlas:org-agent-report", heard);
+    off();
   });
 
   it("marks a report's notification read when its conversation is opened", async () => {

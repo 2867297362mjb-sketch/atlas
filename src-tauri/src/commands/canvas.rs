@@ -20,14 +20,9 @@ pub async fn load_canvas(project_path: String) -> Result<String, String> {
 #[tauri::command]
 pub async fn save_canvas(project_path: String, payload: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || -> Result<(), String> {
-        let dir = atlas_profile::dir_in(Path::new(&project_path));
-        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let final_path = dir.join("canvas.json");
-        let tmp_path = dir.join("canvas.json.tmp");
-        fs::write(&tmp_path, &payload).map_err(|e| e.to_string())?;
-        // Atomic rename — avoids partial writes on crash.
-        fs::rename(&tmp_path, &final_path).map_err(|e| e.to_string())?;
-        Ok(())
+        let final_path = atlas_profile::dir_in(Path::new(&project_path)).join("canvas.json");
+        // Replaced whole: no partial write on a crash.
+        atlas_fs::replace_file(&final_path, &payload).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -160,5 +155,30 @@ mod media_guard_tests {
             .unwrap_err();
         assert!(err.contains("too large"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod save_tests {
+    use super::{load_canvas, save_canvas};
+
+    #[tokio::test]
+    async fn a_saved_canvas_loads_back_and_leaves_only_its_file() {
+        let project = tempfile::tempdir().unwrap();
+        let root = project.path().to_string_lossy().to_string();
+
+        // The first save is also the one that creates the profile directory.
+        save_canvas(root.clone(), r#"{"nodes":[]}"#.into())
+            .await
+            .unwrap();
+        save_canvas(root.clone(), r#"{"nodes":[1]}"#.into())
+            .await
+            .unwrap();
+
+        assert_eq!(load_canvas(root).await.unwrap(), r#"{"nodes":[1]}"#);
+        assert_eq!(
+            crate::commands::file_names_in(&atlas_profile::dir_in(project.path())),
+            ["canvas.json"]
+        );
     }
 }

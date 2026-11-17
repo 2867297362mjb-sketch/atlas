@@ -18,13 +18,15 @@ use serde_json::{json, Value};
 use super::briefing::{rank_index, score, SessionClocks, SessionReads, INDEX_MAX_ENTRIES};
 use super::tools::{
     tool_names, tools_list, Bootstrap, BootstrapSource, IndexDoc, IndexEvict, IndexSearch,
-    TOOLS_LIST_TTL_MS,
 };
 use super::*;
 use crate::commands::agent_host::SessionLifecycle;
 use crate::commands::memory_pack::{Handoff, PackEntry};
 use crate::commands::shared_memory::{
     store_for, EventKind, MemoryChanged, RawEvent, SharedMemoryStore,
+};
+use crate::commands::tool_servers::{
+    offers, SessionOffers, SessionTokens, Tenant, ToolServer, ToolServerHost, TOOLS_LIST_TTL_MS,
 };
 
 pub(super) fn temp_project(label: &str) -> String {
@@ -49,17 +51,19 @@ pub(super) fn always_on() -> SharingGate {
 
 pub(super) async fn serve(
     memory: SharedMemoryStore,
-    tokens: Arc<MemoryTokens>,
+    tokens: Arc<SessionTokens>,
     gate: SharingGate,
     sources: Sources,
-) -> MemoryServer {
-    MemoryServer::start(
-        memory,
+) -> ToolServer {
+    ToolServer::start(
         tokens,
-        Arc::new(SessionClocks::default()),
-        Arc::new(SessionReads::default()),
-        gate,
-        sources,
+        &[tenant(MemoryTools::new(
+            memory,
+            gate,
+            Arc::new(SessionClocks::default()),
+            Arc::new(SessionReads::default()),
+            sources,
+        ))],
     )
     .await
     .unwrap()
@@ -127,7 +131,7 @@ pub(super) fn capture(
 async fn a_session_token_exercises_every_tool_over_loopback() {
     let project = temp_project("tools");
     let memory = ticking_memory();
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let server = serve(
         memory.clone(),
         tokens.clone(),
@@ -136,12 +140,12 @@ async fn a_session_token_exercises_every_tool_over_loopback() {
     )
     .await;
     assert!(
-        server.url().starts_with("http://127.0.0.1:"),
+        server.url_at(MCP_PATH).starts_with("http://127.0.0.1:"),
         "{}",
-        server.url()
+        server.url_at(MCP_PATH)
     );
     let token = tokens.mint("s1", "claude", &project);
-    let client = connect(&server.url(), &token)
+    let client = connect(&server.url_at(MCP_PATH), &token)
         .await
         .expect("a live token connects");
 
@@ -270,7 +274,7 @@ async fn the_briefing_carries_working_memory_the_index_and_the_first_look_extras
             }
         })
     });
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let server = serve(
         memory.clone(),
         tokens.clone(),
@@ -283,9 +287,12 @@ async fn the_briefing_carries_working_memory_the_index_and_the_first_look_extras
         },
     )
     .await;
-    let client = connect(&server.url(), &tokens.mint("s-new", "gemini", &p))
-        .await
-        .unwrap();
+    let client = connect(
+        &server.url_at(MCP_PATH),
+        &tokens.mint("s-new", "gemini", &p),
+    )
+    .await
+    .unwrap();
 
     let (err, briefing) = call(&client, "memory_briefing", json!({})).await;
     assert!(!err, "{briefing}");
@@ -346,7 +353,7 @@ async fn changes_are_what_other_sessions_recorded_since_the_last_look() {
         "auth.alg",
         json!({"text": "Use RS256"}),
     );
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let server = serve(
         memory.clone(),
         tokens.clone(),
@@ -354,12 +361,18 @@ async fn changes_are_what_other_sessions_recorded_since_the_last_look() {
         Sources::default(),
     )
     .await;
-    let mine = connect(&server.url(), &tokens.mint("s-mine", "claude", &p))
-        .await
-        .unwrap();
-    let theirs = connect(&server.url(), &tokens.mint("s-theirs", "codex", &p))
-        .await
-        .unwrap();
+    let mine = connect(
+        &server.url_at(MCP_PATH),
+        &tokens.mint("s-mine", "claude", &p),
+    )
+    .await
+    .unwrap();
+    let theirs = connect(
+        &server.url_at(MCP_PATH),
+        &tokens.mint("s-theirs", "codex", &p),
+    )
+    .await
+    .unwrap();
 
     // Before any look, everything is new.
     let (_, first) = call(&mine, "memory_changes", json!({})).await;
@@ -424,7 +437,7 @@ async fn changes_are_what_other_sessions_recorded_since_the_last_look() {
 async fn a_forget_reaches_the_other_session_as_a_tombstone() {
     let p = temp_project("tombstone");
     let memory = ticking_memory();
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let server = serve(
         memory.clone(),
         tokens.clone(),
@@ -432,12 +445,18 @@ async fn a_forget_reaches_the_other_session_as_a_tombstone() {
         Sources::default(),
     )
     .await;
-    let mine = connect(&server.url(), &tokens.mint("s-mine", "claude", &p))
-        .await
-        .unwrap();
-    let theirs = connect(&server.url(), &tokens.mint("s-theirs", "codex", &p))
-        .await
-        .unwrap();
+    let mine = connect(
+        &server.url_at(MCP_PATH),
+        &tokens.mint("s-mine", "claude", &p),
+    )
+    .await
+    .unwrap();
+    let theirs = connect(
+        &server.url_at(MCP_PATH),
+        &tokens.mint("s-theirs", "codex", &p),
+    )
+    .await
+    .unwrap();
 
     let (_, r) = call(
         &theirs,
@@ -470,7 +489,7 @@ async fn a_forget_reaches_the_other_session_as_a_tombstone() {
 async fn an_unknown_or_revoked_token_is_refused() {
     let project = temp_project("auth");
     let memory = ticking_memory();
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let server = serve(
         memory.clone(),
         tokens.clone(),
@@ -480,14 +499,16 @@ async fn an_unknown_or_revoked_token_is_refused() {
     .await;
 
     assert!(
-        connect(&server.url(), "not-a-token").await.is_err(),
+        connect(&server.url_at(MCP_PATH), "not-a-token")
+            .await
+            .is_err(),
         "an unknown token connects"
     );
 
     // Revoked through the session lifecycle, while the MCP session is open.
     tokens.session_started("s1", "codex", &project);
     let token = tokens.token_for("s1").expect("minted at session start");
-    let client = connect(&server.url(), &token)
+    let client = connect(&server.url_at(MCP_PATH), &token)
         .await
         .expect("a live token connects");
     let (err, _) = call(&client, "memory_list", json!({})).await;
@@ -502,7 +523,7 @@ async fn an_unknown_or_revoked_token_is_refused() {
         "a revoked token still calls tools: {refused:?}"
     );
     assert!(
-        connect(&server.url(), &token).await.is_err(),
+        connect(&server.url_at(MCP_PATH), &token).await.is_err(),
         "a revoked token reconnects"
     );
     let _ = std::fs::remove_dir_all(&project);
@@ -528,7 +549,7 @@ impl Embedder for TwoPhrasings {
 async fn remember_replaces_by_key_merges_near_duplicates_and_rejects_working_memory() {
     let project = temp_project("remember");
     let memory = ticking_memory();
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let server = serve(
         memory.clone(),
         tokens.clone(),
@@ -536,9 +557,12 @@ async fn remember_replaces_by_key_merges_near_duplicates_and_rejects_working_mem
         Sources::default(),
     )
     .await;
-    let client = connect(&server.url(), &tokens.mint("s1", "gemini", &project))
-        .await
-        .unwrap();
+    let client = connect(
+        &server.url_at(MCP_PATH),
+        &tokens.mint("s1", "gemini", &project),
+    )
+    .await
+    .unwrap();
     store_for(&project)
         .unwrap()
         .set_embedder(Some(Arc::new(TwoPhrasings)));
@@ -598,7 +622,7 @@ async fn a_write_through_the_server_shows_in_the_shared_tab_and_is_announced() {
         let announced = announced.clone();
         Arc::new(move |c: &MemoryChanged| announced.lock().push(c.clone()))
     });
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let server = serve(
         memory.clone(),
         tokens.clone(),
@@ -606,9 +630,12 @@ async fn a_write_through_the_server_shows_in_the_shared_tab_and_is_announced() {
         Sources::default(),
     )
     .await;
-    let client = connect(&server.url(), &tokens.mint("s9", "codex", &project))
-        .await
-        .unwrap();
+    let client = connect(
+        &server.url_at(MCP_PATH),
+        &tokens.mint("s9", "codex", &project),
+    )
+    .await
+    .unwrap();
 
     let secret = "sk-proj-AbCdEf0123456789GhIjKlMnOpQrStUv";
     let (err, _) = call(
@@ -643,7 +670,7 @@ async fn a_write_through_the_server_shows_in_the_shared_tab_and_is_announced() {
 async fn with_sharing_off_the_tools_hold_no_memory() {
     let project = temp_project("gated");
     let memory = ticking_memory();
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let server = serve(
         memory.clone(),
         tokens.clone(),
@@ -651,9 +678,12 @@ async fn with_sharing_off_the_tools_hold_no_memory() {
         Sources::default(),
     )
     .await;
-    let client = connect(&server.url(), &tokens.mint("s1", "claude", &project))
-        .await
-        .unwrap();
+    let client = connect(
+        &server.url_at(MCP_PATH),
+        &tokens.mint("s1", "claude", &project),
+    )
+    .await
+    .unwrap();
     let (err, _) = call(
         &client,
         "memory_remember",
@@ -676,7 +706,7 @@ async fn with_sharing_off_the_tools_hold_no_memory() {
 #[tokio::test(flavor = "multi_thread")]
 async fn memory_search_also_returns_indexed_project_documents() {
     let project = temp_project("index");
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let asked = Arc::new(Mutex::new(Vec::new()));
     let seen = asked.clone();
     let index: IndexSearch = Arc::new(move |cwd: String, query: String, limit: usize| {
@@ -702,9 +732,12 @@ async fn memory_search_also_returns_indexed_project_documents() {
         },
     )
     .await;
-    let client = connect(&server.url(), &tokens.mint("s1", "atlas-agent", &project))
-        .await
-        .unwrap();
+    let client = connect(
+        &server.url_at(MCP_PATH),
+        &tokens.mint("s1", "atlas-agent", &project),
+    )
+    .await
+    .unwrap();
 
     let (err, found) = call(
         &client,
@@ -742,7 +775,7 @@ async fn memory_search_also_returns_indexed_project_documents() {
 #[tokio::test(flavor = "multi_thread")]
 async fn forgetting_through_the_tool_evicts_the_document_before_returning() {
     let project = temp_project("forget-evicts");
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let evicted = Arc::new(Mutex::new(Vec::new()));
     let seen = evicted.clone();
     let evict: IndexEvict = Arc::new(move |cwd: String, doc_id: String| {
@@ -761,9 +794,12 @@ async fn forgetting_through_the_tool_evicts_the_document_before_returning() {
         },
     )
     .await;
-    let client = connect(&server.url(), &tokens.mint("s1", "atlas-agent", &project))
-        .await
-        .unwrap();
+    let client = connect(
+        &server.url_at(MCP_PATH),
+        &tokens.mint("s1", "atlas-agent", &project),
+    )
+    .await
+    .unwrap();
 
     let (err, remembered) = call(
         &client,
@@ -806,7 +842,7 @@ async fn forgetting_through_the_tool_evicts_the_document_before_returning() {
 #[tokio::test(flavor = "multi_thread")]
 async fn search_never_returns_a_shared_document_whose_entry_is_gone() {
     let project = temp_project("stale-docs");
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let memory = ticking_memory();
 
     let writer = crate::commands::shared_memory::Writer {
@@ -864,9 +900,12 @@ async fn search_never_returns_a_shared_document_whose_entry_is_gone() {
         },
     )
     .await;
-    let client = connect(&server.url(), &tokens.mint("s1", "atlas-agent", &project))
-        .await
-        .unwrap();
+    let client = connect(
+        &server.url_at(MCP_PATH),
+        &tokens.mint("s1", "atlas-agent", &project),
+    )
+    .await
+    .unwrap();
 
     let (err, found) = call(
         &client,
@@ -898,22 +937,27 @@ async fn search_never_returns_a_shared_document_whose_entry_is_gone() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_search_counts_as_consulting_memory_even_though_it_moves_no_clock() {
     let project = temp_project("consulted-by-search");
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let clocks = Arc::new(SessionClocks::default());
     let reads = Arc::new(SessionReads::default());
-    let server = MemoryServer::start(
-        ticking_memory(),
+    let server = ToolServer::start(
         tokens.clone(),
-        clocks.clone(),
-        reads.clone(),
-        always_on(),
-        Sources::default(),
+        &[tenant(MemoryTools::new(
+            ticking_memory(),
+            always_on(),
+            clocks.clone(),
+            reads.clone(),
+            Sources::default(),
+        ))],
     )
     .await
     .unwrap();
-    let client = connect(&server.url(), &tokens.mint("s1", "atlas-agent", &project))
-        .await
-        .unwrap();
+    let client = connect(
+        &server.url_at(MCP_PATH),
+        &tokens.mint("s1", "atlas-agent", &project),
+    )
+    .await
+    .unwrap();
 
     assert!(!reads.has_read("s1"), "nothing read yet");
 
@@ -932,21 +976,26 @@ async fn a_search_counts_as_consulting_memory_even_though_it_moves_no_clock() {
 #[tokio::test(flavor = "multi_thread")]
 async fn remembering_something_is_not_consulting_memory() {
     let project = temp_project("write-is-not-read");
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let reads = Arc::new(SessionReads::default());
-    let server = MemoryServer::start(
-        ticking_memory(),
+    let server = ToolServer::start(
         tokens.clone(),
-        Arc::new(SessionClocks::default()),
-        reads.clone(),
-        always_on(),
-        Sources::default(),
+        &[tenant(MemoryTools::new(
+            ticking_memory(),
+            always_on(),
+            Arc::new(SessionClocks::default()),
+            reads.clone(),
+            Sources::default(),
+        ))],
     )
     .await
     .unwrap();
-    let client = connect(&server.url(), &tokens.mint("s1", "atlas-agent", &project))
-        .await
-        .unwrap();
+    let client = connect(
+        &server.url_at(MCP_PATH),
+        &tokens.mint("s1", "atlas-agent", &project),
+    )
+    .await
+    .unwrap();
 
     let (err, _) = call(
         &client,
@@ -1160,20 +1209,19 @@ fn a_session_clock_is_monotonic_and_forgotten_at_session_end() {
 
 // ── Handing the server to sessions ───────────────────────────────────────────
 
-async fn running_host(gate: SharingGate) -> Arc<MemoryServerHost> {
-    let host = Arc::new(MemoryServerHost::new());
-    let server = MemoryServer::start(
+/// The memory tools over an empty record, behind `gate`.
+fn memory_tenant(gate: SharingGate) -> Tenant {
+    tenant(MemoryTools::new(
         ticking_memory(),
-        host.tokens().clone(),
-        host.clocks().clone(),
-        host.reads().clone(),
         gate,
+        Arc::new(SessionClocks::default()),
+        Arc::new(SessionReads::default()),
         Sources::default(),
-    )
-    .await
-    .unwrap();
-    host.adopt(server);
-    host
+    ))
+}
+
+async fn running_host(gate: SharingGate) -> Arc<ToolServerHost> {
+    ToolServerHost::running(vec![memory_tenant(gate)]).await
 }
 
 /// An ACP agent's request: another process, whatever it advertised.
@@ -1214,10 +1262,14 @@ fn offered(offer: &SessionMcpOffer) -> Option<(String, String, String)> {
 /// agent's entry holds the token itself, in its header.
 #[tokio::test(flavor = "multi_thread")]
 async fn no_entry_offered_to_another_process_carries_the_token() {
-    let host = running_host(always_on()).await;
-    let offers = MemorySessionOffers::new(host.clone(), always_on()).with_code(
-        crate::commands::code_server::CodeOffer::new(Arc::new(|_: &str| true)),
-    );
+    let host = ToolServerHost::running(vec![
+        memory_tenant(always_on()),
+        crate::commands::code_server::tenant(crate::commands::code_server::CodeTools::new(
+            Arc::new(|_: &str| true),
+        )),
+    ])
+    .await;
+    let offers = SessionOffers::new(host.clone());
     for http_mcp in [true, false] {
         let offer = offers.offer(&request(http_mcp, "/p", None));
         assert_eq!(
@@ -1269,7 +1321,7 @@ fn offered_token(offer: &SessionMcpOffer) -> String {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_bridged_offer_that_never_binds_removes_its_token_file() {
     let host = running_host(always_on()).await;
-    let offers = MemorySessionOffers::new(host, always_on());
+    let offers = SessionOffers::new(host);
     let offer = offers.offer(&request(true, "/p", None));
     let [acp::McpServer::Stdio(stdio)] = offer.servers() else {
         panic!("{:?}", offer.servers())
@@ -1286,7 +1338,7 @@ async fn a_bridged_offer_that_never_binds_removes_its_token_file() {
 async fn a_bound_sessions_token_file_goes_when_the_session_ends() {
     let host = running_host(always_on()).await;
     let files = Arc::new(crate::commands::memory_bridge::TokenFiles::in_temp());
-    let offers = MemorySessionOffers::new(host, always_on()).with_token_files(files.clone());
+    let offers = SessionOffers::new(host).with_token_files(files.clone());
     let offer = offers.offer(&request(true, "/p", None));
     let [acp::McpServer::Stdio(stdio)] = offer.servers() else {
         panic!("{:?}", offer.servers())
@@ -1307,13 +1359,13 @@ async fn a_bound_sessions_token_file_goes_when_the_session_ends() {
 async fn an_http_agent_is_offered_the_server_with_a_token_that_binds_to_its_session() {
     let project = temp_project("offer");
     let host = running_host(always_on()).await;
-    let offers = MemorySessionOffers::new(host.clone(), always_on());
+    let offers = SessionOffers::new(host.clone());
 
     let offer = offers.offer(&request(true, &project, None));
     let (name, url, token) =
         offered(&offer).expect("an HTTP agent with sharing on gets the server");
     assert_eq!(name, MEMORY_SERVER_NAME);
-    assert_eq!(Some(url.clone()), host.url());
+    assert_eq!(Some(url.clone()), host.url_at(MCP_PATH));
     let client = connect(&url, &token)
         .await
         .expect("the offered token is live before the id exists");
@@ -1357,7 +1409,7 @@ async fn an_http_agent_is_offered_the_server_with_a_token_that_binds_to_its_sess
 #[tokio::test(flavor = "multi_thread")]
 async fn an_acp_agent_is_offered_the_stdio_bridge() {
     let host = running_host(always_on()).await;
-    let offers = MemorySessionOffers::new(host.clone(), always_on());
+    let offers = SessionOffers::new(host.clone());
     let offer = offers.offer(&request(false, "/p", None));
     let [acp::McpServer::Stdio(stdio)] = offer.servers() else {
         panic!("{:?}", offer.servers())
@@ -1365,7 +1417,7 @@ async fn an_acp_agent_is_offered_the_stdio_bridge() {
     assert_eq!(stdio.command, std::env::current_exe().unwrap());
     let (name, url, token) = offered(&offer).unwrap();
     assert_eq!(name, MEMORY_SERVER_NAME);
-    assert_eq!(Some(url), host.url());
+    assert_eq!(Some(url), host.url_at(MCP_PATH));
     assert!(host.tokens().grant(&token).is_some(), "a live token");
 }
 
@@ -1374,7 +1426,7 @@ async fn an_acp_agent_is_offered_the_stdio_bridge() {
 #[tokio::test(flavor = "multi_thread")]
 async fn the_in_process_agent_is_offered_the_server_over_http() {
     let host = running_host(always_on()).await;
-    let offers = MemorySessionOffers::new(host, always_on());
+    let offers = SessionOffers::new(host);
     let offer = offers.offer(&in_process_request("/p"));
     assert!(matches!(offer.servers(), [acp::McpServer::Http(_)]));
 }
@@ -1386,12 +1438,12 @@ async fn the_bridge_forwards_and_keeps_the_session() {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     let p = temp_project("bridge");
     let memory = ticking_memory();
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let server = serve(memory, tokens.clone(), always_on(), Sources::default()).await;
     let token = tokens.mint("s-bridge", "gemini", &p);
     let (mut to_bridge, bridge_in) = tokio::io::duplex(64 * 1024);
     let (bridge_out, from_bridge) = tokio::io::duplex(64 * 1024);
-    let url = server.url();
+    let url = server.url_at(MCP_PATH);
     let run = tokio::spawn(async move {
         crate::commands::memory_bridge::bridge(&url, &token, BufReader::new(bridge_in), bridge_out)
             .await
@@ -1419,21 +1471,21 @@ async fn the_bridge_forwards_and_keeps_the_session() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn with_sharing_off_nothing_is_offered() {
-    let host = running_host(always_on()).await;
-    let offers = MemorySessionOffers::new(host, Arc::new(|_| false));
+    let host = running_host(Arc::new(|_| false)).await;
+    let offers = SessionOffers::new(host);
     assert_eq!(offered(&offers.offer(&request(true, "/p", None))), None);
 }
 
 #[test]
 fn before_the_server_binds_nothing_is_offered() {
-    let offers = MemorySessionOffers::new(Arc::new(MemoryServerHost::new()), always_on());
+    let offers = SessionOffers::new(ToolServerHost::registered(vec![memory_tenant(always_on())]));
     assert_eq!(offered(&offers.offer(&request(true, "/p", None))), None);
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn an_offer_that_never_binds_leaves_no_live_token() {
     let host = running_host(always_on()).await;
-    let offers = MemorySessionOffers::new(host.clone(), always_on());
+    let offers = SessionOffers::new(host.clone());
     let offer = offers.offer(&request(true, "/p", Some("stored-1")));
     let (_, _, token) = offered(&offer).unwrap();
     drop(offer);
@@ -1442,54 +1494,8 @@ async fn an_offer_that_never_binds_leaves_no_live_token() {
 }
 
 #[test]
-fn the_decision_says_whether_the_server_is_included_and_why_not() {
-    assert_eq!(
-        OfferDecision::decide(true, true, true),
-        OfferDecision::Included
-    );
-    assert_eq!(
-        OfferDecision::decide(false, true, true),
-        OfferDecision::IncludedViaBridge
-    );
-    assert_eq!(
-        OfferDecision::decide(false, false, true),
-        OfferDecision::Omitted("shared memory is off for this project")
-    );
-    assert_eq!(
-        OfferDecision::decide(true, false, true),
-        OfferDecision::Omitted("shared memory is off for this project")
-    );
-    assert_eq!(
-        OfferDecision::decide(true, true, false),
-        OfferDecision::Omitted("memory tool server is not running")
-    );
-}
-
-#[test]
-fn each_decision_is_one_log_line_naming_the_agent_its_capability_and_the_outcome() {
-    assert_eq!(
-        OfferDecision::Included.log_line("claude-code", true),
-        "memory tool server offer: agent=claude-code http_mcp=true memory_server=included",
-    );
-    assert_eq!(
-        OfferDecision::decide(false, true, true).log_line("gemini", false),
-        "memory tool server offer: agent=gemini http_mcp=false memory_server=included_via_bridge",
-    );
-    // An ACP agent that advertised HTTP is bridged all the same (ADR-0020).
-    assert_eq!(
-        OfferDecision::decide(false, true, true).log_line("claude-code", true),
-        "memory tool server offer: agent=claude-code http_mcp=true memory_server=included_via_bridge",
-    );
-    assert_eq!(
-        OfferDecision::decide(true, false, true).log_line("atlas-agent", true),
-        "memory tool server offer: agent=atlas-agent http_mcp=true memory_server=omitted \
-         reason=\"shared memory is off for this project\"",
-    );
-}
-
-#[test]
 fn a_rebind_keeps_the_token_and_a_move_replaces_it() {
-    let tokens = MemoryTokens::default();
+    let tokens = SessionTokens::default();
     tokens.session_started("s1", "claude", "/a");
     let first = tokens.token_for("s1").unwrap();
     tokens.session_started("s1", "claude", "/a");
@@ -1510,7 +1516,7 @@ async fn a_changed_citation_makes_the_memory_stale_in_search_and_briefing() {
     std::fs::create_dir_all(file.parent().unwrap()).unwrap();
     std::fs::write(&file, "pub const TOKEN_TTL_MINUTES: u32 = 15;\n").unwrap();
     let memory = ticking_memory();
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let server = serve(
         memory.clone(),
         tokens.clone(),
@@ -1518,7 +1524,7 @@ async fn a_changed_citation_makes_the_memory_stale_in_search_and_briefing() {
         Sources::default(),
     )
     .await;
-    let a = connect(&server.url(), &tokens.mint("s-a", "claude", &p))
+    let a = connect(&server.url_at(MCP_PATH), &tokens.mint("s-a", "claude", &p))
         .await
         .unwrap();
     let (_, r) = call(
@@ -1551,7 +1557,7 @@ async fn a_citation_outside_the_repository_is_refused() {
     let outside = temp_project("cite-out-other");
     std::fs::write(std::path::Path::new(&outside).join("x.rs"), "fn x() {}\n").unwrap();
     let memory = ticking_memory();
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let server = serve(
         memory.clone(),
         tokens.clone(),
@@ -1559,7 +1565,7 @@ async fn a_citation_outside_the_repository_is_refused() {
         Sources::default(),
     )
     .await;
-    let a = connect(&server.url(), &tokens.mint("s-a", "claude", &p))
+    let a = connect(&server.url_at(MCP_PATH), &tokens.mint("s-a", "claude", &p))
         .await
         .unwrap();
     let escape = format!("{outside}/x.rs");
@@ -1600,7 +1606,7 @@ async fn landed_work_that_was_removed_makes_an_uncited_memory_stale() {
     std::fs::create_dir_all(file.parent().unwrap()).unwrap();
     let agent_text = "pub fn sign(token: &Token) -> Sig {\n    eddsa::sign(token)\n}\n\npub fn verify(sig: &Sig) -> bool {\n    eddsa::verify(sig)\n}\n";
     let memory = SharedMemoryStore::new();
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let server = serve(
         memory.clone(),
         tokens.clone(),
@@ -1608,9 +1614,12 @@ async fn landed_work_that_was_removed_makes_an_uncited_memory_stale() {
         Sources::default(),
     )
     .await;
-    let a = connect(&server.url(), &tokens.mint("s-a", "claude-code", &p))
-        .await
-        .unwrap();
+    let a = connect(
+        &server.url_at(MCP_PATH),
+        &tokens.mint("s-a", "claude-code", &p),
+    )
+    .await
+    .unwrap();
 
     let mut rec = Recording::open_turn(&p, "s-a", "claude-code", "Move auth to EdDSA");
     let (_, r) = call(
@@ -1652,7 +1661,7 @@ async fn commit_evidence_leaves_cited_memories_failures_and_unrecorded_sessions_
     std::fs::create_dir_all(file.parent().unwrap()).unwrap();
     std::fs::write(&file, "pub const TOKEN_TTL_MINUTES: u32 = 15;\n").unwrap();
     let memory = SharedMemoryStore::new();
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let server = serve(
         memory.clone(),
         tokens.clone(),
@@ -1660,10 +1669,13 @@ async fn commit_evidence_leaves_cited_memories_failures_and_unrecorded_sessions_
         Sources::default(),
     )
     .await;
-    let a = connect(&server.url(), &tokens.mint("s-a", "claude-code", &p))
-        .await
-        .unwrap();
-    let other = connect(&server.url(), &tokens.mint("s-z", "codex", &p))
+    let a = connect(
+        &server.url_at(MCP_PATH),
+        &tokens.mint("s-a", "claude-code", &p),
+    )
+    .await
+    .unwrap();
+    let other = connect(&server.url_at(MCP_PATH), &tokens.mint("s-z", "codex", &p))
         .await
         .unwrap();
 
@@ -1711,7 +1723,7 @@ async fn commit_evidence_leaves_cited_memories_failures_and_unrecorded_sessions_
 async fn wrong_feedback_leaves_the_briefing_and_a_bad_verdict_is_refused() {
     let p = temp_project("feedback");
     let memory = ticking_memory();
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let server = serve(
         memory.clone(),
         tokens.clone(),
@@ -1719,10 +1731,10 @@ async fn wrong_feedback_leaves_the_briefing_and_a_bad_verdict_is_refused() {
         Sources::default(),
     )
     .await;
-    let a = connect(&server.url(), &tokens.mint("s-a", "claude", &p))
+    let a = connect(&server.url_at(MCP_PATH), &tokens.mint("s-a", "claude", &p))
         .await
         .unwrap();
-    let b = connect(&server.url(), &tokens.mint("s-b", "codex", &p))
+    let b = connect(&server.url_at(MCP_PATH), &tokens.mint("s-b", "codex", &p))
         .await
         .unwrap();
     let (_, r) = call(
@@ -1768,7 +1780,7 @@ async fn the_handoff_carries_what_the_recorded_session_did() {
     use crate::commands::memory_capture::test_support::Recording;
     let p = temp_project("handoff-facts");
     let memory = ticking_memory();
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let server = serve(
         memory.clone(),
         tokens.clone(),
@@ -1776,7 +1788,7 @@ async fn the_handoff_carries_what_the_recorded_session_did() {
         Sources::default(),
     )
     .await;
-    let b = connect(&server.url(), &tokens.mint("s-b", "codex", &p))
+    let b = connect(&server.url_at(MCP_PATH), &tokens.mint("s-b", "codex", &p))
         .await
         .unwrap();
     memory.session_started("s-a", "claude-code", &p);
@@ -1807,7 +1819,7 @@ async fn the_handoff_carries_what_the_recorded_session_did() {
 async fn a_briefing_with_no_earlier_session_carries_a_null_handoff() {
     let p = temp_project("handoff-none");
     let memory = ticking_memory();
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let server = serve(
         memory.clone(),
         tokens.clone(),
@@ -1815,9 +1827,12 @@ async fn a_briefing_with_no_earlier_session_carries_a_null_handoff() {
         Sources::default(),
     )
     .await;
-    let b = connect(&server.url(), &tokens.mint("s-only", "codex", &p))
-        .await
-        .unwrap();
+    let b = connect(
+        &server.url_at(MCP_PATH),
+        &tokens.mint("s-only", "codex", &p),
+    )
+    .await
+    .unwrap();
     let (err, brief) = call(&b, "memory_briefing", json!({})).await;
     assert!(!err, "{brief}");
     assert!(
@@ -1855,7 +1870,7 @@ async fn memory_why_names_the_sessions_behind_a_path_and_a_commit() {
     use crate::commands::memory_capture::test_support::Recording;
     let p = temp_project("why");
     let memory = ticking_memory();
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let server = serve(
         memory.clone(),
         tokens.clone(),
@@ -1863,10 +1878,13 @@ async fn memory_why_names_the_sessions_behind_a_path_and_a_commit() {
         Sources::default(),
     )
     .await;
-    let a = connect(&server.url(), &tokens.mint("s-a", "claude-code", &p))
-        .await
-        .unwrap();
-    let b = connect(&server.url(), &tokens.mint("s-b", "codex", &p))
+    let a = connect(
+        &server.url_at(MCP_PATH),
+        &tokens.mint("s-a", "claude-code", &p),
+    )
+    .await
+    .unwrap();
+    let b = connect(&server.url_at(MCP_PATH), &tokens.mint("s-b", "codex", &p))
         .await
         .unwrap();
     let mut rec = Recording::open_turn(&p, "s-a", "claude-code", "Move auth to EdDSA");
@@ -1933,7 +1951,7 @@ async fn memory_why_without_capture_answers_from_citations() {
     std::fs::create_dir_all(file.parent().unwrap()).unwrap();
     std::fs::write(&file, "pub const TOKEN_TTL_MINUTES: u32 = 15;\n").unwrap();
     let memory = ticking_memory();
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let server = serve(
         memory.clone(),
         tokens.clone(),
@@ -1941,9 +1959,12 @@ async fn memory_why_without_capture_answers_from_citations() {
         Sources::default(),
     )
     .await;
-    let a = connect(&server.url(), &tokens.mint("s-a", "claude-code", &p))
-        .await
-        .unwrap();
+    let a = connect(
+        &server.url_at(MCP_PATH),
+        &tokens.mint("s-a", "claude-code", &p),
+    )
+    .await
+    .unwrap();
     call(
         &a,
         "memory_remember",
@@ -1974,7 +1995,7 @@ async fn memory_why_marks_a_memory_whose_cited_lines_changed_as_stale() {
     std::fs::create_dir_all(file.parent().unwrap()).unwrap();
     std::fs::write(&file, "pub const TOKEN_TTL_MINUTES: u32 = 15;\n").unwrap();
     let memory = ticking_memory();
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let server = serve(
         memory.clone(),
         tokens.clone(),
@@ -1982,9 +2003,12 @@ async fn memory_why_marks_a_memory_whose_cited_lines_changed_as_stale() {
         Sources::default(),
     )
     .await;
-    let a = connect(&server.url(), &tokens.mint("s-a", "claude-code", &p))
-        .await
-        .unwrap();
+    let a = connect(
+        &server.url_at(MCP_PATH),
+        &tokens.mint("s-a", "claude-code", &p),
+    )
+    .await
+    .unwrap();
     let (_, r) = call(
         &a,
         "memory_remember",
@@ -2021,8 +2045,8 @@ async fn memory_why_marks_a_memory_whose_cited_lines_changed_as_stale() {
 }
 
 /// A server whose index answers every query with `docs`.
-async fn serve_with_documents(docs: Vec<IndexDoc>) -> (MemoryServer, Arc<MemoryTokens>) {
-    let tokens = Arc::new(MemoryTokens::default());
+async fn serve_with_documents(docs: Vec<IndexDoc>) -> (ToolServer, Arc<SessionTokens>) {
+    let tokens = Arc::new(SessionTokens::default());
     let index: IndexSearch = Arc::new(move |_cwd, _query, limit: usize| {
         let docs: Vec<IndexDoc> = docs.iter().take(limit).cloned().collect();
         Box::pin(async move { docs })
@@ -2059,9 +2083,12 @@ async fn memory_search_documents_are_excerpts_inside_the_output_budget() {
         })
         .collect();
     let (server, tokens) = serve_with_documents(docs).await;
-    let client = connect(&server.url(), &tokens.mint("s1", "claude-code", &project))
-        .await
-        .unwrap();
+    let client = connect(
+        &server.url_at(MCP_PATH),
+        &tokens.mint("s1", "claude-code", &project),
+    )
+    .await
+    .unwrap();
 
     let (err, found) = call(
         &client,
@@ -2111,7 +2138,7 @@ async fn memory_search_documents_are_excerpts_inside_the_output_budget() {
 #[tokio::test(flavor = "multi_thread")]
 async fn memory_search_does_not_present_unrelated_entries_as_matches() {
     let project = temp_project("floor");
-    let tokens = Arc::new(MemoryTokens::default());
+    let tokens = Arc::new(SessionTokens::default());
     let server = serve(
         ticking_memory(),
         tokens.clone(),
@@ -2119,9 +2146,12 @@ async fn memory_search_does_not_present_unrelated_entries_as_matches() {
         Sources::default(),
     )
     .await;
-    let client = connect(&server.url(), &tokens.mint("s1", "claude-code", &project))
-        .await
-        .unwrap();
+    let client = connect(
+        &server.url_at(MCP_PATH),
+        &tokens.mint("s1", "claude-code", &project),
+    )
+    .await
+    .unwrap();
     for content in [
         "The repository has a local branch named '0.3.4' tracking 'origin/0.3.4'",
         "prompt_too_large 413 is treated as a recoverable context-overflow signal",

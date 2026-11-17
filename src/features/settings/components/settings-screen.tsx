@@ -181,8 +181,8 @@ function Breadcrumbs({ section, onHome }: { section: SettingsSection; onHome: ()
  * which ones will change. Shown only while at least one differs.
  */
 function RestoreDefaults({ section }: { section: SettingsSection }) {
-  const settings = useSettingsStore.use.settings();
-  const { updateSettings } = useSettingsStore.use.actions();
+  const settings = useSettingsStore((s) => s.settings);
+  const { updateSettings } = useSettingsStore((s) => s.actions);
   const [open, setOpen] = useState(false);
   const changed = changedOnPage(section, settings);
   if (changed.length === 0) return null;

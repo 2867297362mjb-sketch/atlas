@@ -142,7 +142,7 @@ export function PullRequestPanel({
     : null;
 
   // The tab strip names the pull request once its title is known.
-  const setTabTitle = useLayoutStore.use.actions().setTabTitle;
+  const setTabTitle = useLayoutStore((s) => s.actions).setTabTitle;
   useEffect(() => {
     if (detail) setTabTitle(tabId, pullRequestTabTitle(number, detail.title));
   }, [detail?.title, number, tabId, setTabTitle, detail]);

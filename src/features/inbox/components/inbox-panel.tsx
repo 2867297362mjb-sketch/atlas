@@ -69,8 +69,8 @@ export function InboxPanel() {
   const [load, setLoad] = useState<Load>({ state: "loading" });
   const [more, setMore] = useState<"idle" | "loading" | "failed">("idle");
   const [marking, setMarking] = useState(false);
-  const unread = useInboxStore.use.unread();
-  const { setUnread, decrement } = useInboxStore.use.actions();
+  const unread = useInboxStore((s) => s.unread);
+  const { setUnread, decrement } = useInboxStore((s) => s.actions);
   const directory = useOrgDirectory();
   // The server Organisation: a switch reads its inbox, from All.
   const orgId = useOrgStore(

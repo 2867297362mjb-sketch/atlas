@@ -96,9 +96,9 @@ export function CapturePopover({
   onClose,
   embedded = false,
 }: Props) {
-  const signedIn = useAuthStore.use.snapshot().status === "signed-in";
-  const organisations = useOrgStore.use.organisations();
-  const activeOrganisationId = useOrgStore.use.activeOrganisationId();
+  const signedIn = useAuthStore((s) => s.snapshot).status === "signed-in";
+  const organisations = useOrgStore((s) => s.organisations);
+  const activeOrganisationId = useOrgStore((s) => s.activeOrganisationId);
   // Scoped to the Organisation currently open, not every linked one — see the
   // module note. A local-only Organisation yields none, which is what turns
   // Cloud and Connect off with a reason rather than letting them fail later.

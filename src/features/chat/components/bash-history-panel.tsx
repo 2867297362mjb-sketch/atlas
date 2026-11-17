@@ -16,11 +16,11 @@ interface BashHistoryPanelProps {
 /** The session's Bash calls, as a right-side slide-in overlay; the width is
  *  the layout store's. */
 export function BashHistoryPanel({ messages, onJump, onClose }: BashHistoryPanelProps) {
-  const bashPanel = useLayoutStore.use.bashPanel();
+  const bashPanel = useLayoutStore((s) => s.bashPanel);
   // The session column's window bar floats over this pane (z-titlebar); start
   // below it, or the bar covers this panel's header and eats its clicks.
   const topInset = usePaneTopInset();
-  const { setBashPanelWidth } = useLayoutStore.use.actions();
+  const { setBashPanelWidth } = useLayoutStore((s) => s.actions);
   const entries = useMemo(() => bashEntriesOf(messages), [messages]);
 
   return (

@@ -16,7 +16,7 @@ import { SessionChatMessageView } from "./views/session-chat-message-view";
 
 // Kept here so existing importers (the detail's jump listener, the comments
 // panel) are unchanged.
-export { JUMP_EVENT, type JumpDetail } from "../lib/session-jump";
+export type { JumpDetail } from "../lib/session-jump";
 
 const renderMarkdown = (source: string) => (
   <CachedMarkdown source={source} className="atlas-prose-wrap" />

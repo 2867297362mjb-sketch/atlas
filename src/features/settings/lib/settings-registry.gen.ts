@@ -1,6 +1,7 @@
 // Generated from src-tauri/settings-registry.toml — do not edit. Run `bun run settings:gen` after editing that file.
 
 import type { ThemeOverride } from "@tryatlas/design/theme";
+import type { ModelPriceOverrides } from "@/features/settings/stores/model-pricing-store";
 
 /**
  * Every key under `[settings]` in `config.toml`, typed. The Rust side is
@@ -19,6 +20,11 @@ export interface AppSettings {
    * Logs panel.
    */
   enableAtlasLogs: boolean;
+  /**
+   * How many days of Atlas's own log files to keep. A new file starts each day, and files past
+   * this count are deleted. Must be between 1 and 90. Takes effect the next time Atlas starts.
+   */
+  logRetentionDays: number;
   /** Show dotfiles and dot-directories in the explorer file tree. */
   showHiddenFiles: boolean;
   /**
@@ -321,6 +327,11 @@ export interface AppSettings {
    */
   terminalFontSize: number;
   /**
+   * Keep an accessible copy of the terminal's screen, so a screen reader or an assistive tool
+   * can read its lines and hear new output. Off by default: the copy costs work on every write.
+   */
+  terminalScreenReader: boolean;
+  /**
    * Leave out changes that are only whitespace in diffs you read: a file's diff, a commit, and
    * a chat's changes. Diffs you stage from always show every change, since a patch without the
    * whitespace no longer applies.
@@ -430,6 +441,16 @@ export interface AppSettings {
    * builds unless this key is set.
    */
   securityScan: boolean;
+  /**
+   * Per-model input, output, cacheRead and cacheWrite prices in USD per million tokens.
+   * Replaces models.dev prices, including for models absent from its catalog. Names match
+   * exactly, then without a provider prefix, then without an eight-digit date suffix. All four
+   * rates are required; zero is allowed. Atlas Agent turns are billed against the account cap;
+   * an override changes only the estimate shown for them. Example: modelPriceOverrides = {
+   * "my-model" = { input = 1.0, output = 2.0, cacheRead = 0.1, cacheWrite = 0.2 } }. An empty
+   * table uses models.dev prices.
+   */
+  modelPriceOverrides: ModelPriceOverrides;
 }
 
 export type SettingKey = keyof AppSettings;
@@ -437,6 +458,7 @@ export type SettingKey = keyof AppSettings;
 export const DEFAULT_SETTINGS: AppSettings = {
   autoAddAtlasGitignore: true,
   enableAtlasLogs: true,
+  logRetentionDays: 7,
   showHiddenFiles: true,
   showTips: true,
   preferredEditor: "",
@@ -497,6 +519,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   terminalFontFamily: "",
   editorFontSize: 13,
   terminalFontSize: 13,
+  terminalScreenReader: false,
   diffIgnoreWhitespace: false,
   diffFilesCollapsed: true,
   diffPalette: "theme",
@@ -515,6 +538,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   pullRequestGuideModel: "",
   pullRequestGuideInstructions: "",
   securityScan: false,
+  modelPriceOverrides: {},
 };
 
 export type SettingType =
@@ -630,6 +654,18 @@ export const SETTINGS_REGISTRY: readonly SettingMeta[] = [
     section: "Diagnostics",
     title: "Atlas logs",
     summary: "Record sign-in, agent lifecycle, and file and browser opens into the Logs panel.",
+  },
+  {
+    key: "logRetentionDays",
+    type: "integer",
+    status: "live",
+    page: "privacy",
+    section: "Diagnostics",
+    title: "Keep log files for",
+    summary: "How many days of Atlas's own log files to keep, for attaching to a bug report.",
+    min: 1,
+    max: 90,
+    applies: "next launch",
   },
   {
     key: "showHiddenFiles",
@@ -1221,6 +1257,16 @@ export const SETTINGS_REGISTRY: readonly SettingMeta[] = [
     max: 32,
   },
   {
+    key: "terminalScreenReader",
+    type: "boolean",
+    status: "live",
+    page: "appearance",
+    section: "Typography",
+    title: "Terminal screen reader support",
+    summary:
+      "Keep an accessible copy of the terminal's screen, for screen readers and other assistive tools.",
+  },
+  {
     key: "diffIgnoreWhitespace",
     type: "boolean",
     status: "live",
@@ -1398,5 +1444,14 @@ export const SETTINGS_REGISTRY: readonly SettingMeta[] = [
     title: "Scan new checkpoints for security issues",
     summary:
       "Check each new checkpoint's commit for leaked credentials, risky code and vulnerable dependencies, on this machine.",
+  },
+  {
+    key: "modelPriceOverrides",
+    type: "table",
+    status: "live",
+    page: "chat",
+    section: "Cost estimates",
+    title: "Model price overrides",
+    summary: "Your own per-model prices for cost estimates, in USD per million tokens.",
   },
 ];

@@ -2,7 +2,7 @@ import { useTipOnMount } from "@/features/tips/lib/use-tip-on-mount";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { invoke } from "@tauri-apps/api/core";
+import { commitSessions, gitShow } from "../lib/git-history-api";
 import { Popover } from "@base-ui/react/popover";
 import {
   ChevronRight,
@@ -123,7 +123,7 @@ export function CommitView({ repoPath, sha }: { repoPath: string; sha: string })
     error,
   } = useQuery({
     queryKey: ["git-show", repoPath, sha, ignoreWhitespace],
-    queryFn: () => invoke<CommitDetail>("git_show", { path: repoPath, sha, ignoreWhitespace }),
+    queryFn: () => gitShow(repoPath, sha, ignoreWhitespace),
     // A commit never changes under its sha.
     staleTime: Infinity,
     enabled: !!repoPath && !!sha,
@@ -311,9 +311,17 @@ export function DiffFilesView({
                   <div key={vr.key} {...measured} style={{ ...base, paddingTop: 4 }}>
                     <HintGroup>
                       <div
+                        role="button"
+                        tabIndex={0}
+                        aria-expanded={!isCollapsed}
                         onClick={() => toggleFile(file.path)}
+                        onKeyDown={(e) => {
+                          if (e.key !== "Enter" && e.key !== " ") return;
+                          e.preventDefault();
+                          toggleFile(file.path);
+                        }}
                         className={cn(
-                          "group flex h-9 cursor-pointer items-center gap-2 border border-border bg-card px-2 hover:bg-element-hover",
+                          "group flex h-9 cursor-pointer items-center gap-2 border border-border bg-card px-2 outline-none hover:bg-element-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
                           isCollapsed ? "rounded-md" : "rounded-t-md",
                         )}
                       >
@@ -351,7 +359,7 @@ export function DiffFilesView({
                     style={{ ...base, backgroundColor: "var(--diff-context-background)" }}
                     className="flex h-6 items-center border-x border-border px-2 font-mono text-2xs"
                   >
-                    <span className="truncate text-info/70 select-text">{row.header}</span>
+                    <span className="truncate text-info select-text">{row.header}</span>
                   </div>
                 );
               }
@@ -596,13 +604,13 @@ function CommitAsks({ detail }: { detail: CommitDetail }) {
  * was opened from.
  */
 function CommitActions({ repoPath, sha }: { repoPath: string; sha: string }) {
-  const activeRepo = useGitStore.use.repoPath();
-  const actions = useGitStore.use.actions();
+  const activeRepo = useGitStore((s) => s.repoPath);
+  const actions = useGitStore((s) => s.actions);
   const [tagging, setTagging] = useState(false);
   const [tagName, setTagName] = useState("");
   // A merge, rebase, cherry-pick or revert under way: each of these would be
   // refused by git, so they wait for it instead of surfacing git's error.
-  const busy = inProgressLabel(useGitStore.use.inProgress());
+  const busy = inProgressLabel(useGitStore((s) => s.inProgress));
 
   if (activeRepo !== repoPath) return null;
 
@@ -757,14 +765,14 @@ export interface CommitSession {
  * human work the link rule deliberately did not attribute to an agent.
  */
 function CommitSessions({ repoPath, sha }: { repoPath: string; sha: string }) {
-  const addTab = useLayoutStore.use.actions().addTab;
+  const addTab = useLayoutStore((s) => s.actions).addTab;
   const [sessions, setSessions] = useState<CommitSession[]>([]);
 
   useEffect(() => {
     if (!repoPath) return;
     let cancelled = false;
     setSessions([]);
-    invoke<CommitSession[]>("capture_commit_sessions", { projectPath: repoPath, commitSha: sha })
+    commitSessions(repoPath, sha)
       .then((found) => {
         // Typed as an array, but guard the null a future backend change (or an
         // unmocked dev command) could send instead of throwing — `sessions.length`

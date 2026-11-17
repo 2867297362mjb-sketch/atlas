@@ -16,7 +16,6 @@
  */
 
 import { useMemo } from "react";
-import { listen } from "@tauri-apps/api/event";
 
 import type { OrgMember } from "@/features/auth/lib/auth-api";
 import { useCommsStore } from "@/features/comms/stores/comms-store";
@@ -24,27 +23,30 @@ import type { OrgDirectory } from "@/features/organisations/lib/use-org-director
 import { safeUnlistenPromise } from "@/lib/safe-unlisten";
 
 import { useTeamPresenceStore } from "../stores/team-presence-store";
-
-/** The window channel the cloud bridge emits on. */
-export const ARTIFACTS_EVENT = "atlas:artifacts-cloud";
-
-type PresenceFrame =
-  | { kind: "presence"; projectId: string; online: string[] }
-  | { kind: "revoked"; projectId: string }
-  | { kind: string };
+import { listenCloudEvents } from "./cloud-event";
 
 /**
  * Fold the cloud bridge's roster frames into the presence store, for the app's
  * lifetime. Returns the unlisten.
  */
 export function startTeamPresenceListener(): () => void {
-  const stop = listen<PresenceFrame>(ARTIFACTS_EVENT, (event) => {
-    const frame = event.payload;
+  const stop = listenCloudEvents((event) => {
     const { actions } = useTeamPresenceStore.getState();
-    if (frame.kind === "presence" && "online" in frame) {
-      actions.setProject(frame.projectId, frame.online);
-    } else if (frame.kind === "revoked" && "projectId" in frame) {
-      actions.dropProject(frame.projectId);
+    switch (event.kind) {
+      case "presence":
+        actions.setProject(event.projectId, event.online);
+        return;
+      case "revoked":
+        actions.dropProject(event.projectId);
+        return;
+      case "resync":
+        // Nothing to re-read: a roster is only pushed. The one lost to the
+        // lag stays lost until it next changes; see `cloud-event.ts`.
+        return;
+      case "boardChanged":
+      case "entryUpsert":
+      case "commentUpsert":
+        return;
     }
   });
   return () => safeUnlistenPromise(stop);
@@ -87,8 +89,8 @@ export function onlineTeammates(online: ReadonlySet<string>, directory: OrgDirec
  * than calling this in every row.
  */
 export function useOnlineIds(): ReadonlySet<string> {
-  const byProject = useTeamPresenceStore.use.byProject();
-  const chatOnline = useCommsStore.use.online();
+  const byProject = useTeamPresenceStore((s) => s.byProject);
+  const chatOnline = useCommsStore((s) => s.online);
   return useMemo(() => onlineIds(byProject, chatOnline), [byProject, chatOnline]);
 }
 

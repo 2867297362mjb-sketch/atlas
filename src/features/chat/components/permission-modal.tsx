@@ -87,7 +87,7 @@ function PermissionModalImpl({ tabId, onSendMessage }: PermissionModalProps) {
     acpSessionId ? (s.pendingPermissions[acpSessionId]?.length ?? 0) : 0,
   );
   const agentType = useChatStore((s) => s.sessions[tabId]?.agentType ?? "atlas-agent");
-  const { applyExitPlanSelection } = useChatStore.use.actions();
+  const { applyExitPlanSelection } = useChatStore((s) => s.actions);
 
   const [draft, setDraft] = useState("");
   const textRef = useRef<HTMLTextAreaElement>(null);

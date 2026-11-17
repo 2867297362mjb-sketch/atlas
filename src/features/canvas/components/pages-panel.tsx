@@ -13,10 +13,10 @@ export const DEFAULT_PAGE_ICON = "📜";
  * last page.
  */
 export function PagesPanel() {
-  const tree = useCanvasStore.use.tree();
-  const activePageId = useCanvasStore.use.activePageId();
+  const tree = useCanvasStore((s) => s.tree);
+  const activePageId = useCanvasStore((s) => s.activePageId);
   const { createPage, setActivePage, renameTreeEntry, setTreeEntryIcon, deleteTreeEntry } =
-    useCanvasStore.use.actions();
+    useCanvasStore((s) => s.actions);
 
   const [iconFor, setIconFor] = useState<{ id: string; rect: DOMRect } | null>(null);
 

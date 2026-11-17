@@ -4,6 +4,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom/vitest";
 import type { ClonedRepo, GithubRepo } from "@/features/github/types";
+import { onWindowEvent } from "@/lib/window-events";
 
 /**
  * Flow-level reference test: drives the panel the way a person does — type,
@@ -34,7 +35,8 @@ vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: mocks.openUrl }));
 vi.mock("@/features/log/lib/log", () => ({ logEvent: mocks.logEvent }));
 vi.mock("sonner", () => ({ toast: mocks.toast }));
 vi.mock("@/features/app/stores/app-store", () => ({
-  useAppStore: { use: { currentProject: () => mocks.currentProject } },
+  useAppStore: (select: (s: { currentProject: typeof mocks.currentProject }) => unknown) =>
+    select({ currentProject: mocks.currentProject }),
 }));
 
 const { GithubPanel } = await import("./github-panel");
@@ -281,7 +283,7 @@ describe("cloning", () => {
     mocks.currentProject = { path: "/Users/dev/myproject" };
     answer({ search_github: [repo()], list_cloned_repos: [] });
     const clonedEvent = vi.fn();
-    window.addEventListener("atlas:repo-cloned", clonedEvent);
+    const off = onWindowEvent("atlas:repo-cloned", clonedEvent);
     try {
       render(<GithubPanel />);
       const user = await search("atlas");
@@ -291,7 +293,7 @@ describe("cloning", () => {
         expect.objectContaining({ source: "github", kind: "clone" }),
       );
     } finally {
-      window.removeEventListener("atlas:repo-cloned", clonedEvent);
+      off();
     }
   });
 

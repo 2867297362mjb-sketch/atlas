@@ -10,7 +10,6 @@
 
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
-import { createSelectors } from "@/lib/create-selectors";
 
 import type { AttachedProject, ThreadRow } from "../lib/history-api";
 
@@ -26,29 +25,27 @@ interface SessionProjectsState {
   };
 }
 
-export const useSessionProjectsStore = createSelectors(
-  create<SessionProjectsState>()(
-    immer((set) => ({
-      bySession: {},
-      actions: {
-        replace: (sessionId, projects) =>
-          set((s) => {
-            s.bySession[sessionId] = projects;
-          }),
-        mergeRows: (rows) =>
-          set((s) => {
-            for (const row of rows) {
-              if (!row.sessionId) continue;
-              const next = row.attachedProjects ?? [];
-              const prev = s.bySession[row.sessionId];
-              // Leave untouched sessions alone so their chips do not re-render.
-              if (!prev ? next.length === 0 : sameProjects(prev, next)) continue;
-              s.bySession[row.sessionId] = next;
-            }
-          }),
-      },
-    })),
-  ),
+export const useSessionProjectsStore = create<SessionProjectsState>()(
+  immer((set) => ({
+    bySession: {},
+    actions: {
+      replace: (sessionId, projects) =>
+        set((s) => {
+          s.bySession[sessionId] = projects;
+        }),
+      mergeRows: (rows) =>
+        set((s) => {
+          for (const row of rows) {
+            if (!row.sessionId) continue;
+            const next = row.attachedProjects ?? [];
+            const prev = s.bySession[row.sessionId];
+            // Leave untouched sessions alone so their chips do not re-render.
+            if (!prev ? next.length === 0 : sameProjects(prev, next)) continue;
+            s.bySession[row.sessionId] = next;
+          }
+        }),
+    },
+  })),
 );
 
 function sameProjects(a: readonly AttachedProject[], b: readonly AttachedProject[]): boolean {

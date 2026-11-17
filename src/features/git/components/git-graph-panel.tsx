@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { gitGraphBuild, gitGraphSignature } from "../lib/git-history-api";
+import { onGitChanged } from "../lib/git-watch-api";
 import { Dialog, DialogContent, DialogTitle } from "@tryatlas/design";
 import { useAppStore } from "@/features/app/stores/app-store";
 import { useGitStore } from "@/features/git/stores/git-store";
@@ -14,8 +14,8 @@ const DEFAULT_LIMIT = 1000;
 /** The commit graph's container: reads the repo, runs the graph queries, and
  *  hands `GitGraphView` plain props. */
 export function GitGraphPanel() {
-  const project = useAppStore.use.currentProject();
-  const isRepo = useGitStore.use.isRepo();
+  const project = useAppStore((s) => s.currentProject);
+  const isRepo = useGitStore((s) => s.isRepo);
   const path = project?.path ?? "";
 
   const [limit, setLimit] = useState(DEFAULT_LIMIT);
@@ -30,7 +30,7 @@ export function GitGraphPanel() {
   // an external terminal while Atlas was backgrounded.
   const sigQuery = useQuery({
     queryKey: ["git-graph-signature", path],
-    queryFn: () => invoke<string>("git_graph_signature", { path }),
+    queryFn: () => gitGraphSignature(path),
     enabled: !!path && isRepo,
     staleTime: Infinity,
     refetchOnWindowFocus: true,
@@ -42,7 +42,7 @@ export function GitGraphPanel() {
   // BuiltGraph. React just renders.
   const graphQuery = useQuery<BuiltGraph>({
     queryKey: ["git-graph", path, signature, limit],
-    queryFn: () => invoke<BuiltGraph>("git_graph_build", { path, limit, all: true }),
+    queryFn: () => gitGraphBuild(path, limit),
     enabled: !!path && isRepo && !!signature,
     staleTime: Infinity,
     placeholderData: (prev) => prev,
@@ -54,7 +54,7 @@ export function GitGraphPanel() {
     if (!path) return;
     let cancelled = false;
     let unlisten: (() => void) | null = null;
-    listen("atlas:git-changed", () => {
+    void onGitChanged(() => {
       if (cancelled) return;
       queryClient.invalidateQueries({ queryKey: ["git-graph-signature", path] });
     }).then((un) => {

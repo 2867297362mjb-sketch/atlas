@@ -26,9 +26,20 @@
 //
 // This file is the CONTAINER: it reads the stores, projects the rows and owns
 // the window (`use-transcript-window.ts`) and the jumps
-// (`use-transcript-jumps.ts`). What it renders is props-only, under `./views/`.
+// (`use-transcript-jumps.ts`). What it renders is props-only:
+// `@tryatlas/design/session`'s rows and frame, wired to desktop by
+// `DesktopTranscriptProvider` (`transcript-rows.tsx`).
 
-import { forwardRef, useCallback, useImperativeHandle, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  forwardRef,
+  useCallback,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+  type ReactElement,
+} from "react";
 import { isBusyAgentStatus, type ChatMessage } from "@/types/agent";
 import {
   agentMeta,
@@ -36,18 +47,21 @@ import {
   switchableAgentOf,
 } from "@/features/agents/lib/agent-meta";
 import { useIsTabVisible } from "@/features/layout/lib/use-tab-visible";
-import { projectRows, RowKind, type Projection, type Row } from "../lib/turn-rows";
+import { projectRows, type Projection, type Segment } from "../lib/turn-rows";
+import { RowKind, type Row } from "@tryatlas/design/session";
 import { useThawed } from "../lib/use-thawed";
 import { useChatStore } from "../stores/chat-store";
-import { sessionCanRetry } from "../lib/retry-gate";
+import { sessionCanRetry } from "../lib/send-gate";
 import { latestResponseRowId } from "../lib/message-footer";
 import { useRcRemoteDriver } from "../stores/rc-store";
 import { pinScope } from "../stores/chat-pins-store";
 import { projectPathForTab } from "../lib/tab-project";
 import { useTranscriptWindow } from "../hooks/use-transcript-window";
 import { useTranscriptJumps } from "../hooks/use-transcript-jumps";
-import { RowView } from "./views/transcript-row-view";
-import { TranscriptView } from "./views/transcript-view";
+import { TranscriptRowItem, TranscriptView } from "@tryatlas/design/session";
+import { DesktopTranscriptProvider } from "./transcript-rows";
+import { ResponseSelectionActions } from "./response-selection-actions";
+import { TurnRail } from "./turn-rail";
 
 /** Shared with the composer — see `switchableAgentOf`. */
 const switchable = switchableAgentOf;
@@ -230,7 +244,7 @@ export const Transcript = forwardRef<TranscriptHandle, TranscriptProps>(function
   // per streaming frame instead of re-rendering the whole mounted window.
   //
   // It doubles as the freeze store. Returning it unchanged while `!live` is
-  // the entire mechanism: `rows`, `visible`, `working` and `tailLen` all
+  // the entire mechanism: `rows`, the row list, `working` and `tailLen` all
   // derive from here, so holding one object still holds the window, the
   // live-edge follow, the session-switch anchor and the row elements
   // themselves. The projection pass never runs for a hidden thread, and the
@@ -268,7 +282,6 @@ export const Transcript = forwardRef<TranscriptHandle, TranscriptProps>(function
   const {
     setStartIndex,
     safeStart,
-    visible,
     more,
     onScroll,
     pendingAnchorRef,
@@ -319,96 +332,125 @@ export const Transcript = forwardRef<TranscriptHandle, TranscriptProps>(function
     scrollToMessage,
   ]);
 
-  // ── The rows, as one memoized element ────────────────────────────────
+  // ── The rows, one memoized element per turn ──────────────────────────
   //
-  // The row VIEWS are memo'd, but building the list was not: every Transcript
-  // render allocated a wrapper element per mounted row — thousands, for a long
-  // thread — for React to walk and discard. This component re-renders on every
-  // streaming frame of its own session, and (until the freeze above) did so
-  // for hidden tabs too. Memoizing the array means React sees the identical
-  // element and skips the subtree outright, so a frozen transcript costs
-  // nothing per chunk beyond the parent's own render, and a live one only pays
-  // for what actually changed.
+  // The row VIEWS are memo'd, but the list around them has to hold too. This
+  // component re-renders on every streaming frame of its own session, and the
+  // projection hands back a new `rows` array each time, so a list built from
+  // that array allocated a wrapper per mounted row per frame — the whole
+  // thread, once the idle fill has finished — for React to diff and discard.
   //
-  // Every dep is either stable by construction (the callbacks, `pinScopeKey`)
-  // or changes at most once per turn. `visible` is the projection's own slice,
-  // so it holds while the projection does.
+  // What does hold per frame is the SEGMENT: `projectRows` returns the same
+  // object for every turn that did not change. So the list is built per turn
+  // and each turn's element is kept against its segment. A streaming frame
+  // then builds one turn (the live one) and hands React the identical element
+  // for every other, which it skips without looking inside.
+  //
+  // A session that has delegated to subagents does not get this: its turns
+  // are re-projected every frame (`segmentHolds`), so every segment is new and
+  // the list is rebuilt as it was before. The row objects are still shared,
+  // so the memo'd row views hold there as they always did.
+  //
+  // The fragments add no DOM: rows stay direct children of the content
+  // element, which the window's anchor search depends on.
+  //
+  // The cache is dropped whole when anything else a row reads changes. Every
+  // one of those is stable by construction (the callbacks, `pinScopeKey`) or
+  // changes at most once per turn.
   const canRetryRowId = canRetry ? lastUserRowId : undefined;
   const canBranchRowId = canBranch ? latestResponseId : undefined;
-  const rowViews = useMemo(
-    () =>
-      visible.map((row, i) => (
-        // `group` is the hover scope for the user row's action bar
-        // (`user-row-actions.tsx`), which is hidden until the row is hovered.
-        // The fling hover-suspension in `use-transcript-scroll.ts` keeps hover
-        // styles from firing as rows pass under a resting pointer mid-scroll.
-        // `data-footer-below` marks a response whose hover footer is drawn by
-        // the turn footer row after it; hovering the response reveals it too
-        // (`globals.css`).
-        <div
-          key={row.id}
-          className="atlas-row group group/row"
-          data-row-id={row.id}
-          data-footer-below={row.kind === RowKind.Prose && row.footerBelow ? "" : undefined}
-        >
-          <RowView
+  const renderRows = useCallback(
+    (segment: Segment, from: number) => (
+      <Fragment key={segment.id}>
+        {segment.rows.slice(from).map((row, i) => (
+          // The row's wrapper is the hover scope for the user row's action bar
+          // (`user-row-actions.tsx`), which is hidden until the row is hovered.
+          // The fling hover-suspension in `use-transcript-scroll.ts` keeps hover
+          // styles from firing as rows pass under a resting pointer mid-scroll.
+          <TranscriptRowItem
+            key={row.id}
             row={row}
-            tabId={tabId}
             agentLabel={agentLabel}
             justSentMessageId={entranceMessageId}
-            onExpandTurn={toggleTurn}
             // Absolute position in the thread, so the newest messages — the
-            // ones on screen after a history load — are parsed first. Index
-            // within `visible` would shift as the window grows.
-            priority={safeStart + i}
-            onToggleExpand={toggleExpand}
+            // ones on screen after a history load — are parsed first. An
+            // index within the window would shift as the window grows.
+            priority={segment.offset + from + i}
             canRetryRowId={canRetryRowId}
             canBranchRowId={canBranchRowId}
             canContinue={canContinue}
-            pinScopeKey={pinScopeKey}
-            fileRoot={fileRoot}
           />
-        </div>
-      )),
-    [
-      visible,
-      safeStart,
-      tabId,
-      agentLabel,
-      entranceMessageId,
-      canRetryRowId,
-      canBranchRowId,
-      canContinue,
-      pinScopeKey,
-      fileRoot,
-      toggleTurn,
-      toggleExpand,
-    ],
+        ))}
+      </Fragment>
+    ),
+    [agentLabel, entranceMessageId, canRetryRowId, canBranchRowId, canContinue],
   );
+  const segmentViews = useMemo(
+    () => ({ render: renderRows, held: new WeakMap<Segment, ReactElement>() }),
+    [renderRows],
+  );
+  const rowViews = useMemo(() => {
+    const views: ReactElement[] = [];
+    for (const segment of projection.segments) {
+      const end = segment.offset + segment.rows.length;
+      // Above the window, or a turn that projected to nothing.
+      if (end <= safeStart || segment.rows.length === 0) continue;
+      // The one turn the window's top edge cuts through is built each time:
+      // what it shows depends on `safeStart`, not on the segment alone.
+      if (segment.offset < safeStart) {
+        views.push(segmentViews.render(segment, safeStart - segment.offset));
+        continue;
+      }
+      let view = segmentViews.held.get(segment);
+      if (!view) {
+        view = segmentViews.render(segment, 0);
+        segmentViews.held.set(segment, view);
+      }
+      views.push(view);
+    }
+    return views;
+  }, [projection, safeStart, segmentViews]);
 
   return (
-    <TranscriptView
-      scrollRef={scrollRef}
-      contentRef={contentRef}
-      onScroll={onScroll}
+    <DesktopTranscriptProvider
       tabId={tabId}
-      live={live}
-      topInset={topInset}
-      empty={rows.length === 0 && !isStreaming}
-      rowViews={rowViews}
-      turnInProgress={turnInProgress}
-      footer={footer}
-      working={working}
-      workingEpoch={workingEpoch}
-      workingLabel={workingLabel}
-      onStallRestart={onStallRestart}
-      onStallSwitch={onStallSwitch}
-      onStallCopyDiagnostics={onStallCopyDiagnostics}
-      more={more}
-      turnRailItems={turnRailItems}
-      windowStart={safeStart}
-      getTurnRailPreview={getTurnRailPreview}
-      onSelectTurnRailItem={selectTurnRailItem}
-    />
+      pinScopeKey={pinScopeKey}
+      fileRoot={fileRoot}
+      onToggleExpand={toggleExpand}
+      onToggleGroup={toggleTurn}
+    >
+      <TranscriptView
+        scrollRef={scrollRef}
+        contentRef={contentRef}
+        onScroll={onScroll}
+        topInset={topInset}
+        empty={rows.length === 0 && !isStreaming}
+        rowViews={rowViews}
+        turnInProgress={turnInProgress}
+        footer={footer}
+        working={working}
+        workingEpoch={workingEpoch}
+        workingLabel={workingLabel}
+        onStallRestart={onStallRestart}
+        onStallSwitch={onStallSwitch}
+        onStallCopyDiagnostics={onStallCopyDiagnostics}
+        more={more}
+        overlays={
+          <>
+            <ResponseSelectionActions viewportRef={scrollRef} tabId={tabId} enabled={live} />
+            {/* Hangs left into the gutter outside this box; takes no space. */}
+            <TurnRail
+              items={turnRailItems}
+              scrollRef={scrollRef}
+              contentRef={contentRef}
+              topInset={topInset}
+              windowStart={safeStart}
+              getPreview={getTurnRailPreview}
+              onSelect={selectTurnRailItem}
+            />
+          </>
+        }
+      />
+    </DesktopTranscriptProvider>
   );
 });

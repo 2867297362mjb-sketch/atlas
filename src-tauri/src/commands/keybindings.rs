@@ -360,15 +360,8 @@ fn read_file(path: &PathBuf) -> (KeybindingsFile, Vec<String>) {
 }
 
 fn write_file(path: &PathBuf, file: &KeybindingsFile) -> Result<(), String> {
-    let dir = path
-        .parent()
-        .ok_or_else(|| "keybindings path has no parent".to_string())?;
-    fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let tmp = path.with_extension("json.tmp");
     let payload = serde_json::to_string_pretty(file).map_err(|e| e.to_string())?;
-    fs::write(&tmp, payload).map_err(|e| e.to_string())?;
-    fs::rename(&tmp, path).map_err(|e| e.to_string())?;
-    Ok(())
+    atlas_fs::replace_file(path, payload).map_err(|e| e.to_string())
 }
 
 /// Load the profiles file. A missing file yields the defaults; a corrupt one

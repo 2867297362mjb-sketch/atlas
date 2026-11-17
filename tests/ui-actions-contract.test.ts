@@ -4,6 +4,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { ACTIONS } from "@/features/keybindings/lib/actions";
+import { expectFloor } from "./support/floor";
+import { bracketBody } from "./support/source";
 
 /**
  * Guards the UI action seam (ADR-0012): every tool the UI tool server lists
@@ -19,12 +21,13 @@ import { ACTIONS } from "@/features/keybindings/lib/actions";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (p: string) => readFileSync(path.join(root, p), "utf8");
 
+const TOOLS_RS = "src-tauri/src/commands/ui_server/tools.rs";
+
 function rustTools(): string[] {
-  const src = read("src-tauri/src/commands/ui_server/tools.rs");
-  const body = src.slice(
-    src.indexOf("pub(super) fn tools()"),
-    src.indexOf("pub(super) fn tool_names()"),
-  );
+  const body = bracketBody(read(TOOLS_RS), "pub(super) fn tools()", {
+    lang: "rust",
+    where: TOOLS_RS,
+  });
   return [...body.matchAll(/tool\(\s*"(ui_[a-z_]+)"/g)].map((m) => m[1]);
 }
 
@@ -35,8 +38,9 @@ function dispatchedTools(): string[] {
 
 /** The `enum` of `property` in the schema of Rust tool `name`. */
 function rustEnum(name: string, property: string): string[] {
-  const src = read("src-tauri/src/commands/ui_server/tools.rs");
+  const src = read(TOOLS_RS);
   const start = src.indexOf(`"${name}",`);
+  if (start === -1) throw new Error(`no tool named ${name} in ${TOOLS_RS}`);
   const next = src.indexOf("tool(", start);
   const body = src.slice(start, next === -1 ? undefined : next);
   const m = body.match(new RegExp(`"${property}": \\{ "type": "string", "enum": \\[([^\\]]*)\\]`));
@@ -48,19 +52,19 @@ function rustEnum(name: string, property: string): string[] {
  *  `const NAME: Record<…> = { ... }` in a TS source file. */
 function tsList(file: string, name: string): string[] {
   const src = read(file);
-  const start = src.indexOf(`const ${name}`);
-  if (start === -1) throw new Error(`no ${name} in ${file}`);
-  const open = src.slice(start).search(/[[{]/) + start;
-  const close = src.indexOf(src[open] === "[" ? "]" : "}", open);
-  const body = src.slice(open + 1, close);
-  return src[open] === "["
+  const declaration = new RegExp(`\\bconst ${name}\\b`);
+  const body = bracketBody(src, declaration, { open: "[{", lang: "ts", where: file });
+  // Which bracket it was: the first of the two after the declaration.
+  const isArray = /[[{]/.exec(src.slice(src.search(declaration)))?.[0] === "[";
+  return isArray
     ? [...body.matchAll(/"([^"]+)"/g)].map((x) => x[1])
     : [...body.matchAll(/^\s*"?([a-z-]+)"?:/gm)].map((x) => x[1]);
 }
 
 describe("UI action contract", () => {
   it("finds the tools on both sides", () => {
-    expect(rustTools().length).toBeGreaterThanOrEqual(7);
+    expectFloor("tools the UI tool server offers", rustTools().length, 6);
+    expectFloor("cases in the window's dispatcher", dispatchedTools().length, 6);
   });
 
   it("every tool the model is offered is performed by the window, and nothing else", () => {
@@ -84,8 +88,10 @@ describe("UI action contract", () => {
     ["ui_chat", "op", "src/features/ui-actions/lib/ui-chat.ts", "OPS"],
   ])("%s.%s offers exactly what the window accepts", (tool, property, file, list) => {
     const offered = rustEnum(tool, property);
-    expect(offered.length, "the schema enum parsed").toBeGreaterThan(1);
-    expect([...offered].sort()).toEqual([...tsList(file, list)].sort());
+    const accepted = tsList(file, list);
+    expectFloor(`values in ${tool}.${property}'s schema enum`, offered.length, 2);
+    expectFloor(`members of ${list} in ${file}`, accepted.length, 2);
+    expect([...offered].sort()).toEqual([...accepted].sort());
   });
 
   /// A Space page is opened by two ids that Rust checks before the window is
@@ -93,12 +99,16 @@ describe("UI action contract", () => {
   it.each(["conversationId", "pageId"])(
     "ui_open's space_page id %s is offered, checked in Rust and read by the window",
     (key) => {
-      const rust = read("src-tauri/src/commands/ui_server/tools.rs");
+      const rust = read(TOOLS_RS);
       const start = rust.indexOf('"ui_open",');
+      expect(start, `no ui_open tool in ${TOOLS_RS}`).toBeGreaterThan(-1);
       const schema = rust.slice(start, rust.indexOf("tool(", start));
       expect(schema).toContain(`"${key}": { "type": "string" }`);
-      const check = rust.slice(rust.indexOf("fn space_page_refusal"));
-      expect(check.slice(0, check.indexOf("\n}\n"))).toContain(`"${key}"`);
+      const check = bracketBody(rust, /\bfn space_page_refusal\b/, {
+        lang: "rust",
+        where: TOOLS_RS,
+      });
+      expect(check).toContain(`"${key}"`);
       expect(read("src/features/ui-actions/lib/ui-open.ts")).toContain(`a.str("${key}")`);
     },
   );
@@ -163,9 +173,9 @@ const REVIEWED_AGENT_COMMANDS = [
 ];
 
 function refusedCommands(): string[] {
-  const src = read("src/features/ui-actions/lib/ui-command.ts");
-  const start = src.indexOf("const REFUSED");
-  const body = src.slice(src.indexOf("{", src.indexOf("=", start)) + 1, src.indexOf("\n};", start));
+  const file = "src/features/ui-actions/lib/ui-command.ts";
+  // `=\s*` so the brace read is the object's, not one in a type annotation.
+  const body = bracketBody(read(file), /\bconst REFUSED\b[^=]*=\s*/, { lang: "ts", where: file });
   return [...body.matchAll(/^\s*"([\w.]+)":/gm)].map((m) => m[1]);
 }
 

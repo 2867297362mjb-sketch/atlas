@@ -1,7 +1,8 @@
 # ADR-0022: A theme can be two colours; every shadcn token is optional and derived once
 
 **Status:** Accepted (2026-10-22). Amends ADR-0009, whose "base tokens (required)" it
-reverses; the rest of 0009 stands.
+reverses; the rest of 0009 stands. Since ADR-0027 the rules file is owned by
+`@tryatlas/design`; `bun run theme:keys` copies it into `crates/atlas-theme/`.
 
 **For agents:** no base token is required. A missing one is derived by the rules in
 `crates/atlas-theme/keys.toml` (`[[base]]`), which `bun run theme:keys` generates into
@@ -71,7 +72,7 @@ one small interpreter for the closed set of operations. A shared golden fixture 
 the derived values for a set of seeds, and both languages' tests must reproduce it.
 That fixture is what makes two interpreters one engine.
 
-The importer's `fill_required_base` becomes a call to the Rust interpreter.
+The importer's `fill_required_base` (now `Draft::fill_base`) becomes a call to the Rust interpreter.
 `fallback_for` and `atlas_default` are deleted.
 
 **Derivation runs where the colour is needed, from the file as written:**

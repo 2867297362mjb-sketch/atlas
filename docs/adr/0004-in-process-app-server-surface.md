@@ -1,6 +1,6 @@
 # ADR-0004: The ported engine is driven in-process at the app-server layer
 
-**Status:** Accepted (2026-08-28)
+**Status:** Accepted (2026-08-28). The names here predate ADR-0011 (`atlas_engine_app_server_client`, `EngineHome`).
 
 ## Context
 
@@ -31,5 +31,5 @@ Spec open question 3 asked whether (3) drags in ambient process startup Atlas wo
 - **Atlas rides the contract upstream tests.** The interrupt path (reply deferred until `TurnAborted`), approval routing, and thread listing/resume are the same code the TUI exercises daily — inherited rather than re-derived.
 - **The seam owns a translation layer, permanently.** Engine events must be mapped onto the ACP session-update vocabulary the app already speaks. That mapping is the seam's real work and its main maintenance cost.
 - **The protocol envelope is not free.** In-process is transport-local but *not* protocol-free: typed requests still return through the JSON-RPC result envelope. Upstream calls this intentional — it keeps in-process behavior aligned with app-server rather than creating a second execution contract — and Atlas inherits both the alignment and the envelope.
-- **One injection point had to be added to the engine.** The engine's `ExternalAuth` trait is the D10 seam, but neither `InProcessStartArgs` nor `InProcessClientStartArgs` exposes it, and the only in-protocol route to `AuthManager::set_external_auth` is ChatGPT-shaped (`LoginAccountResponse::ChatgptAuthTokens`, gated on `ForcedLoginMethod::Chatgpt`, refreshing by a server→client `ChatgptAuthTokensRefresh` round-trip) — a path D2 rips out. Rather than abuse it or reach around the facade, the fork gains an `external_auth` field on both start-args structs, installed against the `AuthManager` the runtime already builds. This is exactly the kind of change owning the fork is *for*, and it carries the §4(b) change notice.
+- **One injection point had to be added to the engine.** The engine's `ExternalAuth` trait is the D10 seam, but neither `InProcessStartArgs` nor `InProcessClientStartArgs` exposes it, and the only in-protocol route to `AuthManager::set_external_auth` is ChatGPT-shaped (`LoginAccountResponse::ChatgptAuthTokens`, gated on `ForcedLoginMethod::Chatgpt`, refreshing by a server→client `ChatgptAuthTokensRefresh` round-trip) — a path D2 rips out. Rather than abuse it or reach around the facade, the fork gains a `start_with_external_auth` entry point on the in-process server and on its client, which installs it against the `AuthManager` the runtime already builds. This is exactly the kind of change owning the fork is *for*, and it carries the §4(b) change notice.
 - **This decision is reversed if** engine panics in shipped builds are killing the app often enough to hurt users more than the protocol hop would. That is the concrete, measurable reversal test; the escape hatch exists so acting on it is a transport change.

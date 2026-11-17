@@ -10,6 +10,7 @@
 //! Nothing in this module writes. No hooks are installed, no refs are created,
 //! no config is touched. The repository is observed and never modified.
 
+use atlas_git::GitCommand;
 use std::path::{Path, PathBuf};
 
 /// Where a path stood in a commit, relative to its first parent.
@@ -101,21 +102,25 @@ impl std::error::Error for GitError {}
 
 type Result<T> = std::result::Result<T, GitError>;
 
+/// `git -C <repo>` through the one spawn chokepoint: whatever it printed,
+/// with its exit code. `-C` rather than a working directory, so a directory
+/// that is gone is git's own "not a repository" and not a failed spawn.
+fn git(repo: &Path, args: &[&str]) -> GitCommand {
+    GitCommand::without_repo(&["-C"]).arg(repo).args(args)
+}
+
 fn run(repo: &Path, args: &[&str]) -> Result<String> {
-    let output = atlas_process::command("git")
-        .arg("-C")
-        .arg(repo)
-        .args(args)
+    let output = git(repo, args)
         .output()
         .map_err(|e| GitError(format!("{args:?}: {e}")))?;
 
-    if !output.status.success() {
+    if !output.success() {
         return Err(GitError(format!(
             "{args:?}: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
+            output.stderr_text().trim()
         )));
     }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    Ok(output.stdout_text())
 }
 
 /// A git invocation whose *exit status* carries meaning.
@@ -131,15 +136,12 @@ struct RunStatus {
 }
 
 fn run_status(repo: &Path, args: &[&str]) -> Result<RunStatus> {
-    let output = atlas_process::command("git")
-        .arg("-C")
-        .arg(repo)
-        .args(args)
+    let output = git(repo, args)
         .output()
         .map_err(|e| GitError(format!("{args:?}: {e}")))?;
     Ok(RunStatus {
-        success: output.status.success(),
-        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        success: output.success(),
+        stdout: output.stdout_text(),
     })
 }
 
@@ -720,13 +722,10 @@ fn parse_name_status(out: &str) -> Vec<ChangedPath> {
 /// match what the agent wrote? Returns `None` when the path is absent from the
 /// commit (a deletion).
 pub fn blob_at(repo: &Path, sha: &str, path: &str) -> Option<Vec<u8>> {
-    let output = atlas_process::command("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["cat-file", "blob", &format!("{sha}:{path}")])
+    let output = git(repo, &["cat-file", "blob", &format!("{sha}:{path}")])
         .output()
         .ok()?;
-    output.status.success().then_some(output.stdout)
+    output.success().then_some(output.stdout)
 }
 
 /// Whether `HEAD` already tracks this project-relative path.
@@ -803,13 +802,9 @@ fn head_tracked_set(repo: &Path) -> Option<std::sync::Arc<std::collections::Hash
     }
     // `-z`: raw NUL-separated paths (default output quotes special chars,
     // which would break membership tests against the sampler's plain paths).
-    let output = atlas_process::command("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["ls-tree", "-r", "-z", "--name-only", "HEAD"])
-        .output();
+    let output = git(repo, &["ls-tree", "-r", "-z", "--name-only", "HEAD"]).output();
     let paths: HashSet<String> = match output {
-        Ok(o) if o.status.success() => o
+        Ok(o) if o.success() => o
             .stdout
             .split(|b| *b == 0)
             .filter(|s| !s.is_empty())
@@ -841,13 +836,10 @@ fn head_tracked_set(repo: &Path) -> Option<std::sync::Arc<std::collections::Hash
 /// for the same content: the agent wrote CRLF, the blob stores LF. Comparing
 /// against the checkout form closes that gap without weakening the rule.
 pub fn blob_at_filtered(repo: &Path, sha: &str, path: &str) -> Option<Vec<u8>> {
-    let output = atlas_process::command("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["cat-file", "--filters", &format!("{sha}:{path}")])
+    let output = git(repo, &["cat-file", "--filters", &format!("{sha}:{path}")])
         .output()
         .ok()?;
-    output.status.success().then_some(output.stdout)
+    output.success().then_some(output.stdout)
 }
 
 /// Line counts for a commit, against its first parent.
@@ -888,23 +880,11 @@ pub fn patch_id(repo: &Path, sha: &str) -> Option<String> {
         return None;
     }
 
-    let mut child = atlas_process::command("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["patch-id", "--stable"])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
+    let output = git(repo, &["patch-id", "--stable"])
+        .stdin(diff.into_bytes())
+        .output()
         .ok()?;
-
-    {
-        use std::io::Write;
-        child.stdin.as_mut()?.write_all(diff.as_bytes()).ok()?;
-    }
-
-    let output = child.wait_with_output().ok()?;
-    if !output.status.success() {
+    if !output.success() {
         return None;
     }
     let stdout = String::from_utf8_lossy(&output.stdout);

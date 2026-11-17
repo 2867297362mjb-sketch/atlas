@@ -16,7 +16,8 @@ import { showWorkingTreeDiff } from "@/features/git/lib/open-review-file";
 import { useFileTabTreeStore } from "../stores/file-tab-tree-store";
 import { useFilesRevealStore } from "../stores/files-reveal-store";
 import { relativeTo } from "../lib/project-file-ops";
-import { FILE_DOCK_WIDTH, isFileTab } from "../lib/file-tabs";
+import { fileTabPath, isFileTab } from "@/lib/tab-registry";
+import { FILE_DOCK_WIDTH } from "../lib/file-tabs";
 import { FileDockContext, type FileDockValue } from "../lib/file-tab-frame-context";
 
 const ProjectFileTree = lazy(() =>
@@ -44,11 +45,9 @@ export function fileDockMode(input: {
 
 /** A file tab whose file is inside `root`: the tabs the docked tree serves. */
 export function fileInProject(root: string | null, tab: Pick<Tab, "type" | "data">): boolean {
-  if (!root || !isFileTab(tab.type)) return false;
-  const path = tab.data.filePath;
-  return (
-    typeof path === "string" && !path.startsWith("untitled:") && relativeTo(root, path) !== null
-  );
+  if (!root) return false;
+  const path = fileTabPath(tab);
+  return path !== null && !path.startsWith("untitled:") && relativeTo(root, path) !== null;
 }
 
 /**
@@ -87,11 +86,10 @@ export function FileDockColumn({
   const root = useProjectStore(
     (s) => (projectId && s.projects.find((p) => p.id === projectId)?.path) || null,
   );
-  const treeShown = useFileTabTreeStore.use.shown();
-  const { setShown } = useFileTabTreeStore.use.actions();
+  const treeShown = useFileTabTreeStore((s) => s.shown);
+  const { setShown } = useFileTabTreeStore((s) => s.actions);
   const mode = fileDockMode({ root, activeTab, treeShown });
-  const activeFile =
-    activeTab && fileInProject(root, activeTab) ? (activeTab.data.filePath as string) : null;
+  const activeFile = activeTab && fileInProject(root, activeTab) ? fileTabPath(activeTab) : null;
   const activeId = activeTab?.id ?? null;
 
   // ── Mounting: on first need, kept while the column could need it ──
@@ -118,8 +116,8 @@ export function FileDockColumn({
   // being read. Taken during render, so the tree never reveals the reader's
   // file for a frame first. A path in another project means follow the reader.
   const filesActive = activeTab?.type === "files";
-  const request = useFilesRevealStore.use.request();
-  const { take } = useFilesRevealStore.use.actions();
+  const request = useFilesRevealStore((s) => s.request);
+  const { take } = useFilesRevealStore((s) => s.actions);
   const [filesReveal, setFilesReveal] = useState<{ path: string; nonce: number } | null>(null);
   const [seenRequest, setSeenRequest] = useState<number | null>(null);
   if (filesActive && root && request && request.nonce !== seenRequest) {

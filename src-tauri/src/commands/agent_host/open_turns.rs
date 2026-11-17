@@ -8,8 +8,8 @@
 //! a turn's end, and the history store's writes are batched with no flush at
 //! exit.
 //!
-//! The file is tiny (one entry per running session) and written whole, to a
-//! temporary file then renamed, so a crash mid-write leaves the previous
+//! The file is tiny (one entry per running session) and written whole through
+//! `atlas_fs::replace_file`, so a crash mid-write leaves the previous
 //! version. Writes go to the blocking pool; each one writes the record as it
 //! is when it runs, under a lock, so a late write never puts back an entry a
 //! newer one removed.
@@ -129,9 +129,7 @@ impl OpenTurns {
                     return;
                 }
             };
-            let tmp = path.with_extension("json.tmp");
-            let written = std::fs::write(&tmp, bytes).and_then(|()| std::fs::rename(&tmp, &path));
-            if let Err(e) = written {
+            if let Err(e) = atlas_fs::replace_file(&path, bytes) {
                 tracing::warn!(error = %e, path = %path.display(), "could not record the open turns");
             }
         });
@@ -147,7 +145,9 @@ mod tests {
         path: &std::path::Path,
         done: impl Fn(&HashMap<ThreadId, OpenTurn>) -> bool,
     ) -> HashMap<ThreadId, OpenTurn> {
-        for _ in 0..200 {
+        // Each write is a durable replace (two flushes to disk), which a
+        // loaded machine can stretch well past a second.
+        for _ in 0..1500 {
             if let Ok(bytes) = std::fs::read(path) {
                 if let Ok(map) = serde_json::from_slice::<HashMap<ThreadId, OpenTurn>>(&bytes) {
                     if done(&map) {
@@ -180,12 +180,39 @@ mod tests {
         turns.freeze();
         turns.end(a);
 
-        let next = OpenTurns::load(path.clone());
+        let next = OpenTurns::load(path);
         let left = next.take_left_open();
         assert_eq!(left.len(), 1);
         assert_eq!(left[0].0, a);
         assert_eq!(left[0].1.continuations, 0);
-        // Taken means emptied: a launch that continues nothing leaves nothing.
+    }
+
+    /// Taken means emptied: a launch that continues nothing leaves nothing.
+    ///
+    /// Its own test, on a record written by hand: the run that wrote the
+    /// record is another process in the app. Two `OpenTurns` on one path in
+    /// one process race, because a write the first still has queued can land
+    /// after the second has emptied the file.
+    #[test]
+    fn taking_what_was_left_open_empties_the_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("open-turns.json");
+        let thread = ThreadId::new();
+        let left = HashMap::from([(
+            thread,
+            OpenTurn {
+                started_at: Utc::now(),
+                continuations: 1,
+            },
+        )]);
+        std::fs::write(&path, serde_json::to_vec(&left).unwrap()).unwrap();
+
+        let turns = OpenTurns::load(path.clone());
+        let taken = turns.take_left_open();
+
+        assert_eq!(taken.len(), 1);
+        assert_eq!(taken[0].0, thread);
+        assert_eq!(taken[0].1.continuations, 1);
         wait_for(&path, 0);
     }
 

@@ -452,10 +452,12 @@ pub async fn model_select(
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| format!("save settings: {e}"))?;
-        crate::commands::atlas_config::notify_settings_changed(
+        crate::settings_effects::apply(
             &app,
             &snapshot.settings,
-            snapshot.generation,
+            crate::settings_effects::When::Changed {
+                generation: snapshot.generation,
+            },
         );
         needs_reindex = true;
     }

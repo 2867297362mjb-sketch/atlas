@@ -12,7 +12,6 @@
 
 import { create } from "zustand";
 import { listen } from "@tauri-apps/api/event";
-import { createSelectors } from "@/lib/create-selectors";
 import { byok, type EnvEntry, type EnvKeyMeta, type ProfileInfo } from "../lib/byok-api";
 
 // The env probe is two-phase in Rust: the process env answers instantly, the
@@ -46,61 +45,59 @@ interface ByokState {
   };
 }
 
-export const useByokStore = createSelectors(
-  create<ByokState>((set) => {
-    const refresh = async () => {
-      try {
-        const [list, entries] = await Promise.all([byok.envList(), byok.entries()]);
-        const keys: Record<string, EnvKeyMeta> = {};
-        for (const m of list) keys[m.provider] = m;
-        set({ keys, envKeys: keys, entries });
-      } catch (err) {
-        console.error("byok refresh failed", err);
-      }
-    };
+export const useByokStore = create<ByokState>((set) => {
+  const refresh = async () => {
+    try {
+      const [list, entries] = await Promise.all([byok.envList(), byok.entries()]);
+      const keys: Record<string, EnvKeyMeta> = {};
+      for (const m of list) keys[m.provider] = m;
+      set({ keys, envKeys: keys, entries });
+    } catch (err) {
+      console.error("byok refresh failed", err);
+    }
+  };
 
-    return {
-      keys: {},
-      envKeys: {},
-      entries: [],
-      profile: null,
-      loaded: false,
-      pending: null,
-      actions: {
-        load: async () => {
-          armEnvUpdateListener(() => void refresh());
-          await refresh();
-          try {
-            set({ profile: await byok.profileInfo() });
-          } catch (err) {
-            console.error("byok profileInfo failed", err);
-          }
-          set({ loaded: true });
-        },
-
-        save: async (envVar, value) => {
-          const trimmed = value.trim();
-          if (!trimmed) throw new Error("Value is empty.");
-          set({ pending: envVar });
-          try {
-            const file = await byok.set(envVar, trimmed);
-            await refresh();
-            return file;
-          } finally {
-            set({ pending: null });
-          }
-        },
-
-        remove: async (envVar) => {
-          set({ pending: envVar });
-          try {
-            await byok.unset(envVar);
-            await refresh();
-          } finally {
-            set({ pending: null });
-          }
-        },
+  return {
+    keys: {},
+    envKeys: {},
+    entries: [],
+    profile: null,
+    loaded: false,
+    pending: null,
+    actions: {
+      load: async () => {
+        armEnvUpdateListener(() => void refresh());
+        await refresh();
+        try {
+          set({ profile: await byok.profileInfo() });
+        } catch (err) {
+          console.error("byok profileInfo failed", err);
+        }
+        set({ loaded: true });
       },
-    };
-  }),
-);
+
+      save: async (envVar, value) => {
+        const trimmed = value.trim();
+        if (!trimmed) throw new Error("Value is empty.");
+        set({ pending: envVar });
+        try {
+          const file = await byok.set(envVar, trimmed);
+          await refresh();
+          return file;
+        } finally {
+          set({ pending: null });
+        }
+      },
+
+      remove: async (envVar) => {
+        set({ pending: envVar });
+        try {
+          await byok.unset(envVar);
+          await refresh();
+        } finally {
+          set({ pending: null });
+        }
+      },
+    },
+  };
+});

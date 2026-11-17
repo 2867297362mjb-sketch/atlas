@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { walk } from "./support/walk";
+import { expectFloor } from "./support/floor";
 
 /**
  * The `no-unknown-classes` allowlist in `.oxlintrc.json` names only classes
@@ -53,16 +55,6 @@ const LIBRARY_CLASSES: Record<string, string> = {
   hljs: "highlight.js: the root its themes are scoped under",
 };
 
-function walk(dir: string, exts: string[]): string[] {
-  const out: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...walk(full, exts));
-    else if (exts.some((ext) => entry.name.endsWith(ext))) out.push(full);
-  }
-  return out;
-}
-
 function readAllowlist(): string[] {
   const config = JSON.parse(readFileSync(path.join(REPO_ROOT, ".oxlintrc.json"), "utf8"));
   const rule = config.rules?.["shadcn/no-unknown-classes"];
@@ -71,9 +63,11 @@ function readAllowlist(): string[] {
   return rule[1].allow as string[];
 }
 
+const stylesheets = [...walk(SRC, [".css"]), ...walk(PACKAGE_STYLES, [".css"])];
+
 function definedClasses(): Set<string> {
   const defined = new Set<string>();
-  for (const file of [...walk(SRC, [".css"]), ...walk(PACKAGE_STYLES, [".css"])]) {
+  for (const file of stylesheets) {
     const css = readFileSync(file, "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
     for (const m of css.matchAll(/\.(-?[_a-zA-Z][\w-]*)/g)) defined.add(m[1]);
     for (const m of css.matchAll(/@utility\s+([\w-]+)/g)) defined.add(m[1]);
@@ -88,8 +82,10 @@ describe("shadcn-lint allowlist", () => {
 
   it("parses a plausible allowlist and stylesheet set", () => {
     // Floors: a parse that stops matching fails here rather than passing vacuously.
-    expect(allow.length).toBeGreaterThan(30);
-    expect(defined.size).toBeGreaterThan(200);
+    expectFloor("classes allowlisted in .oxlintrc.json", allow.length, 33);
+    expectFloor("stylesheets under src/ and the package", stylesheets.length, 12);
+    expectFloor("class selectors and @utility names defined", defined.size, 185);
+    expectFloor("TypeScript files under src/", scripts.length, 1800);
   });
 
   it("names every class exactly — no wildcards", () => {

@@ -20,7 +20,7 @@ export function PageHeaderWithIcon({
   title: string;
 }) {
   const meta = usePageMeta(entryId);
-  const { patch } = useKnowledgeMetaStore.use.actions();
+  const { patch } = useKnowledgeMetaStore((s) => s.actions);
   const icon = meta.icon || "📄";
   const cover = meta.cover ?? null;
   const [iconAnchor, setIconAnchor] = useState<DOMRect | null>(null);

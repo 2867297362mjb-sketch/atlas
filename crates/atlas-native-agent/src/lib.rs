@@ -2,8 +2,9 @@
 //!
 //! The native agent occupies the same slot an external ACP agent does, so the
 //! manager, the thread model and the UI treat it identically. Everything
-//! specific to it — reasoning effort, its own model list — hangs off
-//! native-only sub-traits.
+//! specific to it — fork, reasoning effort, refreshing its own model list —
+//! is a capability it advertises on that seam, which any other agent could
+//! advertise too.
 //!
 //! # One engine, no switch
 //!
@@ -19,8 +20,10 @@
 //!   `"atlas-agent"`. It is a **storage key**: every recorded thread resolves
 //!   through it, so it is the one string the app and the store must agree on
 //!   (ADR-0011).
-//! - **[`AgentSessionEffort`]** — the native-only control the app reaches for
-//!   through a downcast.
+//! - **Reasoning effort** — a control ACP has no word for. It crosses the
+//!   seam as a capability the connection advertises
+//!   (`AgentConnection::session_effort`), as fork and the model-catalogue
+//!   refresh do; the app never reaches for the concrete connection.
 //!
 //! What did not: tool-output compression. It had no engine counterpart and is
 //! a named casualty (D8), so the trait, its command and its toggle are gone
@@ -49,8 +52,6 @@ mod helper;
 #[cfg(target_os = "linux")]
 mod linux_sandbox;
 
-use anyhow::Result;
-
 /// The native agent's stored id.
 ///
 /// A storage key every recorded thread resolves through, so it must match the
@@ -59,21 +60,6 @@ use anyhow::Result;
 /// by the store's V3 migration rather than aliased. Renaming it again is a data
 /// migration, not a rename.
 pub const ATLAS_AGENT_ID: &str = "atlas-agent";
-
-/// Per-session reasoning effort — a native-only control.
-///
-/// Reached by downcasting the connection, because it is not part of the ACP
-/// surface every agent shares.
-///
-/// **Inert on the Atlas gateway.** The gateway's forwarded allowlist has no
-/// reasoning parameter and names a thinking budget as its own example of a
-/// rejected key, so the authored catalogue advertises no effort levels and the
-/// picker offers none. The trait stays because the engine still accepts the
-/// setting and a non-gateway provider would honour it.
-pub trait AgentSessionEffort: Send + Sync {
-    /// `None` clears the override and uses the model's own default.
-    fn set_effort(&self, level: Option<String>) -> Result<()>;
-}
 
 /// Install the OS credential store (idempotent) before making a `keyring_core::Entry`.
 ///

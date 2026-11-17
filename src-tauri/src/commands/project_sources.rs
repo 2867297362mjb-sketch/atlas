@@ -9,10 +9,22 @@
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
+use atlas_gh::{Api, GhCommand, GhError, Intent};
 use serde::Serialize;
 
-use super::git_pr::{run_gh, GhOutcome, GH_PERMITS, GH_TIMEOUT};
+/// The sign-in probe: a background read nobody should wait long for.
+const STATUS_TIMEOUT: Duration = Duration::from_secs(5);
+/// `gh repo create`: one write to the API, then `gh` adds the remote. Long
+/// enough that a slow answer is not cut off between the two, which would
+/// report a failure for a repository that now exists.
+const CREATE_TIMEOUT: Duration = Duration::from_secs(120);
+/// `gh repo clone`: minutes of `git` for a large repository, so the limit is
+/// only there to end a clone that has plainly stalled. Killing `gh` does not
+/// stop the `git` it started, so a limit a real clone can reach leaves a
+/// half-written folder that the next try refuses as "already exists".
+const CLONE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 /// Where new and cloned projects go: `~/.atlas/projects`.
 fn projects_root() -> Result<PathBuf, String> {
@@ -71,22 +83,23 @@ pub struct ProjectsRootInfo {
     pub installer: Option<&'static str>,
 }
 
-/// Asked the way the pull request surface asks (`git_pr::run_gh`): with a
-/// timeout, never a prompt, and "not installed" and "signed out" told apart
-/// from a failed request.
-fn gh_status() -> (GhStatus, Option<String>) {
-    let home = dirs::home_dir()
-        .map(|home| home.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "/".to_string());
-    match run_gh(
-        OsStr::new("gh"),
-        &home,
-        &["api", "user", "--jq", ".login"],
-        GH_TIMEOUT,
-    ) {
-        GhOutcome::Missing => (GhStatus::Missing, None),
-        GhOutcome::AuthRequired => (GhStatus::SignedOut, None),
-        GhOutcome::Output(login) => {
+/// Asked through `atlas_gh`: with a timeout, never a prompt, and "not
+/// installed" and "signed out" told apart from a failed request.
+async fn gh_status() -> (GhStatus, Option<String>) {
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
+    let login = GhCommand::new(
+        home,
+        ["api", "user", "--jq", ".login"],
+        Intent::BackgroundRead,
+    )
+    .api(Api::Rest)
+    .timeout(STATUS_TIMEOUT)
+    .run()
+    .await;
+    match login {
+        Err(GhError::NotInstalled) => (GhStatus::Missing, None),
+        Err(GhError::NotAuthenticated) => (GhStatus::SignedOut, None),
+        Ok(login) => {
             let login = login.trim().to_string();
             if login.is_empty() {
                 (GhStatus::SignedOut, None)
@@ -94,9 +107,10 @@ fn gh_status() -> (GhStatus, Option<String>) {
                 (GhStatus::Ready, Some(login))
             }
         }
-        // Installed, and not refused for auth: a network blip should not send
-        // the user to a setup step they have already done.
-        GhOutcome::Failed(_) => (GhStatus::Ready, None),
+        // Installed, and not refused for auth: a network blip or a paused
+        // API should not send the user to a setup step they have already
+        // done.
+        Err(_) => (GhStatus::Ready, None),
     }
 }
 
@@ -121,11 +135,9 @@ fn installer() -> Option<&'static str> {
 #[tauri::command]
 pub async fn project_sources_info() -> Result<ProjectsRootInfo, String> {
     let path = projects_root()?.to_string_lossy().into_owned();
-    let _permit = GH_PERMITS.acquire().await.map_err(|e| e.to_string())?;
     let ((gh, github_login), installer) =
-        tokio::task::spawn_blocking(|| (gh_status(), installer()))
-            .await
-            .map_err(|e| e.to_string())?;
+        tokio::join!(gh_status(), tokio::task::spawn_blocking(installer));
+    let installer = installer.map_err(|e| e.to_string())?;
     Ok(ProjectsRootInfo {
         path,
         gh,
@@ -177,16 +189,13 @@ pub async fn project_browse(path: String) -> Result<BrowseListing, String> {
 }
 
 fn git(dir: &Path, args: &[&str]) -> Result<(), String> {
-    let out = atlas_process::command("git")
-        .current_dir(dir)
-        .args(args)
-        .env("GIT_TERMINAL_PROMPT", "0")
+    let out = atlas_git::GitCommand::new(dir, args)
         .output()
         .map_err(|e| format!("git: {e}"))?;
-    if out.status.success() {
+    if out.success() {
         Ok(())
     } else {
-        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+        Err(out.stderr_text().trim().to_string())
     }
 }
 
@@ -207,7 +216,9 @@ pub struct CreatedProject {
 pub async fn project_create(name: String, github_private: bool) -> Result<CreatedProject, String> {
     let name = safe_name(&name)?.to_string();
     let dir = projects_root()?.join(&name);
+    let made = dir.clone();
     tokio::task::spawn_blocking(move || {
+        let dir = made;
         if let Some(parent) = dir.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
@@ -223,44 +234,46 @@ pub async fn project_create(name: String, github_private: bool) -> Result<Create
             let _ = std::fs::remove_dir_all(&dir);
             return Err(e);
         }
-        let path = dir.to_string_lossy().into_owned();
-        if github_private {
-            let out = atlas_process::command("gh")
-                .current_dir(&dir)
-                .stdin(std::process::Stdio::null())
-                .args([
-                    "repo",
-                    "create",
-                    &name,
-                    "--private",
-                    "--source",
-                    ".",
-                    "--remote",
-                    "origin",
-                ])
-                .env("GH_PROMPT_DISABLED", "1")
-                .output()
-                .map_err(|e| format!("gh: {e}"));
-            let failure = match out {
-                Ok(out) if out.status.success() => None,
-                Ok(out) => Some(String::from_utf8_lossy(&out.stderr).trim().to_string()),
-                Err(e) => Some(e),
-            };
-            if let Some(reason) = failure {
-                // The folder and its repository stand; only publishing failed.
-                return Ok(CreatedProject {
-                    path,
-                    warning: Some(format!("The GitHub repository was not created: {reason}")),
-                });
-            }
-        }
-        Ok(CreatedProject {
-            path,
-            warning: None,
-        })
+        Ok(())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+    let path = dir.to_string_lossy().into_owned();
+    let warning = if github_private {
+        // The folder and its repository stand; only publishing can fail now.
+        publish_private(&dir, &name)
+            .await
+            .err()
+            .map(|reason| format!("The GitHub repository was not created: {reason}"))
+    } else {
+        None
+    };
+    Ok(CreatedProject { path, warning })
+}
+
+/// `gh repo create` for the repository in `dir`, as its `origin`. A write
+/// the user asked for, so it runs even while the API is paused.
+async fn publish_private(dir: &Path, name: &str) -> Result<(), String> {
+    let args = [
+        "repo",
+        "create",
+        name,
+        "--private",
+        "--source",
+        ".",
+        "--remote",
+        "origin",
+    ];
+    let output = GhCommand::new(dir, args, Intent::Write)
+        .timeout(CREATE_TIMEOUT)
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+    if output.success() {
+        Ok(())
+    } else {
+        Err(output.stderr.trim().to_string())
+    }
 }
 
 /// The folder name a clone URL implies: its last segment, less `.git`.
@@ -307,30 +320,45 @@ pub async fn project_clone(url: String, github: bool) -> Result<String, String> 
         .to_string();
     let root = projects_root()?;
     let dest = root.join(&name);
+    let (made_root, made_dest) = (root.clone(), dest.clone());
     tokio::task::spawn_blocking(move || {
-        if dest.exists() {
-            return Err(format!("{} already exists", dest.display()));
+        if made_dest.exists() {
+            return Err(format!("{} already exists", made_dest.display()));
         }
-        std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
-        let mut cmd = if github {
-            let mut cmd = atlas_process::command("gh");
-            cmd.args(["repo", "clone"])
-                .arg(&url)
-                .arg(&dest)
-                .env("GH_PROMPT_DISABLED", "1");
-            cmd
-        } else {
-            let mut cmd = atlas_process::command("git");
-            cmd.args(["clone", "--"]).arg(&url).arg(&dest);
-            cmd
-        };
-        let out = cmd
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .stdin(std::process::Stdio::null())
+        std::fs::create_dir_all(&made_root).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    if github {
+        // Minutes of `git`, not an API request: it holds no API permit.
+        let output = GhCommand::new(
+            &root,
+            [
+                OsStr::new("repo"),
+                OsStr::new("clone"),
+                OsStr::new(&url),
+                dest.as_os_str(),
+            ],
+            Intent::LongWrite,
+        )
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .timeout(CLONE_TIMEOUT)
+        .output()
+        .await
+        .map_err(|e| format!("clone: {e}"))?;
+        if !output.success() {
+            return Err(output.stderr.trim().to_string());
+        }
+        return Ok(dest.to_string_lossy().into_owned());
+    }
+    tokio::task::spawn_blocking(move || {
+        let out = atlas_git::GitCommand::without_repo(&["clone", "--"])
+            .arg(&url)
+            .arg(&dest)
             .output()
             .map_err(|e| format!("clone: {e}"))?;
-        if !out.status.success() {
-            return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+        if !out.success() {
+            return Err(out.stderr_text().trim().to_string());
         }
         Ok(dest.to_string_lossy().into_owned())
     })

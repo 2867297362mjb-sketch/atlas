@@ -3,9 +3,9 @@ import { LoadingOrganisationOverlayView } from "./views/loading-organisation-ove
 
 /** The org-switch overlay's container, gated on `useOrgStore.orgSwitching`. */
 export function LoadingOrganisationOverlay() {
-  const orgSwitching = useOrgStore.use.orgSwitching();
-  const organisations = useOrgStore.use.organisations();
-  const activeOrganisationId = useOrgStore.use.activeOrganisationId();
+  const orgSwitching = useOrgStore((s) => s.orgSwitching);
+  const organisations = useOrgStore((s) => s.organisations);
+  const activeOrganisationId = useOrgStore((s) => s.activeOrganisationId);
 
   if (!orgSwitching) return null;
 

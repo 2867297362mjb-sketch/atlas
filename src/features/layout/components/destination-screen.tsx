@@ -3,7 +3,7 @@ import { ChevronLeft } from "lucide-react";
 import { PaneHeader } from "@/components/titlebar";
 import { PanelSkeleton } from "@/components/panel-skeleton";
 import { cn } from "@/lib/utils";
-import { isDestination, type DestinationType } from "@/lib/constants";
+import { isDestination, typedTab, type DestinationType } from "@/lib/tab-registry";
 import { useLayoutStore, type Tab } from "../stores/layout-store";
 import { DESTINATIONS } from "../lib/destinations";
 import { DestinationActionsSlot } from "./destination-actions";
@@ -60,9 +60,9 @@ const SpacesTab = lazy(() =>
  * another destination replaces it.
  */
 export function DestinationScreen() {
-  const destination = useLayoutStore.use.destination();
-  const shown = useLayoutStore.use.destinationShown();
-  const { hideDestination } = useLayoutStore.use.actions();
+  const destination = useLayoutStore((s) => s.destination);
+  const shown = useLayoutStore((s) => s.destinationShown);
+  const { hideDestination } = useLayoutStore((s) => s.actions);
   // Where the page's own controls render (`DestinationActions`).
   const [actionsSlot, setActionsSlot] = useState<HTMLElement | null>(null);
 
@@ -121,7 +121,9 @@ export function DestinationScreen() {
 /** One destination's page. A `switch` with a `never` default, so a new
  *  destination without a page does not compile. */
 function DestinationBody({ tab, type }: { tab: Tab; type: DestinationType }) {
-  switch (type) {
+  // `type` is the tab's own, already narrowed to a destination by the caller.
+  const t = typedTab({ ...tab, type });
+  switch (t.type) {
     case "artifacts":
       return <ArtifactsPanel />;
     case "inbox":
@@ -139,12 +141,12 @@ function DestinationBody({ tab, type }: { tab: Tab; type: DestinationType }) {
     case "canvas":
       return <CanvasPanel />;
     case "spaces":
-      return <SpacesTab convId={tab.data.convId as string} />;
+      return <SpacesTab convId={t.data.convId} />;
     case "team-chat":
       // The full window: channels and people beside the conversation.
       return <CommsPanel split />;
     default: {
-      const _exhaustive: never = type;
+      const _exhaustive: never = t;
       return _exhaustive;
     }
   }

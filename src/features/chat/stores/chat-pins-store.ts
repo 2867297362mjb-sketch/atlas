@@ -1,6 +1,5 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { createSelectors } from "@/lib/create-selectors";
 import type { ChatMessage } from "@/types/agent";
 import { assistantMessageText, userMessageText } from "../lib/turn-rows";
 
@@ -91,35 +90,33 @@ interface ChatPinsState {
   };
 }
 
-export const useChatPinsStore = createSelectors(
-  create<ChatPinsState>()(
-    persist(
-      (set) => ({
-        pins: {},
-        actions: {
-          toggle: (scope, pin) =>
-            set((s) => {
-              const current = s.pins[scope] ?? [];
-              const without = current.filter((p) => p.messageId !== pin.messageId);
-              const next =
-                without.length === current.length ? [pin, ...without].slice(0, CAP) : without;
-              return { pins: { ...s.pins, [scope]: next } };
-            }),
-          unpin: (scope, messageId) =>
-            set((s) => ({
-              pins: {
-                ...s.pins,
-                [scope]: (s.pins[scope] ?? []).filter((p) => p.messageId !== messageId),
-              },
-            })),
-        },
-      }),
-      {
-        name: "atlas-chat-pins",
-        version: 1,
-        partialize: (s) => ({ pins: s.pins }),
+export const useChatPinsStore = create<ChatPinsState>()(
+  persist(
+    (set) => ({
+      pins: {},
+      actions: {
+        toggle: (scope, pin) =>
+          set((s) => {
+            const current = s.pins[scope] ?? [];
+            const without = current.filter((p) => p.messageId !== pin.messageId);
+            const next =
+              without.length === current.length ? [pin, ...without].slice(0, CAP) : without;
+            return { pins: { ...s.pins, [scope]: next } };
+          }),
+        unpin: (scope, messageId) =>
+          set((s) => ({
+            pins: {
+              ...s.pins,
+              [scope]: (s.pins[scope] ?? []).filter((p) => p.messageId !== messageId),
+            },
+          })),
       },
-    ),
+    }),
+    {
+      name: "atlas-chat-pins",
+      version: 1,
+      partialize: (s) => ({ pins: s.pins }),
+    },
   ),
 );
 

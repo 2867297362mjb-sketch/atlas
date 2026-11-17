@@ -16,10 +16,7 @@
 
 import { create } from "zustand";
 import { toast } from "sonner";
-import { createSelectors } from "@/lib/create-selectors";
-import { useLayoutStore } from "@/features/layout/stores/layout-store";
-import { ORG_SCOPED_TYPES } from "@/lib/constants";
-import { useSpacesStore } from "@/features/spaces/stores/spaces-store";
+import { activeOrganisationChanged } from "@/features/organisations/lib/active-org-change";
 import { comms, type CommsEnvelope, type ConnectionInfo } from "../lib/comms-api";
 import { CHAT_MESSAGE_ATTACHMENT_MAX, TYPING_EXPIRY_MS } from "../types";
 import { publishDraftEvent } from "../lib/draft-bus";
@@ -243,553 +240,519 @@ const serverOwned = () => ({
   drafts: {} as Record<string, PromptDraft[]>,
 });
 
-export const useCommsStore = createSelectors(
-  create<CommsState>((set, get) => ({
-    panelOpen: false,
-    ...serverOwned(),
-    members: [],
+export const useCommsStore = create<CommsState>((set, get) => ({
+  panelOpen: false,
+  ...serverOwned(),
+  members: [],
 
-    tabs: [{ id: "tab_home", convId: null }],
-    activeTabId: "tab_home",
-    composers: {},
+  tabs: [{ id: "tab_home", convId: null }],
+  activeTabId: "tab_home",
+  composers: {},
 
-    actions: {
-      open: () => set({ panelOpen: true }),
-      close: () => set({ panelOpen: false }),
-      toggle: () => set((s) => ({ panelOpen: !s.panelOpen })),
+  actions: {
+    open: () => set({ panelOpen: true }),
+    close: () => set({ panelOpen: false }),
+    toggle: () => set((s) => ({ panelOpen: !s.panelOpen })),
 
-      setMembers: (members) => set({ members }),
+    setMembers: (members) => set({ members }),
 
-      reset: () => {
-        // Retry timers armed for the outgoing org's conversations used to
-        // survive this and fire `comms_open_conversation` for a foreign conv
-        // id against the new org's socket, up to seven more times.
-        cancelAllConvRetries();
+    reset: () => {
+      // Retry timers armed for the outgoing org's conversations used to
+      // survive this and fire `comms_open_conversation` for a foreign conv
+      // id against the new org's socket, up to seven more times.
+      cancelAllConvRetries();
+      set({
+        ...serverOwned(),
+        // Org-scoped, but deliberately NOT in serverOwned(): a same-org
+        // resync must not blank names while the roster refetches. A reset
+        // or retarget crosses orgs, so here it goes.
+        members: [],
+        tabs: [{ id: "tab_home", convId: null }],
+        activeTabId: "tab_home",
+        composers: {},
+      });
+    },
+
+    beginSwitch: (remoteId) => {
+      expectation = { orgId: remoteId };
+      get().actions.reset();
+    },
+
+    endSwitch: () => {
+      void get().actions.hydrate();
+    },
+
+    hydrate: async () => {
+      const seq = ++hydrateSeq;
+      try {
+        const snapshot = await comms.snapshot();
+        // Superseded while in flight: a newer hydrate owns the state now.
+        if (seq !== hydrateSeq) return;
+        // Not the org we are switching to — Rust has not been retargeted
+        // yet, or this snapshot is the OUTGOING org's. Applying it is how
+        // the panel used to show the previous org under the new org's name.
+        if (expectation && snapshot.connection.orgId !== expectation.orgId) return;
+        set((s) => ({
+          // A snapshot is a point-in-time read and can be older than the
+          // connection event that already said `open`: never let it walk an
+          // open socket back to `connecting`, which stranded the panel on a
+          // skeleton with no edge left to fire `retryUnloadedConversations`.
+          connection:
+            s.connection.state === "open" &&
+            snapshot.connection.state !== "open" &&
+            s.connection.orgId === snapshot.connection.orgId
+              ? s.connection
+              : snapshot.connection,
+          me: snapshot.me ?? "",
+          conversations: snapshot.conversations,
+          calls: Object.fromEntries((snapshot.calls ?? []).map((c) => [c.id, c])),
+          discoverable: snapshot.discoverable,
+          reads: snapshot.reads,
+          online: snapshot.online,
+        }));
+        // Re-read every open tab: a resync means the transcripts we hold may
+        // have gaps we cannot see from here.
+        const tabs = get().tabs;
+        for (const tab of tabs) {
+          if (!tab.convId) continue;
+          // A conversation we have never fetched needs the REST page, not a
+          // state snapshot: `conversationSnapshot` reads what Rust already
+          // holds, which for an unhydrated conversation is nothing.
+          if (!get().hydrated[tab.convId]) {
+            loadConversation(tab.convId, set);
+            continue;
+          }
+          try {
+            const win = await comms.conversationSnapshot(tab.convId);
+            set((s) => ({
+              messages: {
+                ...s.messages,
+                [tab.convId as string]: mergeWindow(
+                  s.messages[tab.convId as string],
+                  win.messages ?? [],
+                ),
+              },
+              reactionsByMessage: mergeReactions(s.reactionsByMessage, win.reactions),
+              ...withPins(s.pinnedByConv, tab.convId as string, win.pinned_message_ids),
+            }));
+          } catch {
+            // A conversation we can no longer read is not an error worth
+            // shouting about — the conversation list will have dropped it.
+          }
+        }
+      } catch {
+        // Chat is not ready (no org, signed out). The gate handles the copy.
+      }
+    },
+
+    applyEnvelope: (envelope) => {
+      const state = get();
+      // Once a switch has declared the org, anything else is a straggler
+      // from the org we left (or a socket Rust has not moved yet): DROP it.
+      // Adopting it — the branch below — re-pointed the store backwards and
+      // flapped it between orgs for as long as both kept talking.
+      if (envelope.org && expectation && envelope.org !== expectation.orgId) {
+        dropStraggler(envelope.org);
+        return;
+      }
+      // Before any switch, Rust is the only authority on where the socket
+      // points, and a mismatch means the target MOVED under us (boot
+      // reconciliation correcting a clobbered active org). Every slice we
+      // hold belongs to the old org, so adopt the new one wholesale: reset
+      // and re-hydrate.
+      const currentOrg = state.connection.orgId;
+      if (envelope.org && !expectation && currentOrg && envelope.org !== currentOrg) {
+        activeOrganisationChanged({
+          why: "boot-reconciliation",
+          from: currentOrg,
+          to: envelope.org,
+        });
         set({
           ...serverOwned(),
-          // Org-scoped, but deliberately NOT in serverOwned(): a same-org
-          // resync must not blank names while the roster refetches. A reset
-          // or retarget crosses orgs, so here it goes.
+          // The old org's roster must not survive the retarget — the panel
+          // keys its refetch off `connection.orgId`, set just below.
           members: [],
-          tabs: [{ id: "tab_home", convId: null }],
-          activeTabId: "tab_home",
-          composers: {},
+          connection: {
+            state: "connecting",
+            reason: null,
+            epoch: envelope.epoch,
+            orgId: envelope.org,
+          },
         });
-      },
-
-      beginSwitch: (remoteId) => {
-        expectation = { orgId: remoteId };
-        get().actions.reset();
-      },
-
-      endSwitch: () => {
         void get().actions.hydrate();
-      },
+        return;
+      }
 
-      hydrate: async () => {
-        const seq = ++hydrateSeq;
-        try {
-          const snapshot = await comms.snapshot();
-          // Superseded while in flight: a newer hydrate owns the state now.
-          if (seq !== hydrateSeq) return;
-          // Not the org we are switching to — Rust has not been retargeted
-          // yet, or this snapshot is the OUTGOING org's. Applying it is how
-          // the panel used to show the previous org under the new org's name.
-          if (expectation && snapshot.connection.orgId !== expectation.orgId) return;
+      const ev = envelope.ev;
+      switch (ev.kind) {
+        case "connection": {
+          const wasOpen = state.connection.state === "open";
           set((s) => ({
-            // A snapshot is a point-in-time read and can be older than the
-            // connection event that already said `open`: never let it walk an
-            // open socket back to `connecting`, which stranded the panel on a
-            // skeleton with no edge left to fire `retryUnloadedConversations`.
-            connection:
-              s.connection.state === "open" &&
-              snapshot.connection.state !== "open" &&
-              s.connection.orgId === snapshot.connection.orgId
-                ? s.connection
-                : snapshot.connection,
-            me: snapshot.me ?? "",
-            conversations: snapshot.conversations,
-            calls: Object.fromEntries((snapshot.calls ?? []).map((c) => [c.id, c])),
-            discoverable: snapshot.discoverable,
-            reads: snapshot.reads,
-            online: snapshot.online,
+            connection: {
+              ...s.connection,
+              state: ev.state,
+              reason: ev.reason,
+              epoch: envelope.epoch,
+              orgId: envelope.org || s.connection.orgId,
+            },
           }));
-          // Re-read every open tab: a resync means the transcripts we hold may
-          // have gaps we cannot see from here.
-          const tabs = get().tabs;
-          for (const tab of tabs) {
-            if (!tab.convId) continue;
-            // A conversation we have never fetched needs the REST page, not a
-            // state snapshot: `conversationSnapshot` reads what Rust already
-            // holds, which for an unhydrated conversation is nothing.
-            if (!get().hydrated[tab.convId]) {
-              loadConversation(tab.convId, set);
-              continue;
-            }
-            try {
-              const win = await comms.conversationSnapshot(tab.convId);
-              set((s) => ({
-                messages: {
-                  ...s.messages,
-                  [tab.convId as string]: mergeWindow(
-                    s.messages[tab.convId as string],
-                    win.messages ?? [],
-                  ),
-                },
-                reactionsByMessage: mergeReactions(s.reactionsByMessage, win.reactions),
-                ...withPins(s.pinnedByConv, tab.convId as string, win.pinned_message_ids),
-              }));
-            } catch {
-              // A conversation we can no longer read is not an error worth
-              // shouting about — the conversation list will have dropped it.
-            }
-          }
-        } catch {
-          // Chat is not ready (no org, signed out). The gate handles the copy.
-        }
-      },
-
-      applyEnvelope: (envelope) => {
-        const state = get();
-        // Once a switch has declared the org, anything else is a straggler
-        // from the org we left (or a socket Rust has not moved yet): DROP it.
-        // Adopting it — the branch below — re-pointed the store backwards and
-        // flapped it between orgs for as long as both kept talking.
-        if (envelope.org && expectation && envelope.org !== expectation.orgId) {
-          dropStraggler(envelope.org);
+          // The socket opening is proof the org target and credential now
+          // exist — which is exactly what a too-early first-page fetch was
+          // missing. Anything still unloaded gets another go, immediately.
+          if (!wasOpen && ev.state === "open") retryUnloadedConversations();
           return;
         }
-        // Before any switch, Rust is the only authority on where the socket
-        // points, and a mismatch means the target MOVED under us (boot
-        // reconciliation correcting a clobbered active org). Every slice we
-        // hold belongs to the old org, so adopt the new one wholesale: reset
-        // and re-hydrate.
-        const currentOrg = state.connection.orgId;
-        if (envelope.org && !expectation && currentOrg && envelope.org !== currentOrg) {
-          closeOrgScopedTabs();
-          set({
-            ...serverOwned(),
-            // The old org's roster must not survive the retarget — the panel
-            // keys its refetch off `connection.orgId`, set just below.
-            members: [],
-            connection: {
-              state: "connecting",
-              reason: null,
-              epoch: envelope.epoch,
-              orgId: envelope.org,
-            },
-          });
+
+        case "resync":
           void get().actions.hydrate();
           return;
-        }
 
-        const ev = envelope.ev;
-        switch (ev.kind) {
-          case "connection": {
-            const wasOpen = state.connection.state === "open";
+        case "messageAppended":
+          set((s) => {
+            const list = s.messages[ev.conv_id] ?? [];
+            if (list.some((m) => m.id === ev.message.id)) return {};
+            return {
+              messages: { ...s.messages, [ev.conv_id]: sortBySeq([...list, ev.message]) },
+              // They finished the sentence — a better signal than a timeout,
+              // because it is exactly when the hint stopped being true.
+              typing: withoutTyper(s.typing, ev.conv_id, ev.message.author_id),
+            };
+          });
+          return;
+
+        case "messageUpdated":
+          set((s) => {
+            const list = s.messages[ev.conv_id] ?? [];
+            // `replaced_id` is the optimistic row an ack promoted.
+            const dropId = ev.replaced_id ?? ev.message.id;
+            const next = list.filter((m) => m.id !== dropId && m.id !== ev.message.id);
+            return {
+              messages: { ...s.messages, [ev.conv_id]: sortBySeq([...next, ev.message]) },
+            };
+          });
+          return;
+
+        case "conversationsChanged":
+          set({ conversations: ev.conversations, discoverable: ev.discoverable });
+          return;
+
+        case "readsChanged":
+          // Server-held, wholesale. Nothing here computes a badge.
+          set((s) => ({ reads: mergeReads(s.reads, ev.reads) }));
+          return;
+
+        case "readChanged":
+          // The single-row fast path: one read receipt used to re-ship the
+          // whole table.
+          set((s) => ({ reads: mergeReads(s.reads, [ev.read]) }));
+          return;
+
+        case "presence":
+          // The whole set — an assignment, not a merge. But an UNCHANGED set
+          // must not take a new identity: every socket reconnect and grace-
+          // window event repaints the whole panel otherwise.
+          set((s) =>
+            s.online.length === ev.online.length && s.online.every((id, i) => id === ev.online[i])
+              ? {}
+              : { online: ev.online },
+          );
+          return;
+
+        case "typing":
+          set((s) =>
+            s.typing[ev.conv_id]?.[ev.user_id] === ev.at_ms
+              ? {}
+              : {
+                  typing: {
+                    ...s.typing,
+                    [ev.conv_id]: { ...s.typing[ev.conv_id], [ev.user_id]: ev.at_ms },
+                  },
+                },
+          );
+          return;
+
+        case "reactionsChanged":
+          // Surgical: one key changes, every other slice keeps identity.
+          set((s) => ({
+            reactionsByMessage: { ...s.reactionsByMessage, [ev.message_id]: ev.rows },
+          }));
+          return;
+
+        case "pinsChanged":
+          set((s) => withPins(s.pinnedByConv, ev.conv_id, ev.pinned_message_ids));
+          return;
+
+        case "uploadProgress":
+          set((s) => ({
+            composers: Object.fromEntries(
+              Object.entries(s.composers).map(([convId, c]) => [
+                convId,
+                {
+                  ...c,
+                  attachments: c.attachments.map((a) =>
+                    a.uploadId === ev.upload_id
+                      ? {
+                          ...a,
+                          sentBytes: ev.sent_bytes,
+                          totalBytes: ev.total_bytes,
+                          state: ev.state,
+                          error: ev.error ?? undefined,
+                        }
+                      : a,
+                  ),
+                },
+              ]),
+            ),
+          }));
+          return;
+
+        case "downloadProgress": {
+          if (ev.state === "downloading") {
             set((s) => ({
-              connection: {
-                ...s.connection,
-                state: ev.state,
-                reason: ev.reason,
-                epoch: envelope.epoch,
-                orgId: envelope.org || s.connection.orgId,
+              downloads: {
+                ...s.downloads,
+                [ev.download_id]: { got: ev.got_bytes, total: ev.total_bytes },
               },
             }));
-            // The socket opening is proof the org target and credential now
-            // exist — which is exactly what a too-early first-page fetch was
-            // missing. Anything still unloaded gets another go, immediately.
-            if (!wasOpen && ev.state === "open") retryUnloadedConversations();
-            return;
+          } else {
+            // complete or failed: the arc unmounts; failure surfaces as a
+            // toast at the call site, which owns the user-facing wording.
+            set((s) => {
+              if (!(ev.download_id in s.downloads)) return s;
+              const next = { ...s.downloads };
+              delete next[ev.download_id];
+              return { downloads: next };
+            });
           }
-
-          case "resync":
-            void get().actions.hydrate();
-            return;
-
-          case "messageAppended":
-            set((s) => {
-              const list = s.messages[ev.conv_id] ?? [];
-              if (list.some((m) => m.id === ev.message.id)) return {};
-              return {
-                messages: { ...s.messages, [ev.conv_id]: sortBySeq([...list, ev.message]) },
-                // They finished the sentence — a better signal than a timeout,
-                // because it is exactly when the hint stopped being true.
-                typing: withoutTyper(s.typing, ev.conv_id, ev.message.author_id),
-              };
-            });
-            return;
-
-          case "messageUpdated":
-            set((s) => {
-              const list = s.messages[ev.conv_id] ?? [];
-              // `replaced_id` is the optimistic row an ack promoted.
-              const dropId = ev.replaced_id ?? ev.message.id;
-              const next = list.filter((m) => m.id !== dropId && m.id !== ev.message.id);
-              return {
-                messages: { ...s.messages, [ev.conv_id]: sortBySeq([...next, ev.message]) },
-              };
-            });
-            return;
-
-          case "conversationsChanged":
-            set({ conversations: ev.conversations, discoverable: ev.discoverable });
-            return;
-
-          case "readsChanged":
-            // Server-held, wholesale. Nothing here computes a badge.
-            set((s) => ({ reads: mergeReads(s.reads, ev.reads) }));
-            return;
-
-          case "readChanged":
-            // The single-row fast path: one read receipt used to re-ship the
-            // whole table.
-            set((s) => ({ reads: mergeReads(s.reads, [ev.read]) }));
-            return;
-
-          case "presence":
-            // The whole set — an assignment, not a merge. But an UNCHANGED set
-            // must not take a new identity: every socket reconnect and grace-
-            // window event repaints the whole panel otherwise.
-            set((s) =>
-              s.online.length === ev.online.length && s.online.every((id, i) => id === ev.online[i])
-                ? {}
-                : { online: ev.online },
-            );
-            return;
-
-          case "typing":
-            set((s) =>
-              s.typing[ev.conv_id]?.[ev.user_id] === ev.at_ms
-                ? {}
-                : {
-                    typing: {
-                      ...s.typing,
-                      [ev.conv_id]: { ...s.typing[ev.conv_id], [ev.user_id]: ev.at_ms },
-                    },
-                  },
-            );
-            return;
-
-          case "reactionsChanged":
-            // Surgical: one key changes, every other slice keeps identity.
-            set((s) => ({
-              reactionsByMessage: { ...s.reactionsByMessage, [ev.message_id]: ev.rows },
-            }));
-            return;
-
-          case "pinsChanged":
-            set((s) => withPins(s.pinnedByConv, ev.conv_id, ev.pinned_message_ids));
-            return;
-
-          case "uploadProgress":
-            set((s) => ({
-              composers: Object.fromEntries(
-                Object.entries(s.composers).map(([convId, c]) => [
-                  convId,
-                  {
-                    ...c,
-                    attachments: c.attachments.map((a) =>
-                      a.uploadId === ev.upload_id
-                        ? {
-                            ...a,
-                            sentBytes: ev.sent_bytes,
-                            totalBytes: ev.total_bytes,
-                            state: ev.state,
-                            error: ev.error ?? undefined,
-                          }
-                        : a,
-                    ),
-                  },
-                ]),
-              ),
-            }));
-            return;
-
-          case "downloadProgress": {
-            if (ev.state === "downloading") {
-              set((s) => ({
-                downloads: {
-                  ...s.downloads,
-                  [ev.download_id]: { got: ev.got_bytes, total: ev.total_bytes },
-                },
-              }));
-            } else {
-              // complete or failed: the arc unmounts; failure surfaces as a
-              // toast at the call site, which owns the user-facing wording.
-              set((s) => {
-                if (!(ev.download_id in s.downloads)) return s;
-                const next = { ...s.downloads };
-                delete next[ev.download_id];
-                return { downloads: next };
-              });
-            }
-            return;
-          }
-
-          case "draftOpened":
-            // Content bytes ride the bus (below); the store only takes the
-            // fresher METADATA so the list row's sent/updated state tracks.
-            set((s) => {
-              const list = s.drafts[ev.draft.conv_id];
-              if (!list) return {};
-              return {
-                drafts: {
-                  ...s.drafts,
-                  [ev.draft.conv_id]: list.map((d) => (d.id === ev.draft.id ? ev.draft : d)),
-                },
-              };
-            });
-            publishDraftEvent({
-              kind: "opened",
-              draft_id: ev.draft_id,
-              draft: ev.draft,
-              snapshot: ev.snapshot,
-              updates: ev.updates,
-            });
-            return;
-
-          case "draftUpdate":
-            publishDraftEvent({ kind: "update", draft_id: ev.draft_id, update: ev.update });
-            return;
-
-          case "draftAwareness":
-            publishDraftEvent({
-              kind: "awareness",
-              draft_id: ev.draft_id,
-              user_id: ev.user_id,
-              state: ev.state,
-            });
-            return;
-
-          case "callChanged":
-            set((s) => ({ calls: { ...s.calls, [ev.call.id]: ev.call } }));
-            return;
-
-          case "memberChanged":
-          case "error":
-            return;
+          return;
         }
-      },
 
-      openConversation: (convId) => {
-        const s = get();
-        const active = s.tabs.find((t) => t.id === s.activeTabId) ?? null;
-        const leaving = active?.convId ?? null;
-        let tabs: CommsTab[];
-        let activeTabId: string | null;
-        if (active) {
-          tabs = s.tabs.map((t) => (t.id === active.id ? { ...t, convId } : t));
-          activeTabId = active.id;
-        } else {
-          const tab = { id: `tab_${uid()}`, convId };
-          tabs = [...s.tabs, tab];
-          activeTabId = tab.id;
-        }
-        set(() => ({
-          tabs,
-          activeTabId,
-          panelOpen: true,
-        }));
-        releaseIfUnshown(leaving, tabs);
-        loadConversation(convId, set);
-      },
+        case "draftOpened":
+          // Content bytes ride the bus (below); the store only takes the
+          // fresher METADATA so the list row's sent/updated state tracks.
+          set((s) => {
+            const list = s.drafts[ev.draft.conv_id];
+            if (!list) return {};
+            return {
+              drafts: {
+                ...s.drafts,
+                [ev.draft.conv_id]: list.map((d) => (d.id === ev.draft.id ? ev.draft : d)),
+              },
+            };
+          });
+          publishDraftEvent({
+            kind: "opened",
+            draft_id: ev.draft_id,
+            draft: ev.draft,
+            snapshot: ev.snapshot,
+            updates: ev.updates,
+          });
+          return;
 
-      openConversationInNewTab: (convId) => {
+        case "draftUpdate":
+          publishDraftEvent({ kind: "update", draft_id: ev.draft_id, update: ev.update });
+          return;
+
+        case "draftAwareness":
+          publishDraftEvent({
+            kind: "awareness",
+            draft_id: ev.draft_id,
+            user_id: ev.user_id,
+            state: ev.state,
+          });
+          return;
+
+        case "callChanged":
+          set((s) => ({ calls: { ...s.calls, [ev.call.id]: ev.call } }));
+          return;
+
+        case "memberChanged":
+        case "error":
+          return;
+      }
+    },
+
+    openConversation: (convId) => {
+      const s = get();
+      const active = s.tabs.find((t) => t.id === s.activeTabId) ?? null;
+      const leaving = active?.convId ?? null;
+      let tabs: CommsTab[];
+      let activeTabId: string | null;
+      if (active) {
+        tabs = s.tabs.map((t) => (t.id === active.id ? { ...t, convId } : t));
+        activeTabId = active.id;
+      } else {
         const tab = { id: `tab_${uid()}`, convId };
-        set((s) => ({ tabs: [...s.tabs, tab], activeTabId: tab.id, panelOpen: true }));
-        loadConversation(convId, set);
-      },
+        tabs = [...s.tabs, tab];
+        activeTabId = tab.id;
+      }
+      set(() => ({
+        tabs,
+        activeTabId,
+        panelOpen: true,
+      }));
+      releaseIfUnshown(leaving, tabs);
+      loadConversation(convId, set);
+    },
 
-      goHome: () => {
-        const s = get();
-        const active = s.tabs.find((t) => t.id === s.activeTabId);
-        if (!active || active.convId === null) return;
-        const leaving = active.convId;
-        const tabs = s.tabs.map((t) => (t.id === active.id ? { ...t, convId: null } : t));
-        set({ tabs });
-        releaseIfUnshown(leaving, tabs);
-      },
+    openConversationInNewTab: (convId) => {
+      const tab = { id: `tab_${uid()}`, convId };
+      set((s) => ({ tabs: [...s.tabs, tab], activeTabId: tab.id, panelOpen: true }));
+      loadConversation(convId, set);
+    },
 
-      newTab: () => {
-        const tab = { id: `tab_${uid()}`, convId: null };
-        set((s) => ({ tabs: [...s.tabs, tab], activeTabId: tab.id }));
-      },
+    goHome: () => {
+      const s = get();
+      const active = s.tabs.find((t) => t.id === s.activeTabId);
+      if (!active || active.convId === null) return;
+      const leaving = active.convId;
+      const tabs = s.tabs.map((t) => (t.id === active.id ? { ...t, convId: null } : t));
+      set({ tabs });
+      releaseIfUnshown(leaving, tabs);
+    },
 
-      // An UPSERT, not an add: a PATCH response (rename, archive) goes
-      // through here too, and replacing by id paints the caller's own change
-      // without waiting for the `conversation.updated` broadcast round trip.
-      adoptConversation: (conv) =>
-        set((s) =>
-          s.conversations.some((c) => c.id === conv.id)
-            ? { conversations: s.conversations.map((c) => (c.id === conv.id ? conv : c)) }
-            : { conversations: [...s.conversations, conv] },
-        ),
+    newTab: () => {
+      const tab = { id: `tab_${uid()}`, convId: null };
+      set((s) => ({ tabs: [...s.tabs, tab], activeTabId: tab.id }));
+    },
 
-      closeTab: (tabId) => {
-        const s = get();
-        const idx = s.tabs.findIndex((t) => t.id === tabId);
-        if (idx === -1) return;
-        const closing = s.tabs[idx];
-        let tabs = s.tabs.filter((t) => t.id !== tabId);
-        let activeTabId = s.activeTabId;
-        // The strip never empties: closing the last view leaves a fresh home.
-        if (tabs.length === 0) {
-          tabs = [{ id: `tab_${uid()}`, convId: null }];
-          activeTabId = tabs[0].id;
-        } else if (s.activeTabId === tabId) {
-          activeTabId = tabs[idx - 1]?.id ?? tabs[idx]?.id ?? null;
-        }
-        set({ tabs, activeTabId });
-        releaseIfUnshown(closing.convId, tabs);
-      },
+    // An UPSERT, not an add: a PATCH response (rename, archive) goes
+    // through here too, and replacing by id paints the caller's own change
+    // without waiting for the `conversation.updated` broadcast round trip.
+    adoptConversation: (conv) =>
+      set((s) =>
+        s.conversations.some((c) => c.id === conv.id)
+          ? { conversations: s.conversations.map((c) => (c.id === conv.id ? conv : c)) }
+          : { conversations: [...s.conversations, conv] },
+      ),
 
-      setActiveTab: (tabId) => set({ activeTabId: tabId }),
+    closeTab: (tabId) => {
+      const s = get();
+      const idx = s.tabs.findIndex((t) => t.id === tabId);
+      if (idx === -1) return;
+      const closing = s.tabs[idx];
+      let tabs = s.tabs.filter((t) => t.id !== tabId);
+      let activeTabId = s.activeTabId;
+      // The strip never empties: closing the last view leaves a fresh home.
+      if (tabs.length === 0) {
+        tabs = [{ id: `tab_${uid()}`, convId: null }];
+        activeTabId = tabs[0].id;
+      } else if (s.activeTabId === tabId) {
+        activeTabId = tabs[idx - 1]?.id ?? tabs[idx]?.id ?? null;
+      }
+      set({ tabs, activeTabId });
+      releaseIfUnshown(closing.convId, tabs);
+    },
 
-      moveTab: (tabId, toIndex) =>
-        set((s) => {
-          const from = s.tabs.findIndex((t) => t.id === tabId);
-          if (from === -1 || toIndex < 0 || toIndex >= s.tabs.length) return {};
-          const tabs = [...s.tabs];
-          const [moved] = tabs.splice(from, 1);
-          tabs.splice(toIndex, 0, moved);
-          return { tabs };
-        }),
+    setActiveTab: (tabId) => set({ activeTabId: tabId }),
 
-      setDraft: (convId, draft) => {
-        set((s) => ({
+    moveTab: (tabId, toIndex) =>
+      set((s) => {
+        const from = s.tabs.findIndex((t) => t.id === tabId);
+        if (from === -1 || toIndex < 0 || toIndex >= s.tabs.length) return {};
+        const tabs = [...s.tabs];
+        const [moved] = tabs.splice(from, 1);
+        tabs.splice(toIndex, 0, moved);
+        return { tabs };
+      }),
+
+    setDraft: (convId, draft) => {
+      set((s) => ({
+        composers: {
+          ...s.composers,
+          [convId]: { ...(s.composers[convId] ?? emptyComposer()), draft },
+        },
+      }));
+      // Rust throttles to one per three seconds; the server drops excess in
+      // silence, so the throttle cannot live here where it could be skipped.
+      if (draft.length > 0) void comms.typing(convId).catch(() => {});
+    },
+
+    setReplyTo: (convId, messageId) =>
+      set((s) => ({
+        composers: {
+          ...s.composers,
+          [convId]: {
+            ...(s.composers[convId] ?? emptyComposer()),
+            replyTo: messageId,
+            editing: null,
+          },
+        },
+      })),
+
+    beginEdit: (convId, messageId) =>
+      set((s) => {
+        const body = (s.messages[convId] ?? []).find((m) => m.id === messageId)?.body ?? "";
+        return {
           composers: {
             ...s.composers,
-            [convId]: { ...(s.composers[convId] ?? emptyComposer()), draft },
+            // Attachments are preserved: editing rewrites the body only, and
+            // dropping staged uploads here would silently abandon them.
+            [convId]: {
+              ...(s.composers[convId] ?? emptyComposer()),
+              draft: body,
+              replyTo: null,
+              editing: messageId,
+            },
           },
-        }));
-        // Rust throttles to one per three seconds; the server drops excess in
-        // silence, so the throttle cannot live here where it could be skipped.
-        if (draft.length > 0) void comms.typing(convId).catch(() => {});
-      },
+        };
+      }),
 
-      setReplyTo: (convId, messageId) =>
+    cancelComposerIntent: (convId) =>
+      set((s) => ({
+        composers: {
+          ...s.composers,
+          [convId]: { ...(s.composers[convId] ?? emptyComposer()), replyTo: null, editing: null },
+        },
+      })),
+
+    // The optimistic row comes back as `messageAppended`; nothing is built
+    // here, so there is one place a message can be described.
+    send: (convId) => {
+      const composer = get().composers[convId] ?? emptyComposer();
+      const body = composer.draft.trim();
+      const ready = composer.attachments
+        .filter((a) => a.state === "complete" && a.fileId)
+        .map((a) => a.fileId as string);
+      // Empty body is legal with an attachment, and only then.
+      if (!body && ready.length === 0) return;
+      // No target at all (mid-switch, or a local-only org) or a terminal
+      // refusal: Rust cannot even queue this. `connecting`/`backoff` are
+      // fine — the send is held in Rust's pending map and replayed on
+      // reconnect. Keep the text; a message that cannot leave must not
+      // vanish from the composer.
+      const { state } = get().connection;
+      if (state === "disconnected" || state === "unavailable") {
+        toast.error("Chat isn't connected — try again in a moment.");
+        return;
+      }
+      set((s) => ({ composers: { ...s.composers, [convId]: emptyComposer() } }));
+      void comms.send(convId, body, composer.replyTo, ready).catch((e) => {
+        console.warn("comms: send failed:", convId, e);
+        // Give the draft back exactly as it was, so a refused send costs
+        // a retry rather than a retype.
         set((s) => ({
           composers: {
             ...s.composers,
             [convId]: {
               ...(s.composers[convId] ?? emptyComposer()),
-              replyTo: messageId,
-              editing: null,
+              draft: composer.draft,
+              replyTo: composer.replyTo,
+              attachments: composer.attachments,
             },
           },
-        })),
+        }));
+        toast.error(sendFailureMessage(e));
+      });
+    },
 
-      beginEdit: (convId, messageId) =>
-        set((s) => {
-          const body = (s.messages[convId] ?? []).find((m) => m.id === messageId)?.body ?? "";
-          return {
-            composers: {
-              ...s.composers,
-              // Attachments are preserved: editing rewrites the body only, and
-              // dropping staged uploads here would silently abandon them.
-              [convId]: {
-                ...(s.composers[convId] ?? emptyComposer()),
-                draft: body,
-                replyTo: null,
-                editing: messageId,
-              },
-            },
-          };
-        }),
-
-      cancelComposerIntent: (convId) =>
-        set((s) => ({
-          composers: {
-            ...s.composers,
-            [convId]: { ...(s.composers[convId] ?? emptyComposer()), replyTo: null, editing: null },
-          },
-        })),
-
-      // The optimistic row comes back as `messageAppended`; nothing is built
-      // here, so there is one place a message can be described.
-      send: (convId) => {
-        const composer = get().composers[convId] ?? emptyComposer();
-        const body = composer.draft.trim();
-        const ready = composer.attachments
-          .filter((a) => a.state === "complete" && a.fileId)
-          .map((a) => a.fileId as string);
-        // Empty body is legal with an attachment, and only then.
-        if (!body && ready.length === 0) return;
-        // No target at all (mid-switch, or a local-only org) or a terminal
-        // refusal: Rust cannot even queue this. `connecting`/`backoff` are
-        // fine — the send is held in Rust's pending map and replayed on
-        // reconnect. Keep the text; a message that cannot leave must not
-        // vanish from the composer.
-        const { state } = get().connection;
-        if (state === "disconnected" || state === "unavailable") {
-          toast.error("Chat isn't connected — try again in a moment.");
-          return;
-        }
-        set((s) => ({ composers: { ...s.composers, [convId]: emptyComposer() } }));
-        void comms.send(convId, body, composer.replyTo, ready).catch((e) => {
-          console.warn("comms: send failed:", convId, e);
-          // Give the draft back exactly as it was, so a refused send costs
-          // a retry rather than a retype.
-          set((s) => ({
-            composers: {
-              ...s.composers,
-              [convId]: {
-                ...(s.composers[convId] ?? emptyComposer()),
-                draft: composer.draft,
-                replyTo: composer.replyTo,
-                attachments: composer.attachments,
-              },
-            },
-          }));
-          toast.error(sendFailureMessage(e));
-        });
-      },
-
-      attachFiles: (convId, paths) => {
-        const existing = (get().composers[convId] ?? emptyComposer()).attachments;
-        const room = CHAT_MESSAGE_ATTACHMENT_MAX - existing.length;
-        if (room <= 0) return;
-        for (const path of paths.slice(0, room)) {
-          const uploadId = uid();
-          const filename = path.split("/").pop() || path;
-          set((s) => {
-            const c = s.composers[convId] ?? emptyComposer();
-            return {
-              composers: {
-                ...s.composers,
-                [convId]: {
-                  ...c,
-                  attachments: [
-                    ...c.attachments,
-                    {
-                      uploadId,
-                      fileId: null,
-                      filename,
-                      totalBytes: 0,
-                      sentBytes: 0,
-                      state: "uploading" as const,
-                    },
-                  ],
-                },
-              },
-            };
-          });
-          void comms
-            .uploadAttachment(convId, uploadId, path)
-            .then(({ fileId }) => patchAttachment(set, convId, uploadId, { fileId }))
-            .catch((e) => {
-              console.warn("comms: upload failed:", filename, e);
-              patchAttachment(set, convId, uploadId, {
-                state: "failed",
-                error: String(e),
-              });
-            });
-        }
-      },
-
-      removeAttachment: (convId, uploadId) => {
-        void comms.cancelUpload(uploadId).catch(() => {});
+    attachFiles: (convId, paths) => {
+      const existing = (get().composers[convId] ?? emptyComposer()).attachments;
+      const room = CHAT_MESSAGE_ATTACHMENT_MAX - existing.length;
+      if (room <= 0) return;
+      for (const path of paths.slice(0, room)) {
+        const uploadId = uid();
+        const filename = path.split("/").pop() || path;
         set((s) => {
           const c = s.composers[convId] ?? emptyComposer();
           return {
@@ -797,104 +760,140 @@ export const useCommsStore = createSelectors(
               ...s.composers,
               [convId]: {
                 ...c,
-                attachments: c.attachments.filter((a) => a.uploadId !== uploadId),
+                attachments: [
+                  ...c.attachments,
+                  {
+                    uploadId,
+                    fileId: null,
+                    filename,
+                    totalBytes: 0,
+                    sentBytes: 0,
+                    state: "uploading" as const,
+                  },
+                ],
               },
             },
           };
         });
-      },
-
-      commitEdit: (convId) => {
-        const composer = get().composers[convId] ?? emptyComposer();
-        const target = composer.editing;
-        const body = composer.draft.trim();
-        if (!target || !body) return;
-        set((s) => ({ composers: { ...s.composers, [convId]: emptyComposer() } }));
-        void comms.edit(target, body).catch(() => {});
-      },
-
-      deleteMessage: (_convId, messageId) => {
-        void comms.delete(messageId).catch(() => {});
-      },
-
-      react: (messageId, emoji, on) => {
-        void comms.react(messageId, emoji, on).catch(() => {});
-      },
-
-      togglePin: (messageId, on) => {
-        // Optimistic FIRST, in this process — instant feedback must not ride
-        // on the round trip to Rust's own optimistic echo (invoke → manager
-        // broadcast → Tauri event → rAF drain). The echo then replays the
-        // same rail through `pinsChanged`, which is idempotent under
-        // replace semantics: no flicker, no divergence.
-        const messages = get().messages;
-        const convId = Object.keys(messages).find((c) =>
-          (messages[c] ?? []).some((m) => m.id === messageId),
-        );
-        if (convId) {
-          const next = toggleRail(get().pinnedByConv[convId] ?? [], messageId, on);
-          if (next) set((s) => withPins(s.pinnedByConv, convId, next));
-        }
-        void comms.pin(messageId, on).catch(() => {});
-      },
-
-      markRead: (convId) => {
-        const list = get().messages[convId] ?? [];
-        const seq = list[list.length - 1]?.seq;
-        if (seq === undefined) return;
-        void comms.read(convId, seq).catch(() => {});
-      },
-
-      joinChannel: (convId) => {
-        void comms.join(convId).catch(() => {});
-      },
-
-      setConvTab: (convId, tab) => set((s) => ({ convTab: { ...s.convTab, [convId]: tab } })),
-
-      loadDrafts: async (convId) => {
-        try {
-          const list = await comms.drafts(convId);
-          set((s) => ({ drafts: { ...s.drafts, [convId]: list } }));
-        } catch (e) {
-          // A failed revalidation must not blank a good list — the cached
-          // rows stay exactly as they were. Only a conversation that has
-          // never loaded settles to an empty answer.
-          console.warn("comms: drafts fetch failed:", convId, e);
-          set((s) => (s.drafts[convId] ? {} : { drafts: { ...s.drafts, [convId]: [] } }));
-        }
-      },
-
-      adoptDraft: (convId, draft) =>
-        set((s) => {
-          const current = s.drafts[convId] ?? [];
-          if (current.some((d) => d.id === draft.id)) return {};
-          return { drafts: { ...s.drafts, [convId]: [draft, ...current] } };
-        }),
-
-      retryConversation: (convId) => {
-        convAttempts.delete(convId);
-        loadConversation(convId, set);
-      },
-
-      loadOlder: async (convId) => {
-        const list = get().messages[convId] ?? [];
-        const oldest = list[0]?.seq;
-        if (oldest === undefined) return;
-        try {
-          const page = await comms.loadOlder(convId, oldest);
-          set((s) => {
-            const current = s.messages[convId] ?? [];
-            const seen = new Set(current.map((m) => m.id));
-            const fresh = page.messages.filter((m) => !seen.has(m.id));
-            return { messages: { ...s.messages, [convId]: sortBySeq([...fresh, ...current]) } };
+        void comms
+          .uploadAttachment(convId, uploadId, path)
+          .then(({ fileId }) => patchAttachment(set, convId, uploadId, { fileId }))
+          .catch((e) => {
+            console.warn("comms: upload failed:", filename, e);
+            patchAttachment(set, convId, uploadId, {
+              state: "failed",
+              error: String(e),
+            });
           });
-        } catch {
-          // Nothing to do: the transcript simply does not extend further.
-        }
-      },
+      }
     },
-  })),
-);
+
+    removeAttachment: (convId, uploadId) => {
+      void comms.cancelUpload(uploadId).catch(() => {});
+      set((s) => {
+        const c = s.composers[convId] ?? emptyComposer();
+        return {
+          composers: {
+            ...s.composers,
+            [convId]: {
+              ...c,
+              attachments: c.attachments.filter((a) => a.uploadId !== uploadId),
+            },
+          },
+        };
+      });
+    },
+
+    commitEdit: (convId) => {
+      const composer = get().composers[convId] ?? emptyComposer();
+      const target = composer.editing;
+      const body = composer.draft.trim();
+      if (!target || !body) return;
+      set((s) => ({ composers: { ...s.composers, [convId]: emptyComposer() } }));
+      void comms.edit(target, body).catch(() => {});
+    },
+
+    deleteMessage: (_convId, messageId) => {
+      void comms.delete(messageId).catch(() => {});
+    },
+
+    react: (messageId, emoji, on) => {
+      void comms.react(messageId, emoji, on).catch(() => {});
+    },
+
+    togglePin: (messageId, on) => {
+      // Optimistic FIRST, in this process — instant feedback must not ride
+      // on the round trip to Rust's own optimistic echo (invoke → manager
+      // broadcast → Tauri event → rAF drain). The echo then replays the
+      // same rail through `pinsChanged`, which is idempotent under
+      // replace semantics: no flicker, no divergence.
+      const messages = get().messages;
+      const convId = Object.keys(messages).find((c) =>
+        (messages[c] ?? []).some((m) => m.id === messageId),
+      );
+      if (convId) {
+        const next = toggleRail(get().pinnedByConv[convId] ?? [], messageId, on);
+        if (next) set((s) => withPins(s.pinnedByConv, convId, next));
+      }
+      void comms.pin(messageId, on).catch(() => {});
+    },
+
+    markRead: (convId) => {
+      const list = get().messages[convId] ?? [];
+      const seq = list[list.length - 1]?.seq;
+      if (seq === undefined) return;
+      void comms.read(convId, seq).catch(() => {});
+    },
+
+    joinChannel: (convId) => {
+      void comms.join(convId).catch(() => {});
+    },
+
+    setConvTab: (convId, tab) => set((s) => ({ convTab: { ...s.convTab, [convId]: tab } })),
+
+    loadDrafts: async (convId) => {
+      try {
+        const list = await comms.drafts(convId);
+        set((s) => ({ drafts: { ...s.drafts, [convId]: list } }));
+      } catch (e) {
+        // A failed revalidation must not blank a good list — the cached
+        // rows stay exactly as they were. Only a conversation that has
+        // never loaded settles to an empty answer.
+        console.warn("comms: drafts fetch failed:", convId, e);
+        set((s) => (s.drafts[convId] ? {} : { drafts: { ...s.drafts, [convId]: [] } }));
+      }
+    },
+
+    adoptDraft: (convId, draft) =>
+      set((s) => {
+        const current = s.drafts[convId] ?? [];
+        if (current.some((d) => d.id === draft.id)) return {};
+        return { drafts: { ...s.drafts, [convId]: [draft, ...current] } };
+      }),
+
+    retryConversation: (convId) => {
+      convAttempts.delete(convId);
+      loadConversation(convId, set);
+    },
+
+    loadOlder: async (convId) => {
+      const list = get().messages[convId] ?? [];
+      const oldest = list[0]?.seq;
+      if (oldest === undefined) return;
+      try {
+        const page = await comms.loadOlder(convId, oldest);
+        set((s) => {
+          const current = s.messages[convId] ?? [];
+          const seen = new Set(current.map((m) => m.id));
+          const fresh = page.messages.filter((m) => !seen.has(m.id));
+          return { messages: { ...s.messages, [convId]: sortBySeq([...fresh, ...current]) } };
+        });
+      } catch {
+        // Nothing to do: the transcript simply does not extend further.
+      }
+    },
+  },
+}));
 
 /**
  * Adopt a window snapshot WITHOUT letting it erase what we hold.
@@ -1113,25 +1112,6 @@ function withoutTyper(
   if (!room || !(userId in room)) return typing;
   const { [userId]: _gone, ...rest } = room;
   return { ...typing, [convId]: rest };
-}
-
-/**
- * Close center tabs whose content belongs to ONE org (draft editors,
- * Spaces canvases — their ids embed conversation ids). Called on every path
- * that moves the org under the renderer: the deliberate `switchOrg` and the
- * boot-reconciliation branch above. Settings is org-agnostic and stays.
- */
-function closeOrgScopedTabs(): void {
-  const layout = useLayoutStore.getState();
-  for (const tab of layout.tabs) {
-    if (ORG_SCOPED_TYPES.has(tab.type)) layout.actions.closeTab(tab.id);
-  }
-  if (layout.destination && ORG_SCOPED_TYPES.has(layout.destination.type)) {
-    layout.actions.closeTab(layout.destination.id);
-  }
-  // The spaces metadata cache is org-scoped too — page trees and authors
-  // for the outgoing org's conversations must not survive into the next.
-  useSpacesStore.getState().actions.clearAll();
 }
 
 function mergeReads(current: ChatReadState[], incoming: ChatReadState[]): ChatReadState[] {

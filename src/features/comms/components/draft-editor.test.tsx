@@ -3,6 +3,7 @@ import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { EditorView } from "@codemirror/view";
+import { emitWindowEvent } from "@/lib/window-events";
 
 const ydoc = new Y.Doc();
 const ytext = ydoc.getText("draft");
@@ -47,7 +48,7 @@ describe("DraftEditor across a theme apply", () => {
     const builds = themeBuilds.mock.calls.length;
 
     await act(async () => {
-      window.dispatchEvent(new CustomEvent("atlas:theme-applied"));
+      emitWindowEvent("atlas:theme-applied");
     });
 
     expect(container.querySelector(".cm-editor")).toBe(editor);

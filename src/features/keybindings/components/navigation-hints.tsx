@@ -204,8 +204,8 @@ function visibleRect(el: HTMLElement): DOMRect | null {
 /** Static, non-interactive caps. All navigation remains in the existing dispatchers. */
 export function NavigationHints() {
   const bindings = useNavigationBindings();
-  const recording = useKeybindingsStore.use.recording();
-  const hintNavigationOpen = useHintStore.use.open();
+  const recording = useKeybindingsStore((s) => s.recording);
+  const hintNavigationOpen = useHintStore((s) => s.open);
   const blocked = recording || hintNavigationOpen;
   const { held, dismiss } = useHeldModifiers(blocked);
   const [badges, setBadges] = useState<Badge[]>([]);

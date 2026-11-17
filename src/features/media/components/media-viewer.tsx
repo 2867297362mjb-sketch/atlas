@@ -1,7 +1,9 @@
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { convertFileSrc } from "@tauri-apps/api/core";
+import { readFileMtimeMs } from "@/features/editor/lib/editor-fs-api";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { classifyFile, type FileKind } from "@/lib/file-types";
 import { MediaViewerView } from "./views/media-viewer-view";
+import { onWindowEvent } from "@/lib/window-events";
 
 interface MediaViewerProps {
   filePath: string;
@@ -26,15 +28,14 @@ export function MediaViewer({ filePath }: MediaViewerProps) {
 
   const [mtime, setMtime] = useState(0);
   const refreshMtime = useCallback(() => {
-    invoke<number>("file_mtime_ms", { path: filePath })
+    readFileMtimeMs(filePath)
       .then((v) => setMtime(v))
       .catch(() => {});
   }, [filePath]);
 
   useEffect(() => {
     refreshMtime();
-    window.addEventListener("atlas:window-active", refreshMtime);
-    return () => window.removeEventListener("atlas:window-active", refreshMtime);
+    return onWindowEvent("atlas:window-active", refreshMtime);
   }, [refreshMtime]);
 
   const src = useMemo(() => {

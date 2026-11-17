@@ -77,7 +77,7 @@ export function SidebarProjectPicker() {
     () => orgProjects.map((p) => ({ id: p.id, name: p.name, path: p.path })),
     [orgProjects],
   );
-  const activeProjectId = useProjectStore.use.activeProjectId();
+  const activeProjectId = useProjectStore((s) => s.activeProjectId);
   const [importOpen, setImportOpen] = useState(false);
   return (
     <>

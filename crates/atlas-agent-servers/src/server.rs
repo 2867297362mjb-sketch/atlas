@@ -141,6 +141,15 @@ pub trait AgentServer: Send + Sync {
     fn default_mode(&self) -> Option<acp::SessionModeId> {
         None
     }
+
+    /// This agent's model catalogue, for when it is NOT running: a refresh
+    /// then has no connection to ask, and still has a list to fetch and
+    /// store for the next connect. A running agent is asked through
+    /// [`AgentConnection::model_catalogue`] instead, which can also say what
+    /// the new list means for the connection.
+    fn model_catalogue(&self) -> Option<Arc<dyn atlas_acp_thread::AgentModelCatalogue>> {
+        None
+    }
 }
 
 impl dyn AgentServer {

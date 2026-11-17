@@ -14,6 +14,7 @@ import { isWindowFocused } from "@/lib/window-focus";
 import { useOrgAgentStore } from "../stores/org-agent-store";
 import { orgAgent } from "./org-agent-api";
 import { openTarget } from "./org-agent-navigate";
+import { onWindowEvent } from "@/lib/window-events";
 
 /** Re-read the effort data at most this often while the window regains focus
  *  (the web's guidance: on open, after a turn, and at most every minute). */
@@ -54,8 +55,7 @@ export function startOrgAgentBridge(): () => void {
 
   // A Deep research report landing: a banner when the window is in the
   // background, a toast that opens it when it is not.
-  const onReport = (e: Event) => {
-    const detail = (e as CustomEvent<{ askId: string; title: string; partial: boolean }>).detail;
+  const offOrgAgentReport = onWindowEvent("atlas:org-agent-report", (detail) => {
     if (!detail) return;
     const body = detail.partial ? `${detail.title} (written from what was found)` : detail.title;
     if (isWindowFocused()) {
@@ -71,13 +71,12 @@ export function startOrgAgentBridge(): () => void {
       title: "Deep research is ready",
       body,
     });
-  };
-  window.addEventListener("atlas:org-agent-report", onReport);
+  });
 
   return () => {
     disposed = true;
     unlisten?.();
     window.removeEventListener("focus", onFocus);
-    window.removeEventListener("atlas:org-agent-report", onReport);
+    offOrgAgentReport();
   };
 }

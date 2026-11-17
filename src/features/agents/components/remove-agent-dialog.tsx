@@ -7,8 +7,8 @@ import { RemoveAgentDialogView } from "./views/remove-agent-dialog-view";
  * the backdrop both dismiss, and a dismissal is "Keep".
  */
 export function RemoveAgentDialog() {
-  const pending = useRemoveAgentConfirmStore.use.pending();
-  const { settle } = useRemoveAgentConfirmStore.use.actions();
+  const pending = useRemoveAgentConfirmStore((s) => s.pending);
+  const { settle } = useRemoveAgentConfirmStore((s) => s.actions);
   if (!pending) return null;
 
   return (

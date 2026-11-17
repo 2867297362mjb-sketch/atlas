@@ -26,6 +26,7 @@ import {
   type MessageGroup as MessageGroupData,
 } from "../lib/derive";
 import type { ChatCall, ChatConversation } from "../types";
+import { useWindowEvent } from "@/lib/window-events";
 
 type Item =
   | {
@@ -48,13 +49,13 @@ export const CommsConversation = memo(function CommsConversation({
    *  which is the way back. */
   showBack?: boolean;
 }) {
-  const me = useCommsStore.use.me();
-  const memberList = useCommsStore.use.members();
-  const online = useCommsStore.use.online();
+  const me = useCommsStore((s) => s.me);
+  const memberList = useCommsStore((s) => s.members);
+  const online = useCommsStore((s) => s.online);
   const messages = useCommsStore((s) => s.messages[conv.id]) ?? EMPTY_MESSAGES;
-  const pinned = useCommsStore.use.pinned();
+  const pinned = useCommsStore((s) => s.pinned);
   const typingRoom = useCommsStore((s) => s.typing[conv.id]);
-  const calls = useCommsStore.use.calls();
+  const calls = useCommsStore((s) => s.calls);
   const loading = useCommsStore((s) => s.loading[conv.id] === true);
   // "Loaded and empty" and "never loaded" look identical in a transcript, so
   // the intro copy is gated on the former — it used to appear over a fetch
@@ -62,7 +63,7 @@ export const CommsConversation = memo(function CommsConversation({
   const hydrated = useCommsStore((s) => s.hydrated[conv.id] === true);
   const loadError = useCommsStore((s) => s.loadError[conv.id]);
   const subTab = useCommsStore((s) => s.convTab[conv.id] ?? "messages");
-  const actions = useCommsStore.use.actions();
+  const actions = useCommsStore((s) => s.actions);
 
   const members = useMemo(() => new Map(memberList.map((m) => [m.id, m])), [memberList]);
 
@@ -189,14 +190,9 @@ export const CommsConversation = memo(function CommsConversation({
 
   // A jump asked for from outside (the organisation agent opening a message
   // it cited): only the conversation it names takes it.
-  useEffect(() => {
-    const onJump = (e: Event) => {
-      const detail = (e as CustomEvent<{ convId?: string; messageId?: string }>).detail;
-      if (detail?.convId === conv.id && detail.messageId) void jumpToMessage(detail.messageId);
-    };
-    window.addEventListener("atlas:comms-jump-to-message", onJump);
-    return () => window.removeEventListener("atlas:comms-jump-to-message", onJump);
-  }, [conv.id, jumpToMessage]);
+  useWindowEvent("atlas:comms-jump-to-message", (detail) => {
+    if (detail?.convId === conv.id && detail.messageId) void jumpToMessage(detail.messageId);
+  });
 
   // Tell the server we are caught up on a conversation switch. The badge
   // itself comes back from the server, never from here. (The transcript lands

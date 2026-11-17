@@ -12,7 +12,7 @@ export interface ActionShortcut {
 /** The first live chord for an action in the active profile, or null when
  *  unbound. Re-renders when the profile changes. */
 export function useActionShortcut(id: ActionId): ActionShortcut | null {
-  const resolved = useKeybindingsStore.use.resolved();
+  const resolved = useKeybindingsStore((s) => s.resolved);
   const first = resolved.byAction.get(id)?.[0];
   if (!first) return null;
   return { keys: displayKeys(first.combo), label: displayLabel(first.combo) };

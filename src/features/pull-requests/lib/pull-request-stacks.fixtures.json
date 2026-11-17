@@ -1,0 +1,358 @@
+[
+  {
+    "name": "a pull request sits on the link whose head is its base, whatever order they were linked in",
+    "links": [
+      {
+        "pr": "acme/shop#2",
+        "head": "c",
+        "base": "b"
+      },
+      {
+        "pr": "acme/shop#9",
+        "head": "other",
+        "base": "main"
+      },
+      {
+        "pr": "acme/shop#1",
+        "head": "a",
+        "base": "main"
+      },
+      {
+        "pr": "acme/shop#3",
+        "head": "b",
+        "base": "a"
+      }
+    ],
+    "stacks": [
+      {
+        "layers": ["acme/shop#9"],
+        "depths": [0]
+      },
+      {
+        "layers": ["acme/shop#1", "acme/shop#3", "acme/shop#2"],
+        "depths": [0, 1, 2]
+      }
+    ]
+  },
+  {
+    "name": "siblings share a depth, in the order they came, each followed by what sits on it",
+    "links": [
+      {
+        "pr": "acme/shop#1",
+        "head": "a",
+        "base": "main"
+      },
+      {
+        "pr": "acme/shop#3",
+        "head": "c",
+        "base": "a"
+      },
+      {
+        "pr": "acme/shop#2",
+        "head": "b",
+        "base": "a"
+      },
+      {
+        "pr": "acme/shop#4",
+        "head": "d",
+        "base": "c"
+      }
+    ],
+    "stacks": [
+      {
+        "layers": ["acme/shop#1", "acme/shop#3", "acme/shop#4", "acme/shop#2"],
+        "depths": [0, 1, 2, 1]
+      }
+    ]
+  },
+  {
+    "name": "a head branch two links share is ambiguous and links nothing",
+    "links": [
+      {
+        "pr": "acme/shop#1",
+        "head": "a",
+        "base": "main"
+      },
+      {
+        "pr": "acme/shop#2",
+        "head": "a",
+        "base": "main"
+      },
+      {
+        "pr": "acme/shop#3",
+        "head": "b",
+        "base": "a"
+      }
+    ],
+    "stacks": [
+      {
+        "layers": ["acme/shop#1"],
+        "depths": [0]
+      },
+      {
+        "layers": ["acme/shop#2"],
+        "depths": [0]
+      },
+      {
+        "layers": ["acme/shop#3"],
+        "depths": [0]
+      }
+    ]
+  },
+  {
+    "name": "a shared head is ambiguous only within one repository",
+    "links": [
+      {
+        "pr": "acme/shop#1",
+        "head": "a",
+        "base": "main"
+      },
+      {
+        "pr": "acme/docs#2",
+        "head": "a",
+        "base": "main"
+      },
+      {
+        "pr": "acme/shop#3",
+        "head": "b",
+        "base": "a"
+      }
+    ],
+    "stacks": [
+      {
+        "layers": ["acme/shop#1", "acme/shop#3"],
+        "depths": [0, 1]
+      },
+      {
+        "layers": ["acme/docs#2"],
+        "depths": [0]
+      }
+    ]
+  },
+  {
+    "name": "repositories never mix, even when their numbers match",
+    "links": [
+      {
+        "pr": "acme/shop#1",
+        "head": "a",
+        "base": "main"
+      },
+      {
+        "pr": "acme/docs#1",
+        "head": "a",
+        "base": "main"
+      },
+      {
+        "pr": "acme/docs#2",
+        "head": "b",
+        "base": "a"
+      },
+      {
+        "pr": "acme/shop#2",
+        "head": "b",
+        "base": "a"
+      }
+    ],
+    "stacks": [
+      {
+        "layers": ["acme/shop#1", "acme/shop#2"],
+        "depths": [0, 1]
+      },
+      {
+        "layers": ["acme/docs#1", "acme/docs#2"],
+        "depths": [0, 1]
+      }
+    ]
+  },
+  {
+    "name": "a repository is compared without case, a branch with it",
+    "links": [
+      {
+        "pr": "Acme/Shop#1",
+        "head": "a",
+        "base": "main"
+      },
+      {
+        "pr": "acme/shop#2",
+        "head": "B",
+        "base": "a"
+      },
+      {
+        "pr": "acme/shop#3",
+        "head": "c",
+        "base": "b"
+      }
+    ],
+    "stacks": [
+      {
+        "layers": ["Acme/Shop#1", "acme/shop#2"],
+        "depths": [0, 1]
+      },
+      {
+        "layers": ["acme/shop#3"],
+        "depths": [0]
+      }
+    ]
+  },
+  {
+    "name": "closed and merged links take part like open ones",
+    "links": [
+      {
+        "pr": "acme/shop#1",
+        "head": "a",
+        "base": "main",
+        "state": "merged"
+      },
+      {
+        "pr": "acme/shop#2",
+        "head": "b",
+        "base": "a",
+        "state": "closed"
+      },
+      {
+        "pr": "acme/shop#3",
+        "head": "c",
+        "base": "b",
+        "state": "open"
+      }
+    ],
+    "stacks": [
+      {
+        "layers": ["acme/shop#1", "acme/shop#2", "acme/shop#3"],
+        "depths": [0, 1, 2]
+      }
+    ]
+  },
+  {
+    "name": "two links based on each other have no bottom, so each stands alone",
+    "links": [
+      {
+        "pr": "acme/shop#1",
+        "head": "a",
+        "base": "b"
+      },
+      {
+        "pr": "acme/shop#9",
+        "head": "z",
+        "base": "main"
+      },
+      {
+        "pr": "acme/shop#2",
+        "head": "b",
+        "base": "a"
+      }
+    ],
+    "stacks": [
+      {
+        "layers": ["acme/shop#9"],
+        "depths": [0]
+      },
+      {
+        "layers": ["acme/shop#1"],
+        "depths": [0]
+      },
+      {
+        "layers": ["acme/shop#2"],
+        "depths": [0]
+      }
+    ]
+  },
+  {
+    "name": "a link sitting on a cycle stands alone with it",
+    "links": [
+      {
+        "pr": "acme/shop#1",
+        "head": "a",
+        "base": "b"
+      },
+      {
+        "pr": "acme/shop#2",
+        "head": "b",
+        "base": "a"
+      },
+      {
+        "pr": "acme/shop#3",
+        "head": "c",
+        "base": "a"
+      }
+    ],
+    "stacks": [
+      {
+        "layers": ["acme/shop#1"],
+        "depths": [0]
+      },
+      {
+        "layers": ["acme/shop#2"],
+        "depths": [0]
+      },
+      {
+        "layers": ["acme/shop#3"],
+        "depths": [0]
+      }
+    ]
+  },
+  {
+    "name": "a link not read yet, or with no head branch, links nothing",
+    "links": [
+      {
+        "pr": "acme/shop#1",
+        "head": null,
+        "base": null
+      },
+      {
+        "pr": "acme/shop#2",
+        "head": "b",
+        "base": "main"
+      },
+      {
+        "pr": "acme/shop#3",
+        "head": "",
+        "base": "b"
+      },
+      {
+        "pr": "acme/shop#4",
+        "head": "d",
+        "base": ""
+      }
+    ],
+    "stacks": [
+      {
+        "layers": ["acme/shop#1"],
+        "depths": [0]
+      },
+      {
+        "layers": ["acme/shop#2"],
+        "depths": [0]
+      },
+      {
+        "layers": ["acme/shop#3"],
+        "depths": [0]
+      },
+      {
+        "layers": ["acme/shop#4"],
+        "depths": [0]
+      }
+    ]
+  },
+  {
+    "name": "a link based on its own head is a bottom, never its own parent",
+    "links": [
+      {
+        "pr": "acme/shop#1",
+        "head": "a",
+        "base": "a"
+      },
+      {
+        "pr": "acme/shop#2",
+        "head": "b",
+        "base": "a"
+      }
+    ],
+    "stacks": [
+      {
+        "layers": ["acme/shop#1", "acme/shop#2"],
+        "depths": [0, 1]
+      }
+    ]
+  }
+]

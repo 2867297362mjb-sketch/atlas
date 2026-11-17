@@ -15,7 +15,7 @@
 //    the sidebar's top session has three linked (created, detected, manual);
 //    `pull-request-list-signed-out` is the list with `gh` signed out;
 //  - `session-pull-requests` — the top session's pull request panel: three
-//    linked, number 412 watched, number 405 chained on number 412's branch.
+//    linked, number 412 watched, number 405 stacked on number 412's branch.
 //
 // Writes are real for the page's life (see `fixtures/pull-requests.ts`). The
 // agent actions work too: Fix and Explain open a session with the task in its
@@ -146,11 +146,11 @@ export const pullRequestListSignedOut = pullRequestListScenario(
 );
 
 /** The top session's pull request panel (`session-pull-requests:th-01`):
- *  three linked, number 412 watched and number 405 chained on it. */
+ *  three linked, number 412 watched and number 405 stacked on it. */
 export const sessionPullRequests: Scenario = {
   name: "session-pull-requests",
   description:
-    "The top session's pull request panel: three linked, one watched, two chained by base branch.",
+    "The top session's pull request panel: three linked, one watched, two stacked by base branch.",
   setup: async () => {
     const { openSessionPullRequestsTab } =
       await import("@/features/pull-requests/lib/open-session-pull-requests-tab");

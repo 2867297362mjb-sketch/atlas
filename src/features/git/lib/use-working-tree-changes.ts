@@ -18,6 +18,7 @@ import {
 } from "@/features/explorer/lib/git-status-presentation";
 import { useDiffPanelStore } from "../stores/diff-panel-store";
 import { getDiffPreview, type DiffFileStat, type DiffFileStatus } from "./git-review-api";
+import type { GitChangedPayload } from "@/features/git/lib/git-changed-events";
 
 /** The porcelain letter each status paints as, for `gitStatusPresentation`. */
 const PORCELAIN: Record<DiffFileStatus, string> = {
@@ -65,7 +66,7 @@ export function workingTreeChanges(
 
 export function useWorkingTreeChanges(repoPath: string | null): WorkingTreeChanges {
   const baseRef = useDiffPanelStore((s) => (repoPath ? (s.baseRef[repoPath] ?? null) : null));
-  const storedWhitespace = useDiffPanelStore.use.ignoreWhitespace();
+  const storedWhitespace = useDiffPanelStore((s) => s.ignoreWhitespace);
   const settingWhitespace = useSettingsStore((s) => s.settings.diffIgnoreWhitespace);
   const ignoreWhitespace = storedWhitespace ?? settingWhitespace;
 
@@ -87,7 +88,7 @@ export function useWorkingTreeChanges(repoPath: string | null): WorkingTreeChang
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => void refetch(), 250);
     };
-    const offGit = listen<{ project: string }>("atlas:git-changed", (e) => {
+    const offGit = listen<GitChangedPayload>("atlas:git-changed", (e) => {
       if (e.payload?.project === repoPath) soon();
     });
     const offFs = listen("atlas:explorer:changed", soon);

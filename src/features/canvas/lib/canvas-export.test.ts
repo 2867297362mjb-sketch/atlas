@@ -2,14 +2,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactFlowInstance } from "@xyflow/react";
 
-const { save, invoke, toPng } = vi.hoisted(() => ({
+const { save, toPng } = vi.hoisted(() => ({
   save: vi.fn(async () => "/tmp/out.png"),
-  invoke: vi.fn(async (_cmd: string, _args?: unknown) => undefined),
   toPng: vi.fn(async (_el: HTMLElement, _opts?: unknown) => "data:image/png;base64,AAAA"),
 }));
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ save }));
-vi.mock("@tauri-apps/api/core", () => ({ invoke }));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+import { tauri } from "@/test/tauri-fake";
+
+const invoke = tauri.invoke;
 vi.mock("html-to-image", () => ({ toPng, toJpeg: vi.fn(), toSvg: vi.fn() }));
 vi.mock("jspdf", () => ({ jsPDF: vi.fn() }));
 vi.mock("@/features/theme/theme-values", () => ({ themeBase: () => "canvas-bg" }));

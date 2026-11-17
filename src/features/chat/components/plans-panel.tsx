@@ -7,6 +7,7 @@ import type { PlanRecord } from "../lib/plans";
 import { loadPlans } from "../lib/plans-api";
 import { SidePanelFrameView } from "./views/side-panel-frame-view";
 import { PlansPanelView } from "./views/plans-panel-view";
+import { onWindowEvent } from "@/lib/window-events";
 
 interface PlansPanelProps {
   onClose: () => void;
@@ -20,12 +21,12 @@ interface PlansPanelProps {
  * bash-history panel's right-side slide-in overlay.
  */
 export function PlansPanel({ onClose }: PlansPanelProps) {
-  const plansPanel = useLayoutStore.use.plansPanel();
+  const plansPanel = useLayoutStore((s) => s.plansPanel);
   // The session column's window bar floats over this pane (z-titlebar); start
   // below it, or the bar covers this panel's header and eats its clicks.
   const topInset = usePaneTopInset();
-  const { setPlansPanelWidth } = useLayoutStore.use.actions();
-  const projectPath = useAppStore.use.currentProject()?.path ?? null;
+  const { setPlansPanelWidth } = useLayoutStore((s) => s.actions);
+  const projectPath = useAppStore((s) => s.currentProject)?.path ?? null;
 
   const [plans, setPlans] = useState<PlanRecord[]>([]);
 
@@ -40,8 +41,7 @@ export function PlansPanel({ onClose }: PlansPanelProps) {
   useEffect(() => {
     load();
     const onSaved = () => load();
-    window.addEventListener("atlas:plan-saved", onSaved);
-    return () => window.removeEventListener("atlas:plan-saved", onSaved);
+    return onWindowEvent("atlas:plan-saved", onSaved);
   }, [load]);
 
   return (

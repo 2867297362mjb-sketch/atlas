@@ -1,89 +1,35 @@
-//! Thread-model tests. They drive a `StubAgentConnection` through plain method
-//! calls, so the assertions are about behaviour rather than rendering.
+//! Thread-model tests. They drive the shared `FakeConnection` through plain
+//! method calls, so the assertions are about behaviour rather than rendering.
 
-use std::any::Any;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use agent_client_protocol::schema::v1 as acp;
-use anyhow::Result;
+use atlas_acp_thread::test_support::{FakeConnection, FakeHandle};
 use atlas_acp_thread::*;
-use futures::future::BoxFuture;
 
-// ---------------------------------------------------------------- stub agent
-
-/// A scriptable in-memory connection that counts the cancels it receives.
-struct StubAgentConnection {
-    auth_methods: Vec<acp::AuthMethod>,
-    cancel_count: AtomicUsize,
-}
-
-impl StubAgentConnection {
-    fn new() -> Arc<Self> {
-        Arc::new(Self {
-            auth_methods: Vec::new(),
-            cancel_count: AtomicUsize::new(0),
-        })
-    }
-}
-
-impl AgentConnection for StubAgentConnection {
-    fn agent_id(&self) -> AgentId {
-        AgentId::new("stub")
-    }
-
-    fn telemetry_id(&self) -> Arc<str> {
-        "stub".into()
-    }
-
-    fn new_session(
-        self: Arc<Self>,
-        _work_dirs: Vec<std::path::PathBuf>,
-    ) -> BoxFuture<'static, Result<AcpThreadHandle>> {
-        Box::pin(async { Err(anyhow::anyhow!("not used in these tests")) })
-    }
-
-    fn auth_methods(&self) -> &[acp::AuthMethod] {
-        &self.auth_methods
-    }
-
-    fn authenticate(&self, _method: acp::AuthMethodId) -> BoxFuture<'static, Result<()>> {
-        Box::pin(async { Ok(()) })
-    }
-
-    fn prompt(
-        &self,
-        _params: acp::PromptRequest,
-    ) -> BoxFuture<'static, Result<acp::PromptResponse>> {
-        Box::pin(async { Err(anyhow::anyhow!("not used in these tests")) })
-    }
-
-    fn cancel(&self, _session_id: &acp::SessionId) {
-        self.cancel_count.fetch_add(1, Ordering::SeqCst);
-    }
-
-    fn into_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
-        self
-    }
+/// A connection these tests never open a session or run a turn on: both are
+/// scripted to fail, so one that did would say so.
+fn stub_connection() -> (Arc<FakeConnection>, FakeHandle) {
+    FakeConnection::builder()
+        .agent("stub")
+        .fail_new_session("not used in these tests")
+        .fail_prompts("not used in these tests")
+        .build()
 }
 
 // ------------------------------------------------------------------ fixtures
 
-fn new_thread() -> (
-    AcpThread,
-    EventStream<AcpThreadEvent>,
-    Arc<StubAgentConnection>,
-) {
+fn new_thread() -> (AcpThread, EventStream<AcpThreadEvent>, FakeHandle) {
     let (tx, rx) = event_channel();
-    let connection = StubAgentConnection::new();
+    let (connection, handle) = stub_connection();
     let thread = AcpThread::new(
         acp::SessionId::new("test-session"),
-        connection.clone(),
+        connection,
         Vec::new(),
         None,
         tx,
     );
-    (thread, rx, connection)
+    (thread, rx, handle)
 }
 
 fn text_block(text: &str) -> acp::ContentBlock {
@@ -568,7 +514,7 @@ async fn cancel_resolves_every_pending_permission_and_tells_the_connection() {
 
     assert!(matches!(waiter.await, RequestPermissionOutcome::Cancelled));
     assert_eq!(status_of(&thread, "t1"), "Canceled");
-    assert_eq!(connection.cancel_count.load(Ordering::SeqCst), 1);
+    assert_eq!(connection.cancels(), 1);
     assert!(!thread.is_generating());
 }
 
@@ -614,7 +560,7 @@ async fn cancel_after_an_error_still_resolves_an_open_permission_prompt() {
     assert_eq!(status_of(&thread, "t1"), "Canceled");
     // Still no `session/cancel`: there is no turn for the agent to cancel. The
     // fix is about resolving OUR state, not about talking to a dead peer.
-    assert_eq!(connection.cancel_count.load(Ordering::SeqCst), 0);
+    assert_eq!(connection.cancels(), 0);
 }
 
 /// Regression, ATL-213, the follow-up variant. `begin_turn()` cancels BEFORE it
@@ -799,7 +745,7 @@ async fn cancelling_an_idle_thread_resolves_entries_without_notifying_the_agent(
     thread.cancel();
 
     assert_eq!(status_of(&thread, "t1"), "Canceled");
-    assert_eq!(connection.cancel_count.load(Ordering::SeqCst), 0);
+    assert_eq!(connection.cancels(), 0);
 }
 
 /// A follow-up send cancels the
@@ -837,7 +783,7 @@ async fn cancelling_an_idle_thread_does_not_notify_the_agent() {
 
     thread.cancel();
 
-    assert_eq!(connection.cancel_count.load(Ordering::SeqCst), 0);
+    assert_eq!(connection.cancels(), 0);
 }
 
 // ------------------------------------------------------------------ plan/usage
@@ -1063,7 +1009,7 @@ async fn a_seeded_machinery_title_is_dropped_at_construction() {
     let (tx, _rx) = event_channel();
     let thread = AcpThread::new(
         acp::SessionId::new("test-session"),
-        StubAgentConnection::new(),
+        stub_connection().0,
         Vec::new(),
         Some(Arc::from("Atlas next-steps")),
         tx,
@@ -1073,7 +1019,7 @@ async fn a_seeded_machinery_title_is_dropped_at_construction() {
     let (tx, _rx) = event_channel();
     let thread = AcpThread::new(
         acp::SessionId::new("test-session"),
-        StubAgentConnection::new(),
+        stub_connection().0,
         Vec::new(),
         Some(Arc::from("Rename the parser")),
         tx,
@@ -1130,7 +1076,7 @@ fn an_attached_root_widens_reads_and_writes_at_its_access_and_never_joins_the_ow
     let docs = PathBuf::from("/work/docs");
     let mut thread = AcpThread::new(
         acp::SessionId::new("test-session"),
-        StubAgentConnection::new(),
+        stub_connection().0,
         vec![app.clone(), server.clone()],
         None,
         tx,

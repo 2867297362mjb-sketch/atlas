@@ -5,6 +5,8 @@ edition = "2021"
 license = "Apache-2.0"
 
 [dependencies]
+# `replace_file`: the crash-safe write of an imported theme.
+atlas-fs = { path = "../atlas-fs" }
 # `~/.config/atlas` vs `~/.config/atlas-dev`: whose config this process owns.
 atlas-profile = { path = "../atlas-profile" }
 dirs = { workspace = true }

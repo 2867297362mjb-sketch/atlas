@@ -2,7 +2,7 @@
  * Agent notifications: the agent's source adapter onto the shared
  * notification pipeline.
  *
- * ENTRY POINT — `notifyAgentEvent(delta)`. App.tsx's session-delta listener
+ * ENTRY POINT — `notifyAgentEvent(delta)`. The agent event router (`agent-event-router.ts`)
  * forwards `permission_request`, `elicitation_requested`, `turn_finished`, `turn_failed`,
  * `agent_disconnected` and the warning deltas (`context_usage`, `rate_limits`,
  * `retry_status`) here and does nothing else notification-related.
@@ -13,7 +13,7 @@
  * a newer send) and user-cancelled turns never notify.
  *
  * A finish reads the turn's final text, duration and edited files from the chat
- * store, which only has them once `turn_finished` is applied — App.tsx flushes
+ * store, which only has them once `turn_finished` is applied — the router flushes
  * its delta buffer before calling in.
  *
  * Bursts: OS banners for `agent-done` are held for a short window and leave
@@ -35,6 +35,7 @@ import {
   permissionDedupeKey,
   questionDedupeKey,
   retryDedupeKey,
+  toAgentErrorKind,
   type AgentCtx,
   type AgentNotifyEvent,
 } from "./agent-notifier-rules";
@@ -219,7 +220,7 @@ function toNotifyEvent(env: AgentDelta, session: ChatSession): AgentNotifyEvent 
       return {
         type: "turn_failed",
         error: env.error,
-        errorKind: env.error_kind,
+        errorKind: toAgentErrorKind(env.error_kind),
         nonce: nonceFor(env.turn_seq),
       };
     case "agent_disconnected":

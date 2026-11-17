@@ -134,8 +134,8 @@ export function SpaceActionPill({
   containerRef: RefObject<HTMLElement | null>;
 }) {
   const rf = useReactFlow();
-  const me = useCommsStore.use.me();
-  const members = useCommsStore.use.members();
+  const me = useCommsStore((s) => s.me);
+  const members = useCommsStore((s) => s.members);
   const orgId = useCommsStore((s) => s.connection.orgId);
   const memberOf = (id: string) => members.find((m) => m.id === id) ?? null;
 

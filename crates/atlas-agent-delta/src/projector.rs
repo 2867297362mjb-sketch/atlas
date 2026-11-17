@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use agent_client_protocol::schema::v1 as acp;
 use atlas_acp_thread::{
     AcpThread, AcpThreadEvent, AcpThreadHandle, AgentThreadEntry, ElicitationEntryId, EventStream,
-    LoadError, TerminalAppend, ToolCallStatus as ThreadToolCallStatus,
+    LoadError, TerminalAppend,
 };
 use atlas_agent_servers::ThreadEventSink;
 use atlas_agent_wire::{
@@ -356,11 +356,6 @@ impl DeltaProjector {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .len()
-    }
-
-    /// Subscribe to every delta in-process, without going through the host sink.
-    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<SessionDeltaEnvelope> {
-        self.emitter.subscribe()
     }
 
     fn notify_observer(
@@ -1101,13 +1096,23 @@ impl SessionProjection {
                 deltas
             }
             AcpThreadEvent::EntryUpdated(ix) => {
+                let known = self.entries.len();
                 let mut deltas = self.sync_entries();
                 let mut updated = self.update_entry(ix);
                 if lock_thread(&self.thread).entry_time_approximate(ix) {
                     mark_time_approximate(&mut updated);
                 }
                 deltas.extend(updated);
-                deltas.extend(self.sync_subagents());
+                // Subagents are derived from tool calls alone, and deriving
+                // them walks the whole thread. This arm runs once per streamed
+                // chunk, so a text or thought chunk skips the walk: it cannot
+                // have changed one. An entry that arrived with this event may
+                // be a tool call, so that still syncs.
+                if self.entries.len() != known
+                    || matches!(self.entries.get(ix), Some(Projected::ToolCall { .. }))
+                {
+                    deltas.extend(self.sync_subagents());
+                }
                 deltas
             }
             AcpThreadEvent::EntriesRemoved(range) => {
@@ -1794,23 +1799,7 @@ impl SessionProjection {
     }
 
     fn current_status(&self) -> SessionStatus {
-        let thread = lock_thread(&self.thread);
-        let waiting = thread.entries().iter().any(|entry| {
-            matches!(
-                entry,
-                AgentThreadEntry::ToolCall(call)
-                    if matches!(call.status, ThreadToolCallStatus::WaitingForConfirmation { .. })
-            )
-        });
-        if waiting {
-            SessionStatus::Waiting
-        } else if thread.is_generating() {
-            SessionStatus::Running
-        } else if thread.had_error() {
-            SessionStatus::Error
-        } else {
-            SessionStatus::Idle
-        }
+        project::session_status(&lock_thread(&self.thread))
     }
 }
 

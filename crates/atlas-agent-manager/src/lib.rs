@@ -1,7 +1,9 @@
 //! The manager: who is connected, and which sessions are open on them.
 //!
 //! It owns both the connection table and session ownership, because Atlas has
-//! no per-agent view to hold the latter.
+//! no per-agent view to hold the latter. [`AgentManager`] keeps each session's
+//! thread; [`SessionRegistry`] is the one owner of a session's lifecycle on top
+//! of it — bound, held, and ended in one place (`sessions.rs`).
 //!
 //! It links the three lower crates: sessions come from
 //! `atlas-acp-thread`, connections from `atlas-agent-servers`, and installed
@@ -40,10 +42,15 @@
 
 pub mod catalog;
 pub mod manager;
+pub mod sessions;
 
 pub use catalog::AgentCatalog;
 pub use manager::{
     Agent, AgentConnectedState, AgentConnectionEntry, AgentConnectionStatus, AgentManager,
     AgentManagerEvent, ConnectHandle, Deadlines, ResumeMode, ResumedSession, SessionHandle,
     CONNECT_DEADLINE, RESTART_STALE_AFTER,
+};
+pub use sessions::{
+    AgentEnd, BindRefused, BindTicket, Closed, EndKind, Ended, FollowUp, Released, Residue,
+    SessionExtra, SessionInfo, SessionMeta, SessionRegistry,
 };

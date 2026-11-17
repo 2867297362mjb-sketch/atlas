@@ -3,7 +3,7 @@
 // loading hint, with the effects that keep them current while it is open.
 
 import { useEffect, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { onFileIndexUpdated } from "@/features/file-picker/lib/file-picker-api";
 
 import {
   listMessagesInPastSession,
@@ -14,9 +14,9 @@ import {
   type MentionKind,
   type PastSessionRef,
 } from "@/features/chat/lib/mentions";
-import { SKILLS_CHANGED_EVENT } from "@/features/skills/lib/skills-events";
 import { ensureFileIndex } from "@/features/file-picker/lib/file-picker-api";
 import { activeProjectId } from "@/features/projects/lib/active-project";
+import { onWindowEvent } from "@/lib/window-events";
 
 export function useMentionSearch({
   open,
@@ -165,12 +165,12 @@ export function useMentionSearch({
     if (!open) return;
     let cancelled = false;
     let unlisten: (() => void) | null = null;
-    void listen<{ workspaceId?: string }>("atlas:fileindex:updated", (ev) => {
+    void onFileIndexUpdated((payload) => {
       if (cancelled) return;
       // The event carries the owning project — a background reindex for
       // ANOTHER project must not clear this picker's loading hint or
       // re-fire its search.
-      const ws = ev.payload?.workspaceId;
+      const ws = payload?.workspaceId;
       if (ws && ws !== activeProjectId()) return;
       setIndexing(false);
       setIndexNonce((n) => n + 1);
@@ -190,8 +190,7 @@ export function useMentionSearch({
   useEffect(() => {
     if (!open) return;
     const onChanged = () => setIndexNonce((n) => n + 1);
-    window.addEventListener(SKILLS_CHANGED_EVENT, onChanged);
-    return () => window.removeEventListener(SKILLS_CHANGED_EVENT, onChanged);
+    return onWindowEvent("atlas:skills-changed", onChanged);
   }, [open]);
 
   return {

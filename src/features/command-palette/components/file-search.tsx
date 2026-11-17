@@ -10,7 +10,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Film, Image as ImageIcon, FileCode, FileX, Music } from "lucide-react";
-import { listen } from "@tauri-apps/api/event";
+import { onFileIndexUpdated } from "@/features/file-picker/lib/file-picker-api";
 import { useAppStore } from "@/features/app/stores/app-store";
 import { useLayoutStore } from "@/features/layout/stores/layout-store";
 import { useRecentFilesStore } from "@/features/chat/stores/recent-files-store";
@@ -38,7 +38,7 @@ import { CommandPaletteContent } from "./command-palette-content";
 const DEBOUNCE_MS = 40;
 
 export function FileSearch(props: { onClose: () => void; escapeLabel: string }) {
-  const project = useAppStore.use.currentProject();
+  const project = useAppStore((s) => s.currentProject);
   const projectPath = project?.path ?? null;
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<FileMatch[]>(() =>
@@ -50,7 +50,7 @@ export function FileSearch(props: { onClose: () => void; escapeLabel: string }) 
   const searchSeq = useRef(0);
 
   const openFiles = useLayoutStore((s) => editorPaths(s.tabs));
-  const recentFiles = useRecentFilesStore.use.items();
+  const recentFiles = useRecentFilesStore((s) => s.items);
 
   const runSearch = (q: string) => {
     const seq = ++searchSeq.current;
@@ -95,7 +95,7 @@ export function FileSearch(props: { onClose: () => void; escapeLabel: string }) 
     if (!projectPath) return;
     let unlisten: (() => void) | null = null;
     let cancelled = false;
-    void listen<{ count: number }>("atlas:fileindex:updated", () => {
+    void onFileIndexUpdated(() => {
       if (cancelled) return;
       setIndexing(false);
       void runSearch(queryRef.current);

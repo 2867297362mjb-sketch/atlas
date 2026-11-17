@@ -13,14 +13,15 @@ use std::sync::Arc;
 
 use agent_client_protocol::schema::v1 as acp;
 use anyhow::Result;
-use atlas_acp_thread::{AgentConnection, AgentId};
+use atlas_acp_thread::{AgentConnection, AgentId, AgentModelCatalogue};
 use atlas_agent_servers::{AgentServer, AgentServerDelegate, ConnectOptions};
 use atlas_engine_login::auth::ExternalAuth;
 use futures::future::BoxFuture;
 use futures::FutureExt;
 
 use crate::engine::catalog_cache::{CatalogueFetcher, GatewayCatalogueFetcher};
-use crate::engine::config::EngineSettings;
+use crate::engine::catalogue_refresh::CatalogueRefresh;
+use crate::engine::config::{EngineSettings, WireDialect};
 use crate::engine::connection::EngineConnection;
 use crate::ATLAS_AGENT_ID;
 
@@ -144,6 +145,27 @@ impl AgentServer for EngineAgentServer {
 
     fn default_mode(&self) -> Option<acp::SessionModeId> {
         self.default_mode.clone()
+    }
+
+    /// The picker's Refresh with no engine running: the gateway's list is
+    /// fetched and cached, and the next connect reads it (ADR-0007). The
+    /// same fetcher `connect` would use, resolved as lazily. `None` on the
+    /// Responses dialect, whose one pinned model is not a list the seam
+    /// owns.
+    fn model_catalogue(&self) -> Option<Arc<dyn AgentModelCatalogue>> {
+        if self.settings.provider.wire != WireDialect::Chat {
+            return None;
+        }
+        let fetcher = self.catalogue.clone().unwrap_or_else(|| {
+            Arc::new(GatewayCatalogueFetcher::registered(
+                self.settings.provider.base_url.clone(),
+            ))
+        });
+        Some(Arc::new(CatalogueRefresh {
+            home: self.settings.home.clone(),
+            fetcher,
+            live: None,
+        }))
     }
 }
 

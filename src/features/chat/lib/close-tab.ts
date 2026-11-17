@@ -3,7 +3,7 @@ import { useLayoutStore } from "@/features/layout/stores/layout-store";
 import { useTerminalStore } from "@/features/terminal/stores/terminal-store";
 import { useChatStore } from "@/features/chat/stores/chat-store";
 import { agents } from "./agents-api";
-import { forgetQueueHolds } from "./turn-queue";
+import { sessionSend } from "./session-send";
 import { useRcStore } from "@/features/chat/stores/rc-store";
 import { clearSessionAttention } from "@/features/notifications/lib/agent-notifier";
 import { isBusyAgentStatus } from "@/types/agent";
@@ -93,7 +93,7 @@ function finishClose(tabId: string): void {
       if (room?.state === "ended") useRcStore.getState().actions.forget(s.acpSessionId);
     }
     chat.actions.removeSession(tabId);
-    forgetQueueHolds(tabId);
+    sessionSend.forget(tabId);
     // The closed chat's live row was the sidebar's only handle on it — re-list
     // from disk so it lands in history instead of vanishing.
     if (s.workingDirectory) {

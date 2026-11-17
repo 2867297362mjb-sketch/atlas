@@ -1,14 +1,9 @@
 // @vitest-environment happy-dom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const ipc = vi.hoisted(() => ({ calls: [] as Array<[string, unknown]> }));
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(async (cmd: string, args: unknown) => {
-    ipc.calls.push([cmd, args]);
-    return null;
-  }),
-}));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}), emit: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
+import { tauri } from "@/test/tauri-fake";
 
 import { groupOf, useLayoutStore, type Tab } from "./layout-store";
 
@@ -38,7 +33,7 @@ const column = (gid: string) =>
     .map((t) => t.id);
 
 beforeEach(() => {
-  ipc.calls = [];
+  tauri.reset();
   useLayoutStore.setState({
     // Interleaved on purpose: a column's tabs need not be contiguous in `tabs`.
     tabs: [
@@ -101,9 +96,9 @@ describe("moveTab", () => {
   it("persists: the project's layout file saves the new order", () => {
     actions().moveTab("a", 2);
     actions().saveEditorState("/tmp/project");
-    const save = ipc.calls.find(([cmd]) => cmd === "save_editor_state");
+    const [save] = tauri.calls("save_editor_state");
     expect(save).toBeDefined();
-    const state = JSON.parse((save![1] as { stateJson: string }).stateJson) as {
+    const state = JSON.parse(save.args.stateJson) as {
       tabs: Array<{ id: string; groupId: string }>;
     };
     expect(state.tabs.filter((t) => t.groupId === "g2").map((t) => t.id)).toEqual(["b", "c", "a"]);

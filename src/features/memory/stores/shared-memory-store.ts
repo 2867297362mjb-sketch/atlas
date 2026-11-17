@@ -26,7 +26,6 @@
 
 import { create } from "zustand";
 import { listen } from "@tauri-apps/api/event";
-import { createSelectors } from "@/lib/create-selectors";
 import {
   sharedMemory,
   type ClaudeImportPreview,
@@ -142,133 +141,131 @@ function subscribe(onChange: () => void) {
   });
 }
 
-export const useSharedMemoryStore = createSelectors(
-  create<SharedMemoryStore>((set, get) => ({
-    projectPath: null,
-    events: [],
-    entries: [],
-    loaded: false,
-    error: null,
-    review: EMPTY_REVIEW,
-    reviewError: null,
-    actions: {
-      load: async (projectPath) => {
-        // Another project's record never shows under this one. The same
-        // project, loaded again (the tab re-opened), keeps what it shows
-        // while it re-reads.
-        if (get().projectPath !== projectPath) {
-          set({
-            projectPath,
-            events: [],
-            entries: [],
-            review: EMPTY_REVIEW,
-            loaded: false,
-            error: null,
-            reviewError: null,
-          });
-        }
-        subscribe(() => void get().actions.refresh());
-        const { record, review } = await pull(projectPath);
-        // Ignore a stale response if the project changed mid-flight.
-        if (get().projectPath !== projectPath) return;
+export const useSharedMemoryStore = create<SharedMemoryStore>((set, get) => ({
+  projectPath: null,
+  events: [],
+  entries: [],
+  loaded: false,
+  error: null,
+  review: EMPTY_REVIEW,
+  reviewError: null,
+  actions: {
+    load: async (projectPath) => {
+      // Another project's record never shows under this one. The same
+      // project, loaded again (the tab re-opened), keeps what it shows
+      // while it re-reads.
+      if (get().projectPath !== projectPath) {
         set({
-          ...(record.ok
-            ? { events: record.events, entries: record.entries, error: null }
-            : { events: [], entries: [], error: record.error }),
-          ...review,
-          ...(review.reviewError ? { review: EMPTY_REVIEW } : {}),
-          loaded: true,
+          projectPath,
+          events: [],
+          entries: [],
+          review: EMPTY_REVIEW,
+          loaded: false,
+          error: null,
+          reviewError: null,
         });
-      },
-      refresh: async () => {
-        // A burst of writes (an agent editing many files) becomes one pull in
-        // flight plus at most one after it, never one pull per write.
-        if (refreshing) {
-          refreshAgain = true;
-          return refreshing;
-        }
-        refreshing = (async () => {
-          do {
-            refreshAgain = false;
-            const { projectPath } = get();
-            if (!projectPath) return;
-            const { record, review } = await pull(projectPath);
-            if (get().projectPath !== projectPath) continue;
-            // A failed read keeps the last good one.
-            set({
-              ...(record.ok
-                ? { events: record.events, entries: record.entries, error: null, loaded: true }
-                : {}),
-              ...review,
-            });
-          } while (refreshAgain);
-        })().finally(() => {
-          refreshing = null;
-        });
-        return refreshing;
-      },
-      clear: async () => {
-        const { projectPath } = get();
-        if (!projectPath) return;
-        await sharedMemory.clear(projectPath);
-        if (get().projectPath !== projectPath) return;
-        set({ events: [], entries: [], review: EMPTY_REVIEW });
-      },
-      editEntry: async (id, content) => {
-        const { projectPath } = get();
-        if (!projectPath) return;
-        const edited = await sharedMemory.editEntry(projectPath, id, content);
-        if (get().projectPath !== projectPath) return;
-        set({ entries: get().entries.map((e) => (e.id === id ? edited : e)) });
-        // The state view and event log changed too; memory-changed also
-        // re-pulls, this covers a runtime that does not deliver it.
-        await get().actions.refresh();
-      },
-      forgetEntry: async (id) => {
-        const { projectPath } = get();
-        if (!projectPath) return;
-        await sharedMemory.forgetEntry(projectPath, id);
-        if (get().projectPath !== projectPath) return;
-        set({ entries: get().entries.filter((e) => e.id !== id) });
-        await get().actions.refresh();
-      },
-      purgeEntry: async (id) => {
-        const { projectPath } = get();
-        if (!projectPath) return;
-        await sharedMemory.purgeEntry(projectPath, id);
-        if (get().projectPath !== projectPath) return;
-        set({ entries: get().entries.filter((e) => e.id !== id) });
-        await get().actions.refresh();
-      },
-      feedback: async (id, verdict) => {
-        const { projectPath } = get();
-        if (!projectPath) return;
-        const updated = await sharedMemory.feedback(projectPath, id, verdict);
-        if (get().projectPath !== projectPath) return;
-        if (updated) set({ entries: get().entries.map((e) => (e.id === id ? updated : e)) });
-        await get().actions.refresh();
-      },
-      reviewAction: async (run) => {
-        const { projectPath } = get();
-        if (!projectPath) return null;
-        try {
-          return await run(projectPath);
-        } finally {
-          await get().actions.refresh();
-        }
-      },
-      previewClaudeImport: async () => {
-        const { projectPath } = get();
-        if (!projectPath) return null;
-        return sharedMemory.previewClaudeImport(projectPath);
-      },
-      importClaude: async (ids) => {
-        const { projectPath } = get();
-        if (!projectPath) return 0;
-        const written = await sharedMemory.confirmClaudeImport(projectPath, ids);
-        await get().actions.refresh();
-        return written;
-      },
+      }
+      subscribe(() => void get().actions.refresh());
+      const { record, review } = await pull(projectPath);
+      // Ignore a stale response if the project changed mid-flight.
+      if (get().projectPath !== projectPath) return;
+      set({
+        ...(record.ok
+          ? { events: record.events, entries: record.entries, error: null }
+          : { events: [], entries: [], error: record.error }),
+        ...review,
+        ...(review.reviewError ? { review: EMPTY_REVIEW } : {}),
+        loaded: true,
+      });
     },
-  })),
-);
+    refresh: async () => {
+      // A burst of writes (an agent editing many files) becomes one pull in
+      // flight plus at most one after it, never one pull per write.
+      if (refreshing) {
+        refreshAgain = true;
+        return refreshing;
+      }
+      refreshing = (async () => {
+        do {
+          refreshAgain = false;
+          const { projectPath } = get();
+          if (!projectPath) return;
+          const { record, review } = await pull(projectPath);
+          if (get().projectPath !== projectPath) continue;
+          // A failed read keeps the last good one.
+          set({
+            ...(record.ok
+              ? { events: record.events, entries: record.entries, error: null, loaded: true }
+              : {}),
+            ...review,
+          });
+        } while (refreshAgain);
+      })().finally(() => {
+        refreshing = null;
+      });
+      return refreshing;
+    },
+    clear: async () => {
+      const { projectPath } = get();
+      if (!projectPath) return;
+      await sharedMemory.clear(projectPath);
+      if (get().projectPath !== projectPath) return;
+      set({ events: [], entries: [], review: EMPTY_REVIEW });
+    },
+    editEntry: async (id, content) => {
+      const { projectPath } = get();
+      if (!projectPath) return;
+      const edited = await sharedMemory.editEntry(projectPath, id, content);
+      if (get().projectPath !== projectPath) return;
+      set({ entries: get().entries.map((e) => (e.id === id ? edited : e)) });
+      // The state view and event log changed too; memory-changed also
+      // re-pulls, this covers a runtime that does not deliver it.
+      await get().actions.refresh();
+    },
+    forgetEntry: async (id) => {
+      const { projectPath } = get();
+      if (!projectPath) return;
+      await sharedMemory.forgetEntry(projectPath, id);
+      if (get().projectPath !== projectPath) return;
+      set({ entries: get().entries.filter((e) => e.id !== id) });
+      await get().actions.refresh();
+    },
+    purgeEntry: async (id) => {
+      const { projectPath } = get();
+      if (!projectPath) return;
+      await sharedMemory.purgeEntry(projectPath, id);
+      if (get().projectPath !== projectPath) return;
+      set({ entries: get().entries.filter((e) => e.id !== id) });
+      await get().actions.refresh();
+    },
+    feedback: async (id, verdict) => {
+      const { projectPath } = get();
+      if (!projectPath) return;
+      const updated = await sharedMemory.feedback(projectPath, id, verdict);
+      if (get().projectPath !== projectPath) return;
+      if (updated) set({ entries: get().entries.map((e) => (e.id === id ? updated : e)) });
+      await get().actions.refresh();
+    },
+    reviewAction: async (run) => {
+      const { projectPath } = get();
+      if (!projectPath) return null;
+      try {
+        return await run(projectPath);
+      } finally {
+        await get().actions.refresh();
+      }
+    },
+    previewClaudeImport: async () => {
+      const { projectPath } = get();
+      if (!projectPath) return null;
+      return sharedMemory.previewClaudeImport(projectPath);
+    },
+    importClaude: async (ids) => {
+      const { projectPath } = get();
+      if (!projectPath) return 0;
+      const written = await sharedMemory.confirmClaudeImport(projectPath, ids);
+      await get().actions.refresh();
+      return written;
+    },
+  },
+}));

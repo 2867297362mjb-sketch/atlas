@@ -9,7 +9,6 @@
 // peek: the edge strip, the toggle in the title bar, and the panel itself.
 
 import { create } from "zustand";
-import { createSelectors } from "@/lib/create-selectors";
 
 /** How long the pointer rests on the edge or the toggle before the peek opens. */
 const OPEN_DELAY_MS = 150;
@@ -21,7 +20,7 @@ interface SidebarPeekState {
   open: boolean;
 }
 
-export const useSidebarPeek = createSelectors(create<SidebarPeekState>()(() => ({ open: false })));
+export const useSidebarPeek = create<SidebarPeekState>()(() => ({ open: false }));
 
 let openTimer: ReturnType<typeof setTimeout> | undefined;
 let closeTimer: ReturnType<typeof setTimeout> | undefined;

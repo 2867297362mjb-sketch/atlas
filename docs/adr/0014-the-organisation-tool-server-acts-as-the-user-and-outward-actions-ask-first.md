@@ -1,6 +1,6 @@
 # ADR-0014: The organisation tool server acts as the signed-in user, and outward actions ask first
 
-**Status:** Accepted (2026-09-26)
+**Status:** Accepted (2026-09-26). Admins get a thirteenth tool, `org_member_activity`. The fixed prefix is measured in `docs/research/org-tool-server-prefix.md`, and `org_server/tests.rs` fails when a member's tools pass 3.5 KB, or an admin's tools and the instructions together pass 4.5 KB.
 
 ## Context
 

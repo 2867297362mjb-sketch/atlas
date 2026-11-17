@@ -80,7 +80,7 @@ export function DestinationButton({
       disabled={disabled}
       className={cn(
         "flex shrink-0 cursor-pointer items-center rounded-md text-muted-foreground outline-none transition-colors duration-fast ease-out-strong",
-        "hover:bg-element-hover hover:text-foreground focus-visible:bg-element-hover",
+        "hover:bg-element-hover hover:text-foreground focus-visible:bg-element-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
         "disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground",
         "data-locked:opacity-50",
         // The Settings sidebar's nav row (`settings-sidebar.tsx`), so the two
@@ -258,9 +258,9 @@ export function SourceControlButton(props: DockButtonProps) {
 
 /** Opens the notification drawer; a dot while the active org has unread. */
 export function NotificationsButton(props: DockButtonProps) {
-  const activeOrgId = useOrgStore.use.activeOrganisationId();
+  const activeOrgId = useOrgStore((s) => s.activeOrganisationId);
   const unread = useNotificationsStore((s) => hasUnread(s.items, activeOrgId));
-  const { toggle } = useNotificationsStore.use.actions();
+  const { toggle } = useNotificationsStore((s) => s.actions);
   return (
     <DestinationButton
       {...props}

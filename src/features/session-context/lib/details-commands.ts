@@ -4,15 +4,14 @@
 // only to the session's own title-bar button, so the commands are window
 // events the button on screen answers (`session-details-button.tsx`).
 
-/** Show or hide the Details card of the session in the main column. */
-export const TOGGLE_SESSION_DETAILS_EVENT = "atlas:toggle-session-details";
-/** Open that session's checkout in the preferred editor. */
-export const OPEN_SESSION_IN_EDITOR_EVENT = "atlas:open-session-in-editor";
+import { emitWindowEvent } from "@/lib/window-events";
 
+/** Show or hide the Details card of the session in the main column. */
 export function toggleSessionDetails(): void {
-  window.dispatchEvent(new CustomEvent(TOGGLE_SESSION_DETAILS_EVENT));
+  emitWindowEvent("atlas:toggle-session-details");
 }
 
+/** Open that session's checkout in the preferred editor. */
 export function openSessionInEditor(): void {
-  window.dispatchEvent(new CustomEvent(OPEN_SESSION_IN_EDITOR_EVENT));
+  emitWindowEvent("atlas:open-session-in-editor");
 }

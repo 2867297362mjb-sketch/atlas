@@ -16,10 +16,9 @@ import { openSpaceOnPage, openSpaceTab } from "@/features/spaces/lib/open-space"
 
 import { useOrgAgentStore } from "../stores/org-agent-store";
 import { isAtlasRoute, type OrgAgentTarget } from "./org-agent-links";
+import { emitWindowEvent } from "@/lib/window-events";
 
-/** Chat's "jump to this message" request. */
-export const COMMS_JUMP_EVENT = "atlas:comms-jump-to-message";
-
+/** `atlas:comms-jump-to-message`: chat's "jump to this message" request. */
 export interface CommsJumpDetail {
   convId: string;
   messageId: string;
@@ -61,7 +60,7 @@ export function openTarget(target: OrgAgentTarget): void {
       if (target.messageId) {
         const detail: CommsJumpDetail = { convId: target.convId, messageId: target.messageId };
         // After the conversation has mounted and read its newest page.
-        setTimeout(() => window.dispatchEvent(new CustomEvent(COMMS_JUMP_EVENT, { detail })), 350);
+        setTimeout(() => emitWindowEvent("atlas:comms-jump-to-message", detail), 350);
       }
       return;
     }

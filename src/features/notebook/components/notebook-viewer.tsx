@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { readFileContent } from "@/features/editor/lib/editor-fs-api";
 import { useAppStore } from "@/features/app/stores/app-store";
 import { documentFileRoot } from "@/lib/file-links";
 import { parseNotebook } from "../lib/notebook-types";
@@ -16,13 +16,13 @@ interface NotebookViewerProps {
  */
 export function NotebookViewer({ filePath }: NotebookViewerProps) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
-  const projectPath = useAppStore.use.currentProject()?.path ?? null;
+  const projectPath = useAppStore((s) => s.currentProject)?.path ?? null;
   const fileRoot = documentFileRoot(filePath, projectPath);
 
   useEffect(() => {
     let cancelled = false;
     setState({ status: "loading" });
-    invoke<string>("read_file_content", { path: filePath })
+    readFileContent(filePath)
       .then((text) => {
         if (!cancelled) setState({ status: "ready", notebook: parseNotebook(text) });
       })

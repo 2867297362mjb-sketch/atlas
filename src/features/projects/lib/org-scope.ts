@@ -22,8 +22,8 @@ function projectsForOrg(projects: Project[], orgId: string | null): Project[] {
 
 /** Hook: the active org's projects (registry order preserved). */
 export function useActiveOrgProjects(): Project[] {
-  const all = useProjectStore.use.projects();
-  const orgId = useOrgStore.use.activeOrganisationId();
+  const all = useProjectStore((s) => s.projects);
+  const orgId = useOrgStore((s) => s.activeOrganisationId);
   return useMemo(() => projectsForOrg(all, orgId), [all, orgId]);
 }
 

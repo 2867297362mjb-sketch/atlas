@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { createSelectors } from "@/lib/create-selectors";
 import { useChatStore } from "@/features/chat/stores/chat-store";
 import { agents } from "@/features/chat/lib/agents-api";
 import { isBusyAgentStatus, type ChatSession } from "@/types/agent";
@@ -50,7 +49,7 @@ const useStopAgentsConfirmStoreBase = create<StopAgentsConfirmState>((set, get) 
   },
 }));
 
-export const useStopAgentsConfirmStore = createSelectors(useStopAgentsConfirmStoreBase);
+export const useStopAgentsConfirmStore = useStopAgentsConfirmStoreBase;
 
 /** Busy (running or permission-waiting) sessions, optionally scoped to one
  *  project path. A held session is not one: Rust keeps it running through the

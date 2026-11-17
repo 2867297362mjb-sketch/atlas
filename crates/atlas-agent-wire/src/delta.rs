@@ -1,8 +1,7 @@
 //! Wire shape for session-scoped delta events (additive-only; see [`crate::types`]).
 //!
 //! One change to one session, routed through a [`DeltaSink`] the host provides
-//! (typically a window-event emitter) and fanned out on an [`EventBus`] for
-//! in-process subscribers.
+//! (typically a window-event emitter).
 //!
 //! They are produced by projecting thread events (`atlas-agent-delta`). See
 //! [`crate::types`] for why they live in a crate of their own.
@@ -10,9 +9,8 @@
 use std::sync::Arc;
 
 use serde::Serialize;
+use ts_rs::TS;
 
-use atlas_bus::EventBus;
-use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::types::{
@@ -22,7 +20,7 @@ use crate::types::{
 use crate::AgentId;
 
 /// One change to one session. Tagged on the wire by `kind`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum SessionDelta {
     Status {
@@ -92,6 +90,7 @@ pub enum SessionDelta {
     ModeChanged {
         mode_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         origin: Option<Origin>,
     },
     /// A transient model-call failure is being retried after a backoff
@@ -107,9 +106,11 @@ pub enum SessionDelta {
     ModelChanged {
         model_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         origin: Option<Origin>,
     },
     AvailableCommands {
+        #[ts(type = "Array<unknown>")]
         commands: Vec<serde_json::Value>,
     },
     UsageUpdated {
@@ -121,6 +122,7 @@ pub enum SessionDelta {
         request_id: uuid::Uuid,
         mode: String,
         message: String,
+        #[ts(type = "unknown")]
         requested_schema: Option<serde_json::Value>,
         url: Option<String>,
     },
@@ -143,8 +145,10 @@ pub enum SessionDelta {
     /// of a `set_config_option` through the host; absent when the agent
     /// changed it on its own (see [`SessionDelta::ModeChanged`]).
     ConfigOptionsUpdated {
+        #[ts(type = "Array<unknown>")]
         config_options: Vec<serde_json::Value>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         origin: Option<Origin>,
     },
     /// Cumulative context-window usage from an ACP `usage_update` notification:
@@ -180,7 +184,9 @@ pub enum SessionDelta {
     /// owns this — `respond_permission` resolves it back through atlas-acp.
     PermissionRequest {
         request_id: Uuid,
+        #[ts(type = "unknown")]
         tool_call: serde_json::Value,
+        #[ts(type = "unknown")]
         options: serde_json::Value,
     },
     /// Permission was resolved (by the user or by cancellation).
@@ -197,15 +203,18 @@ pub enum SessionDelta {
         /// never saw it open (a stop announced with no turn running).
         /// Additive: old frontends ignore it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         started_at_ms: Option<i64>,
         /// When the turn stopped, as epoch milliseconds.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         ended_at_ms: Option<i64>,
         /// How long the turn ran, in ms, on the monotonic clock — not
         /// `ended_at_ms - started_at_ms`, which a stepped wall clock or a
         /// sleep stretches. The figure a snapshot carries as
         /// `Message::worked_ms`. Absent with `started_at_ms`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         worked_ms: Option<u64>,
     },
     TurnFailed {
@@ -216,6 +225,7 @@ pub enum SessionDelta {
         /// "transient"/"fatal"/"process_dead"/"unknown" are informational).
         /// Additive: absent on old payloads.
         #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         error_kind: Option<String>,
     },
     /// The computer slept (lid closed, system sleep) while this session's turn
@@ -248,6 +258,7 @@ pub enum SessionDelta {
         message: Message,
         origin: Origin,
         #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         client_message_id: Option<String>,
     },
     /// The session's turn queue changed (a prompt parked, removed, started or
@@ -265,7 +276,7 @@ pub enum SessionDelta {
 }
 
 /// Envelope shipped through the Tauri event channel — keys for routing.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 pub struct SessionDeltaEnvelope {
     pub agent_id: AgentId,
     pub session_id: String,
@@ -286,49 +297,24 @@ pub trait DeltaSink: Send + Sync + 'static {
     fn emit(&self, envelope: SessionDeltaEnvelope);
 }
 
-/// The single outbound fan-out point for every session delta.
+/// The single outbound point for every session delta.
 ///
 /// The manager and the per-session worker both funnel their emits through one
-/// `Emitter` so there is exactly one place that sees every event. It publishes
-/// to the global [`EventBus`] (the cloud-ready seam — a UI fan-out task and, in
-/// future, a cloud streamer subscribe to it) and then delivers to the host
-/// [`DeltaSink`] (window emit + telemetry + memory-ingest). Publishing to the
-/// bus is non-blocking and drops for lagging subscribers, so the streaming hot
-/// path is never held up by a slow consumer.
+/// `Emitter` so there is exactly one place that sees every event, and it hands
+/// each to the host [`DeltaSink`] (window emit, telemetry, capture,
+/// memory-ingest). An in-process consumer is a stage of that sink's pipeline,
+/// not a subscription here.
 pub struct Emitter {
     sink: Arc<dyn DeltaSink>,
-    bus: EventBus<SessionDeltaEnvelope>,
 }
 
 impl Emitter {
     pub fn new(sink: Arc<dyn DeltaSink>) -> Self {
-        Self {
-            sink,
-            bus: EventBus::new(),
-        }
+        Self { sink }
     }
 
-    /// The global event bus. Subscribe here for an in-process (or cloud) tap on
-    /// every delta without going through the host sink.
-    pub fn bus(&self) -> &EventBus<SessionDeltaEnvelope> {
-        &self.bus
-    }
-
-    /// Convenience: a fresh subscription to the bus.
-    pub fn subscribe(&self) -> broadcast::Receiver<SessionDeltaEnvelope> {
-        self.bus.subscribe()
-    }
-
-    /// Fan one delta out to the bus and the host sink.
+    /// Hand one delta to the host sink.
     pub fn emit(&self, envelope: SessionDeltaEnvelope) {
-        // Bus first (cheap, non-blocking) so an in-process/cloud subscriber sees
-        // the event even if the host sink does heavier work. Guarded: with no
-        // subscribers (the production default — only opt-in taps attach), the
-        // deep clone (full message bodies, full accumulated tool results) was
-        // pure waste on the hottest path in the crate.
-        if self.bus.receiver_count() > 0 {
-            self.bus.publish(envelope.clone());
-        }
         self.sink.emit(envelope);
     }
 }

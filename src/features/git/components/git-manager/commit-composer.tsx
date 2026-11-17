@@ -74,12 +74,12 @@ function splitAuthors(raw: string): string[] {
  */
 export function CommitComposer({ stagedCount }: { stagedCount: number }) {
   const client = useQueryClient();
-  const repoPath = useGitStore.use.repoPath();
-  const branch = useGitStore.use.branch();
-  const branchesFull = useGitStore.use.branchesFull();
-  const ahead = useGitStore.use.ahead();
-  const log = useGitStore.use.log();
-  const actions = useGitStore.use.actions();
+  const repoPath = useGitStore((s) => s.repoPath);
+  const branch = useGitStore((s) => s.branch);
+  const branchesFull = useGitStore((s) => s.branchesFull);
+  const ahead = useGitStore((s) => s.ahead);
+  const log = useGitStore((s) => s.log);
+  const actions = useGitStore((s) => s.actions);
   const run = useShipStore((s) => (repoPath ? (s.runs[repoPath] ?? null) : null));
 
   const [summary, setSummary] = useState("");
@@ -106,8 +106,8 @@ export function CommitComposer({ stagedCount }: { stagedCount: number }) {
     enabled: !!repoPath,
     staleTime: 30_000,
   });
-  const detached = useGitStore.use.detached();
-  const opInProgress = inProgressLabel(useGitStore.use.inProgress());
+  const detached = useGitStore((s) => s.detached);
+  const opInProgress = inProgressLabel(useGitStore((s) => s.inProgress));
 
   // Busy while OUR streaming commit runs — a slow pre-commit hook used to
   // look like a hung app. A boolean, not the op: the op changes on every

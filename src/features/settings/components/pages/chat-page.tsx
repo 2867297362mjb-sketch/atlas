@@ -9,7 +9,9 @@ import { NATIVE_AGENT_ID } from "@/types/agent";
 import { useAgentRegistryStore } from "@/features/agents/stores/agent-registry-store";
 import { SettingSelect, SettingStepper, SettingSwitch } from "../layout/setting-controls";
 import { useScopedSetting } from "../../lib/use-scoped-setting";
+import { useSettingName } from "../layout/setting-row-title";
 import { Switch, Select } from "@tryatlas/design";
+import { ModelPriceOverridesSection } from "./model-price-overrides";
 
 const SIDEBAR_SORTS = [
   { value: "recent", label: "Latest activity" },
@@ -35,8 +37,8 @@ const SWITCH_OPTIONS = [
 ] as const;
 
 export function ChatPage() {
-  const settings = useSettingsStore.use.settings();
-  const { updateSettings } = useSettingsStore.use.actions();
+  const settings = useSettingsStore((s) => s.settings);
+  const { updateSettings } = useSettingsStore((s) => s.actions);
 
   return (
     <SettingsPage
@@ -120,6 +122,7 @@ export function ChatPage() {
           />
         </SettingsGroup>
       </SettingsSection>
+      <ModelPriceOverridesSection />
     </SettingsPage>
   );
 }
@@ -128,6 +131,7 @@ export function ChatPage() {
  *  installed stays listed, marked, so the select still shows what the file says. */
 function DefaultAgentSelect() {
   const scoped = useScopedSetting("defaultAgent");
+  const name = useSettingName("defaultAgent");
   // The primitive signature, not the arrays: see the store's header.
   useAgentRegistryStore((s) => s.signature);
   const catalog = useAgentRegistryStore.getState().catalog;
@@ -145,7 +149,7 @@ function DefaultAgentSelect() {
       value={scoped.value}
       options={options}
       disabled={scoped.globalOnly}
-      aria-label="New sessions: Default agent"
+      aria-label={name}
       onValueChange={(next) => scoped.set(next)}
     />
   );

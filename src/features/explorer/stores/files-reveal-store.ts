@@ -7,7 +7,6 @@
 // (⌘T F, ⌘B) never re-highlights an old path. Not persisted.
 
 import { create } from "zustand";
-import { createSelectors } from "@/lib/create-selectors";
 
 export interface FilesRevealRequest {
   /** Absolute; null to follow the file being read. */
@@ -27,12 +26,10 @@ interface FilesRevealState {
 
 let nonce = 0;
 
-export const useFilesRevealStore = createSelectors(
-  create<FilesRevealState>()((set) => ({
-    request: null,
-    actions: {
-      reveal: (path) => set({ request: { path, nonce: ++nonce } }),
-      take: () => set({ request: null }),
-    },
-  })),
-);
+export const useFilesRevealStore = create<FilesRevealState>()((set) => ({
+  request: null,
+  actions: {
+    reveal: (path) => set({ request: { path, nonce: ++nonce } }),
+    take: () => set({ request: null }),
+  },
+}));

@@ -21,6 +21,7 @@ import {
   type BranchCompare,
   type SessionGitSnapshot,
 } from "./session-git-api";
+import type { GitChangedPayload } from "@/features/git/lib/git-changed-events";
 
 export interface SessionGit {
   snapshot: SessionGitSnapshot;
@@ -76,7 +77,7 @@ function useRefreshTriggers(client: QueryClient) {
     };
     window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onFocus);
-    void listen<{ project: string }>("atlas:git-changed", (e) => {
+    void listen<GitChangedPayload>("atlas:git-changed", (e) => {
       void refreshSessionGit(client, e.payload.project);
     });
     void listen<GitOpEvent>("atlas:git:op", (e) => {

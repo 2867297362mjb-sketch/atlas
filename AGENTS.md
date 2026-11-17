@@ -31,7 +31,7 @@ wouldn't surface it: a ban with no exit, or a decision whose rule isn't in its t
 
 **Count things, don't quote counts.** Commands, crates, tab types and test suites all
 move weekly — `ls src-tauri/src/commands/*.rs`, `ls tests/*.test.ts`,
-`src/lib/constants.ts`. A number written in prose anywhere, including here, is stale.
+`src/lib/tab-registry.ts`. A number written in prose anywhere, including here, is stale.
 
 ## Commands
 
@@ -89,8 +89,8 @@ bun run test src/lib/time-ago.test.ts
 cargo test -p atlas-native-agent --test engine_turn   # -p resolves from anywhere
 ```
 
-Generated files — the TOML/SVG is the source, the committed output is derived, and a
-suite fails the moment they disagree. Edit the source and regenerate:
+Generated files — the TOML/SVG/Rust is the source, the committed output is derived,
+and a suite fails the moment they disagree. Edit the source and regenerate:
 
 ```bash
 bun run theme:keys     # @tryatlas/design's keys.toml, themes, Rust tables → crates/atlas-theme; schema, docs
@@ -98,6 +98,8 @@ bun run icons:render   # macOS app icons
 bun run settings:gen   # settings-registry.toml → TS, Rust, docs; then
                        # ATLAS_BLESS=1 cargo test -p atlas config_default
                        # for docs/reference/config.default.toml
+bun run bindings:gen   # ts-rs: atlas-agent-wire's Rust types → src/bindings/agent-wire/, and the
+                       # app-state payloads (src-tauri/src/state) → src/bindings/app-state/
 ```
 
 The design system (primitives, scales, theme engine, `keys.toml`, built-in themes,
@@ -143,8 +145,23 @@ free; xterm, pixi, recharts and friends cannot, so they must hear the change.
 
 **The IPC and event seams are opaque strings to `tsc`.** `invoke("name")`, the
 `atlas:*` channel names, and even the _field names_ inside a payload are checked by
-`ipc-contract`, `event-contract`, `state-payload-contract` and `wire-shape-contract`
-and by nothing else. Check `event-contract.test.ts` before inventing a channel name.
+`ipc-contract`, `event-contract` and `wire-shape-contract` and by nothing else. The
+exceptions are the two payloads whose TypeScript is generated from the Rust types, so
+`tsc` checks their fields: the session-delta payload (`crates/atlas-agent-wire` →
+`src/bindings/agent-wire/`), and the app-state payloads, what `bootstrap_app_state`
+answers and `save_app_state` takes (`src-tauri/src/state/app_state_bindings.rs` →
+`src/bindings/app-state/`, with `fixtures.ts`: the JSON Rust writes, held to those
+types). A payload passed as an opaque string (`save_editor_state`,
+`save_project_session`) has no Rust type and no check at all. Check `event-contract.test.ts` before inventing a channel name.
+The window events that share the `atlas:` prefix are a separate, typed namespace:
+`window-event-contract.test.ts` keeps every one of them in the map in
+`src/lib/window-events.ts` and behind its helpers, and off the channel names.
+`ipc-contract` reads every `invoke("name")` literal under `src/`, test files included,
+so a test that invents a command name fails `bun run test`. `lint-suppression-ratchet`
+caps the number of `oxlint-disable` comments per rule under `src/` (test files are
+exempt), so a new suppression fails it too, until it is fixed or the baseline is
+raised in the same diff. `invoke-from-lib-contract.test.ts` keeps `invoke`, `listen`,
+`emit` and `Channel` inside `lib/` and `stores/`: a component that imports one fails.
 
 **Three cargo-workspace rules, each failing quietly** (`cargo-workspace.test.ts`):
 `[patch]` tables are honored only in the manifest cargo was invoked on — always the
@@ -200,18 +217,24 @@ Each of these is a multi-file edit where missing one compiles fine.
 
 - **An IPC command** — the fn in `src-tauri/src/commands/<domain>.rs`, `pub mod` in
   `commands/mod.rs`, an entry in `generate_handler![]` in `lib.rs`, and a wrapper in
-  `src/features/<feature>/lib/<domain>-api.ts`. Never `invoke` from a component.
+  `src/features/<feature>/lib/<domain>-api.ts`. Never `invoke` from a component
+  (`invoke-from-lib-contract.test.ts`).
 - **A crate** — the `members` list in the root `Cargo.toml`, its own
   `[profile.dev.package.<name>]` stanza, and an entry in `.github/ci-crates.json`.
   If it reads a file outside its own directory, that file also goes in
   `EXTRA_INPUTS` in `scripts/ci-affected.mjs` (`ci-affected.test.ts` checks).
-- **A tab/panel type** — first decide its placement (session, surface or destination;
-  the test is in ADR-0024) and add it to `TAB_PLACEMENT`. Then `TAB_TYPES` in `src/lib/constants.ts`, plus the lazy import
-  and the render branch in `src/features/layout/components/tab-panels.tsx` (the tab registry;
-  `center-panel.tsx` only lays out the columns), and
-  (if ⌘T should offer it) an entry in `SURFACES` in `src/features/layout/lib/surfaces.ts`. If it stays mounted across tab
-  switches it also joins `PERSISTENT_TYPES`, guarded by
-  `persistent-tab-render-contract.test.ts`.
+- **A tab/panel type** — one entry in `TAB_REGISTRY` in `src/lib/tab-registry.ts`. The
+  entry states every fact (placement, scope, mount policy, multiplicity, file-backed,
+  the ⌘T row, the shape of its `data`) and `tsc` refuses one with a fact missing; decide
+  the placement first (session, surface or destination; the test is in ADR-0024). The
+  registry holds no React, because the layout store imports it, so two more edits
+  follow, and `tsc` fails until both are made: its icon in `tabIcons`
+  (`src/features/layout/components/pane-tab.tsx`; also `SURFACE_ICONS` in
+  `src/features/layout/lib/surfaces.ts` if ⌘T offers it), and its lazy import and render
+  branch in `src/features/layout/components/tab-panels.tsx` (in `PersistentPanel` when
+  its mount policy is persistent). Three suites hold a table with a row to add:
+  `src/lib/tab-registry.test.ts`, `tab-multiplicity.test.ts` beside the layout store,
+  and `tests/persistent-tab-render-contract.test.ts`.
 - **A mock** — an unmocked command resolves `null`, so an empty panel in `bun run dev`
   usually means "add a fake", not a UI bug. The badge bottom-right counts them.
 
@@ -220,10 +243,15 @@ Each of these is a multi-file edit where missing one compiles fine.
 Frontend is organised by **feature**, not file type: `src/features/<feature>/` holds
 `components/`, `stores/`, `lib/`. Cross-feature widgets in `src/components/`, primitives
 from `@tryatlas/design`, shared helpers in `src/lib/`; `@/` aliases `src/`. **Filenames are
-kebab-case** (`center-panel.tsx`), the sole exception being `src/App.tsx`. Zustand +
-Immer stores wrapped in `createSelectors` so `useStore.use.x()` works; stores never call
-other stores — cross-feature coordination is `getState()` at an action boundary or a
-`window.dispatchEvent(new CustomEvent("atlas:…"))`. Tailwind composed via `cn()`.
+kebab-case** (`center-panel.tsx`), the exceptions being `src/App.tsx` and the
+generated `src/bindings/`, named after their Rust types. Zustand +
+Immer stores, read as `useXStore((s) => s.x)`: the build runs the React Compiler, which
+knows a hook only by its `useX` name, so a hook behind any other name (the retired
+`useXStore.use.x()`) is cached after one render (`react-compiler-contract.test.ts`).
+Stores never call other stores — cross-feature coordination is `getState()` at an action boundary or a
+window event, declared in the map in `src/lib/window-events.ts` and sent and heard
+only through its `emitWindowEvent` / `onWindowEvent` / `useWindowEvent`. Tailwind
+composed via `cn()`.
 
 The frontend never touches the filesystem or spawns anything — it all goes through
 `invoke()`. **Rust owns authoritative state** for the heavy subsystems (chat log,
@@ -257,7 +285,8 @@ start path has a timeout (0008).
 
 The session-delta wire is **additive-only**. Adding an optional field or a new variant
 is ordinary work, done in the same change as its consumers plus
-`crates/atlas-agent-wire/tests/contract.rs` and `tests/wire-shape-contract.test.ts`.
+`crates/atlas-agent-wire/tests/contract.rs` and `bun run bindings:gen`, which
+regenerates the TypeScript the frontend reads it through.
 Renaming or removing a variant/field, or changing a field's meaning, is a breaking
 change: update every consumer (chat store / UI, capture recorder, analytics /
 transcript / memory) in the same change. The contract tests are the authority;
@@ -287,13 +316,15 @@ that touch a release input, so x86-specific behaviour (seccomp syscall tables, S
 ## Versioning, branching, commits
 
 Atlas is **trunk-based**: every PR targets `main` (a hotfix PR into `release/X.Y` is the one
-exception) and is squash-merged, so the PR title
-is the one commit `main` gets and must be a Conventional Commit (`feat(scope): …`,
-`fix: …`; `pr-title.yml` checks it). Branch as `<you>/<slug>`; there are no version
-branches. Releases are automatic (`.github/workflows/release.yml`, release-please):
+exception) and is merged with a **merge commit, not squashed**. The merge commit is
+titled with the PR title, so the title must be a Conventional Commit (`feat(scope): …`,
+`fix: …`; `pr-title.yml` checks it). The branch's own commits reach `main` as they are,
+and release-please reads them too: a branch commit in Conventional form is a changelog
+entry of its own. Branch as `<you>/<slug>`; there are no version branches. Releases are
+automatic (`.github/workflows/release.yml`, release-please):
 
 ```
-  PRs ──squash──► main ──■──■──■────────────────■──►
+  PRs ──merge───► main ──■──■──■────────────────■──►
                          │  │  │                ▲ merge = release
                          ▼  ▼  ▼                │
                   "chore: release X.Y.Z" PR ────┘ ──► tag alpha-X.Y.Z

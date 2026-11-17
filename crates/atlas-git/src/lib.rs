@@ -11,13 +11,20 @@
 //!   messages.
 //! - [`status`] — `git status --porcelain=2 -z` parser (branch header,
 //!   ahead/behind, renames, submodule codes, conflicts).
+//! - [`repo`] — what Atlas does to a repository ([`Repository`]): the
+//!   branch, sync, stash, history and commit rules, with the "it changed"
+//!   notification injected.
 
 pub mod conflicts;
 pub mod error;
 pub mod exec;
 pub mod patch;
 pub mod progress;
+pub mod repo;
 pub mod status;
 
 pub use error::{GitErrorCode, GitErrorPayload};
-pub use exec::{GitCommand, GitOutput, OpSink, Stream};
+pub use exec::{
+    shallow_clone, CappedStdout, GitCommand, GitOutput, GitRawOutput, GitRunError, OpSink, Stream,
+};
+pub use repo::{ChangeNotifier, OpObserver, Repository};

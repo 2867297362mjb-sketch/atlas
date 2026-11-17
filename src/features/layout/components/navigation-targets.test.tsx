@@ -44,7 +44,7 @@ const targets = () => screen.getAllByRole("tab");
 const shortcuts = () => targets().map((el) => el.getAttribute("aria-keyshortcuts"));
 
 function Shortcuts({ projectless = false }: { projectless?: boolean }) {
-  const { activateTabByIndex, cycleTab, focusAdjacentGroup } = useLayoutStore.use.actions();
+  const { activateTabByIndex, cycleTab, focusAdjacentGroup } = useLayoutStore((s) => s.actions);
   useActionHotkeys({
     "tabs.focus1": () => activateTabByIndex(0, projectless),
     "tabs.focus2": () => activateTabByIndex(1, projectless),

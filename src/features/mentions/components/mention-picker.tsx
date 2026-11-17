@@ -101,7 +101,7 @@ export const MentionPicker = forwardRef<MentionPickerHandle, MentionPickerProps>
     },
     ref,
   ) {
-    const recentFiles = useRecentFilesStore.use.items();
+    const recentFiles = useRecentFilesStore((s) => s.items);
     // The session this picker types into, for the projects attached to it.
     const sessionId = useChatStore((s) =>
       tabId ? (s.sessions[tabId]?.acpSessionId ?? null) : null,
@@ -110,7 +110,7 @@ export const MentionPicker = forwardRef<MentionPickerHandle, MentionPickerProps>
     // Project mentions are scoped to the active org (see `searchProjects`).
     // Subscribe so switching orgs re-runs the search and the list reflects the
     // new org's projects even while the picker stays mounted.
-    const activeOrganisationId = useOrgStore.use.activeOrganisationId();
+    const activeOrganisationId = useOrgStore((s) => s.activeOrganisationId);
     const {
       scope,
       setScope,

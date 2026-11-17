@@ -5,16 +5,14 @@
 // reaches the picker.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => undefined) }));
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async () => () => {}),
-  emit: vi.fn(async () => {}),
-}));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
 
 import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useChatStore } from "../stores/chat-store";
-import { ModeRestoreBar, OPEN_MODE_PICKER_EVENT } from "./mode-restore-bar";
+import { ModeRestoreBar } from "./mode-restore-bar";
+import { onWindowEvent } from "@/lib/window-events";
 
 const TAB = "tab-1";
 
@@ -50,14 +48,13 @@ describe("ModeRestoreBar", () => {
   it("opens this tab's mode picker", async () => {
     useChatStore.getState().actions.setUnrestoredMode(TAB, "read-only");
     const opened = vi.fn();
-    const onOpen = (e: Event) => opened((e as CustomEvent<{ tabId: string }>).detail.tabId);
-    window.addEventListener(OPEN_MODE_PICKER_EVENT, onOpen);
+    const off = onWindowEvent("atlas:composer-open-mode", (detail) => opened(detail.tabId));
     try {
       render(<ModeRestoreBar tabId={TAB} />);
       await userEvent.click(screen.getByRole("button", { name: "Choose mode" }));
       expect(opened).toHaveBeenCalledWith(TAB);
     } finally {
-      window.removeEventListener(OPEN_MODE_PICKER_EVENT, onOpen);
+      off();
     }
   });
 });

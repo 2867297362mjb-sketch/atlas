@@ -15,14 +15,8 @@ import { EMPTY_DIRECTORY } from "../lib/author-directory";
 // The row's avatar pulls in the auth + explorer stores, which subscribe to
 // Tauri at import. There is no Tauri here, and an unmocked `listen` rejects
 // after the test has already passed.
-vi.mock("@tauri-apps/api/core", () => ({
-  convertFileSrc: (p: string) => p,
-  invoke: vi.fn(async () => undefined),
-}));
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async () => () => {}),
-  emit: vi.fn(async () => {}),
-}));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
 // The live state draws a `thinking-orbs` canvas; happy-dom has no 2D context
 // and the orb is not what these cases are about.
 vi.mock("thinking-orbs", () => ({ ThinkingOrb: () => <span data-testid="orb" /> }));

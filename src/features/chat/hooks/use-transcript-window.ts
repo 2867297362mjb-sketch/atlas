@@ -11,7 +11,6 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
-  useMemo,
   useRef,
   useState,
   type Dispatch,
@@ -19,9 +18,9 @@ import {
   type SetStateAction,
 } from "react";
 import { isScrollHot } from "@/lib/scroll-hot";
-import { RowKind, type Row } from "../lib/turn-rows";
+import { RowKind, type Row } from "@tryatlas/design/session";
 import { useTranscriptScroll } from "../lib/use-transcript-scroll";
-import { TOP_BLUR_RAMP } from "../lib/transcript-insets";
+import { TOP_BLUR_RAMP } from "@tryatlas/design/session";
 
 /**
  * How many rows are added each time the window grows.
@@ -112,7 +111,6 @@ export interface TranscriptWindow {
   setStartIndex: Dispatch<SetStateAction<number>>;
   /** `startIndex`, corrected for a projection that shrank. Render from this. */
   safeStart: number;
-  visible: Row[];
   /** Content below the viewport (the jump pill and the bottom fade). */
   more: boolean;
   onScroll: () => void;
@@ -157,7 +155,6 @@ export function useTranscriptWindow({
   const windowFloor = Math.max(0, rows.length - WINDOW_INITIAL);
   const stale = startIndex > windowFloor;
   const safeStart = stale ? windowFloor : startIndex;
-  const visible = useMemo(() => rows.slice(safeStart), [rows, safeStart]);
   const canGrow = safeStart > 0;
 
   // Fold the correction back into state. Rendering from `safeStart` alone
@@ -519,7 +516,14 @@ export function useTranscriptWindow({
   // no longer unmounts (the panel stays mounted and laid out behind the active
   // tab, keeping `scrollTop` in the DOM); this covers closing the tab or the
   // project and coming back.
-  useEffect(() => {
+  //
+  // A LAYOUT effect's cleanup, because of when each kind runs on an unmount:
+  // React detaches refs and removes the nodes first, and only then runs
+  // passive cleanups. As a passive effect this found `scrollRef.current`
+  // already null and saved nothing, so what a reopen read back was whatever
+  // the last window change had left there. A layout cleanup runs while the
+  // scroller is still attached and still in the document.
+  useLayoutEffect(() => {
     return () => {
       const el = scrollRef.current;
       if (!el) return;
@@ -534,7 +538,6 @@ export function useTranscriptWindow({
   return {
     setStartIndex,
     safeStart,
-    visible,
     more,
     onScroll,
     pendingAnchorRef,

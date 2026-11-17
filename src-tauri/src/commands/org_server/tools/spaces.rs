@@ -9,7 +9,7 @@ use super::super::cloud::{NewPage, OrgConversation};
 use super::super::OrgScope;
 use super::diagram::diagram;
 use super::{conversation_json, is_id, resolve_conversation, tool_error, tool_json, OrgTools};
-use crate::commands::memory_server::Grant;
+use crate::commands::tool_servers::Grant;
 use crate::commands::ui_server::UiRequest;
 
 /// The longest a page's name may be: the contract's `SPACE_PAGE_NAME_MAX`,

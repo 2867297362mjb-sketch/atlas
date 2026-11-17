@@ -29,11 +29,11 @@ export function usePaletteThemeItems() {
   const themeLight = useSettingsStore((s) => s.settings.themeLight);
   const themeDark = useSettingsStore((s) => s.settings.themeDark);
   const themeMode = useSettingsStore((s) => s.settings.themeMode);
-  const { updateSettings } = useSettingsStore.use.actions();
-  const themes = useThemeStore.use.themes();
-  const { load, reapply } = useThemeStore.use.actions();
+  const { updateSettings } = useSettingsStore((s) => s.actions);
+  const themes = useThemeStore((s) => s.themes);
+  const { load, reapply } = useThemeStore((s) => s.actions);
   const editorOpen = useThemeEditorStore((s) => s.session !== null);
-  const editor = useThemeEditorStore.use.actions();
+  const editor = useThemeEditorStore((s) => s.actions);
 
   // The catalog is read once per launch by the Appearance page; the palette
   // may be the first thing to want it.

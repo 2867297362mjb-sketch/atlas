@@ -81,6 +81,27 @@ const NEEDS: ProviderNeed[] = [
     phrases: ["runcrate api key"],
   },
   {
+    provider: "opper",
+    label: "Opper",
+    consoleHint: "platform.opper.ai",
+    envVars: ["OPPER_API_KEY"],
+    phrases: ["opper api key"],
+  },
+  {
+    provider: "standardcompute",
+    label: "Standard Compute",
+    consoleHint: "standardcompute.com",
+    envVars: ["STANDARDCOMPUTE_API_KEY"],
+    phrases: ["standard compute api key", "standardcompute api key"],
+  },
+  {
+    provider: "uberllm",
+    label: "UberLLM",
+    consoleHint: "uberllm.dev/signup",
+    envVars: ["UBERLLM_API_KEY"],
+    phrases: ["uberllm api key"],
+  },
+  {
     provider: "xai",
     label: "xAI",
     consoleHint: "console.x.ai",

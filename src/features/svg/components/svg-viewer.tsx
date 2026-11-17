@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { readFileContent } from "@/features/editor/lib/editor-fs-api";
 import { SvgViewerView } from "./views/svg-viewer-view";
 
 interface SvgViewerProps {
@@ -20,7 +20,7 @@ export function SvgViewer({ filePath }: SvgViewerProps) {
   useEffect(() => {
     let cancelled = false;
     setCode(null);
-    invoke<string>("read_file_content", { path: filePath })
+    readFileContent(filePath)
       .then((t) => !cancelled && setCode(t))
       .catch(() => !cancelled && setCode(null));
     return () => {

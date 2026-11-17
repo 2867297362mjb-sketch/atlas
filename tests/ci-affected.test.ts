@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import {
   EXTRA_INPUTS,
@@ -15,6 +15,8 @@ import {
   readCrateMatrix,
   resolveRange,
 } from "../scripts/ci-affected.mjs";
+import { walk } from "./support/walk";
+import { expectFloor } from "./support/floor";
 
 /**
  * Guards `scripts/ci-affected.mjs`, the planner that lets CI skip the Rust
@@ -49,16 +51,6 @@ const dialect = dialectPackages(ciYml);
 const ctx = { workspace, crates, dialect };
 const names = new Set(workspace.packages.map((p) => p.name));
 
-function rustFiles(dir: string, out: string[] = []): string[] {
-  for (const e of readdirSync(dir, { withFileTypes: true })) {
-    if (e.name === "target" || e.name === "node_modules") continue;
-    const p = path.join(dir, e.name);
-    if (e.isDirectory()) rustFiles(p, out);
-    else if (e.name.endsWith(".rs")) out.push(p);
-  }
-  return out;
-}
-
 const rel = (p: string) => path.relative(REPO_ROOT, p).split(path.sep).join("/");
 const inside = (dir: string, target: string) => target === dir || target.startsWith(`${dir}/`);
 // `inside` for absolute paths. They carry the platform separator (`\` on
@@ -86,7 +78,7 @@ function escapes(): Escape[] {
   );
   for (const pkg of firstParty) {
     const pkgAbs = path.join(REPO_ROOT, pkg.dir);
-    for (const file of rustFiles(pkgAbs)) {
+    for (const file of walk(pkgAbs, [".rs"])) {
       const src = readFileSync(file, "utf8");
       for (const m of src.matchAll(/"((?:[^"\\\n]|\\.)*)"/g)) {
         const lit = m[1].replace(/^\//, "");
@@ -122,7 +114,7 @@ describe("the CI planner sees every input", () => {
   it("finds the workspace and the out-of-tree reads it already knows about", () => {
     // Floor guards: an empty workspace or a scan that matches nothing would
     // make every assertion below pass vacuously.
-    expect(workspace.packages.length).toBeGreaterThan(100);
+    expectFloor("packages in the cargo workspace", workspace.packages.length, 120);
     const sites = escapes().map((e) => e.pkg);
     expect(sites).toEqual(expect.arrayContaining(["atlas", "atlas-theme", "atlas-process"]));
   });
@@ -145,7 +137,7 @@ describe("the CI planner sees every input", () => {
     const tracked = execFileSync("git", ["ls-files", "-z"], { cwd: REPO_ROOT, encoding: "utf8" })
       .split("\0")
       .filter(Boolean);
-    expect(tracked.length).toBeGreaterThan(1000);
+    expectFloor("files git tracks", tracked.length, 7000);
     const unclassified = tracked.filter((f) => {
       const { all } = affectedPackages([f], workspace);
       return all !== null && !GLOBAL_INPUTS.some((g) => matches(g, f));
@@ -193,10 +185,13 @@ describe("the CI plan", () => {
 
   it("leaves the engine out of a change to a crate the engine does not depend on", () => {
     const p = run(["crates/atlas-redact/src/lib.rs"]);
-    // Its dependents, plus atlas-process alone: the spawn audit reads every
-    // crate, but only atlas-process's own tests do, so its dependents stay out.
+    // Its dependents, plus atlas-process, atlas-git and atlas-fs alone: each
+    // has a source audit that reads every crate, but only their own tests do,
+    // so their dependents stay out.
     expect(p.crates.map((c) => c.crate).sort()).toEqual([
       "atlas-checkpoint",
+      "atlas-fs",
+      "atlas-git",
       "atlas-memory",
       "atlas-process",
       "atlas-redact",
@@ -230,6 +225,21 @@ describe("the CI plan", () => {
         n: crates.length,
       });
     }
+  });
+
+  it("runs e2e for a change to what the browser loads, and only then", () => {
+    for (const f of ["src/App.tsx", "e2e/shell.spec.ts", "playwright.config.ts", "bun.lock"]) {
+      expect({ f, e2e: run([f]).e2e }).toEqual({ f, e2e: true });
+    }
+    for (const f of [
+      "crates/atlas-git/src/lib.rs",
+      "docs/adr/0001-x.md",
+      "tests/ci-affected.test.ts",
+    ]) {
+      expect({ f, e2e: run([f]).e2e }).toEqual({ f, e2e: false });
+    }
+    // A run that plans everything runs it too.
+    expect(run(["Cargo.lock"]).e2e).toBe(true);
   });
 
   it("reads the engine dialect's packages out of ci.yml", () => {
@@ -294,6 +304,7 @@ describe("the CI workflow follows the plan", () => {
       /^ {8}include: \$\{\{ fromJSON\(needs\.changes\.outputs\.crates\) \}\}$/m,
     );
     expect(block("crates")).toMatch(/^ {4}if: needs\.changes\.outputs\.crates != '\[\]'$/m);
+    expect(block("e2e")).toMatch(/^ {4}if: needs\.changes\.outputs\.e2e == 'true'$/m);
   });
 
   it("makes ci-ok wait on every other job, always", () => {

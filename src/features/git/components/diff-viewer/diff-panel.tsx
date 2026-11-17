@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
-import { listen } from "@tauri-apps/api/event";
+import { onExplorerChanged } from "@/features/explorer/lib/fs-api";
 import type { FileDiffContentsLoader } from "@pierre/diffs";
 import { ArrowRight, ChevronDown } from "lucide-react";
 import { openReviewFile } from "../../lib/open-review-file";
@@ -46,6 +46,7 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@tryatlas/design";
+import { onGitChanged } from "@/features/git/lib/git-watch-api";
 
 /**
  * The review diff: every changed file of the working tree or the branch,
@@ -117,7 +118,7 @@ function GitDiffPanel({
   const turnChoice = useDiffPanelStore((s) => s.turn[tabId] ?? LATEST_TURN);
   const baseRef = useDiffPanelStore((s) => s.baseRef[repoPath] ?? null);
   const ignoreWhitespace = useDiffIgnoreWhitespace();
-  const actionsApi = useDiffPanelStore.use.actions();
+  const actionsApi = useDiffPanelStore((s) => s.actions);
   const preview = useQuery({
     queryKey: ["git-diff-preview", repoPath, baseRef, ignoreWhitespace],
     queryFn: () => getDiffPreview(repoPath, { baseRef: baseRef ?? undefined, ignoreWhitespace }),
@@ -136,25 +137,22 @@ function GitDiffPanel({
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => void refetch(), 250);
     };
-    const offGit = listen<{ project: string }>("atlas:git-changed", (e) => {
-      if (e.payload?.project !== repoPath) return;
+    const offGit = onGitChanged((payload) => {
+      if (payload?.project !== repoPath) return;
       // HEAD may have moved under files whose patches are cached by what is
       // on disk; those keys cannot see it.
       invalidateReviewFiles(queryClient, repoPath);
       soon();
     });
-    const offFs = listen<{ dirs?: string[]; fullRefresh?: boolean }>(
-      "atlas:explorer:changed",
-      (e) => {
-        const dirs = e.payload?.dirs;
-        // An opaque batch (a rename) names no directories: assume it is ours.
-        const ours =
-          e.payload?.fullRefresh ||
-          !dirs?.length ||
-          dirs.some((d) => d === repoPath || d.startsWith(`${repoPath}/`));
-        if (ours) soon();
-      },
-    );
+    const offFs = onExplorerChanged((payload) => {
+      const dirs = payload?.dirs;
+      // An opaque batch (a rename) names no directories: assume it is ours.
+      const ours =
+        payload?.fullRefresh ||
+        !dirs?.length ||
+        dirs.some((d) => d === repoPath || d.startsWith(`${repoPath}/`));
+      if (ours) soon();
+    });
     return () => {
       if (timer) clearTimeout(timer);
       void offGit.then((off) => off());
@@ -209,8 +207,8 @@ function GitDiffPanel({
     if (!attachedKey) return;
     const paths = new Set(attachedKey.split("\0"));
     let timer: ReturnType<typeof setTimeout> | null = null;
-    const off = listen<{ project: string }>("atlas:git-changed", (e) => {
-      const project = e.payload?.project;
+    const off = onGitChanged((payload) => {
+      const project = payload?.project;
       if (!project || !paths.has(project)) return;
       invalidateReviewFiles(queryClient, project);
       if (timer) clearTimeout(timer);

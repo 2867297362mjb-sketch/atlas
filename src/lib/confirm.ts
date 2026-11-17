@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { createSelectors } from "@/lib/create-selectors";
 
 /**
  * A yes/no question the app asks before doing something it can't undo:
@@ -63,7 +62,7 @@ const useConfirmStoreBase = create<ConfirmState>((set, get) => ({
   },
 }));
 
-export const useConfirmStore = createSelectors(useConfirmStoreBase);
+export const useConfirmStore = useConfirmStoreBase;
 
 export function confirm(prompt: ConfirmPrompt): Promise<boolean> {
   return useConfirmStore

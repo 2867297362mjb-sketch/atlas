@@ -1,4 +1,6 @@
-# `.agents/skills` is the canonical store; ACP advertisement is the picker
+# ADR-0005: `.agents/skills` is the canonical store; ACP advertisement is the picker
+
+**Status:** Accepted (2026-08-26). Supersedes ADR-0026's registry reconciliation. ADR-0025 settles how a skill is invoked.
 
 Atlas had built a second skill ecosystem alongside skills.sh — its own canonical store at `.atlas/skills`, its own GitHub clone-and-install, and its own symlink projections into the same agent directories skills.sh writes to, sharing only the skills.sh search index for discovery. We are collapsing that: `~/.agents/skills` and `<project>/.agents/skills` become Atlas's canonical store, Atlas stops injecting anything of its own, and the slash picker is sourced purely from what the bound agent advertises over ACP.
 

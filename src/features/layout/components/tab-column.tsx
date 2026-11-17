@@ -11,7 +11,7 @@ import { SessionHeaderSlot } from "@/features/chat/components/session-header-slo
 import { Plus, Maximize2, Minimize2 } from "lucide-react";
 import { columnChrome } from "../lib/shell-edges";
 import { PaneTopInsetContext } from "../lib/pane-top-inset";
-import { OPEN_SURFACE_MENU_EVENT, SURFACES, openSurface, surfaceForKey } from "../lib/surfaces";
+import { SURFACES, openSurface, surfaceForKey } from "../lib/surfaces";
 import { useLayoutStore, type Tab, type ProjectView } from "../stores/layout-store";
 import { PaneTabStrip } from "./pane-tab-strip";
 import { GROUP_OF } from "./tab-panels";
@@ -26,6 +26,7 @@ import {
   DropdownMenuTrigger,
   IconButton,
 } from "@tryatlas/design";
+import { useWindowEvent } from "@/lib/window-events";
 
 /**
  * One split column. The two roles are deliberately unalike, so it reads at a
@@ -69,7 +70,7 @@ export const TabColumn = memo(function TabColumn({
   placementControls: boolean;
   projectId: string;
 }) {
-  const { setActiveTab, setFocusedGroup, moveTab } = useLayoutStore.use.actions();
+  const { setActiveTab, setFocusedGroup, moveTab } = useLayoutStore((s) => s.actions);
   const navigationHint = useNavigationHint();
 
   const tabsAll = view.tabs;
@@ -218,8 +219,8 @@ function MainTitle({ tab }: { tab: Tab }) {
  * (`RightPanelToggle`), and it always sits on the right.
  */
 function PanelPlacementControls() {
-  const surfaces = useLayoutStore.use.surfaces();
-  const { setSurfaces } = useLayoutStore.use.actions();
+  const surfaces = useLayoutStore((s) => s.surfaces);
+  const { setSurfaces } = useLayoutStore((s) => s.actions);
   const maximized = surfaces === "expanded";
   const maximizeLabel = maximized ? "Restore panel size" : "Maximize panel";
   return (
@@ -230,7 +231,6 @@ function PanelPlacementControls() {
           label={maximizeLabel}
           size="sm"
           iconSize="md"
-          aria-pressed={maximized}
           onClick={() => setSurfaces(maximized ? "shown" : "expanded")}
         />
       </HintItem>
@@ -248,13 +248,9 @@ function SurfaceAdd({ groupId }: { groupId: string }) {
   const label = hint ? `Open a surface (${hint})` : "Open a surface";
   const [open, setOpen] = useState(false);
 
-  useEffect(() => {
-    const onOpen = (e: Event) => {
-      if ((e as CustomEvent<{ groupId?: string }>).detail?.groupId === groupId) setOpen(true);
-    };
-    window.addEventListener(OPEN_SURFACE_MENU_EVENT, onOpen);
-    return () => window.removeEventListener(OPEN_SURFACE_MENU_EVENT, onOpen);
-  }, [groupId]);
+  useWindowEvent("atlas:open-surface-menu", (detail) => {
+    if (detail?.groupId === groupId) setOpen(true);
+  });
 
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
@@ -288,10 +284,14 @@ function SurfaceAdd({ groupId }: { groupId: string }) {
         }}
       >
         {SURFACES.map((surface) => (
-          <DropdownMenuItem key={surface.type} onClick={() => openSurface(surface, groupId)}>
+          <DropdownMenuItem
+            key={surface.type}
+            aria-keyshortcuts={surface.key}
+            onClick={() => openSurface(surface, groupId)}
+          >
             <surface.icon size={14} />
             {surface.label}
-            <DropdownMenuShortcut>{surface.key}</DropdownMenuShortcut>
+            <DropdownMenuShortcut aria-hidden>{surface.key}</DropdownMenuShortcut>
           </DropdownMenuItem>
         ))}
       </DropdownMenuContent>

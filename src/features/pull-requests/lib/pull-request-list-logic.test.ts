@@ -275,16 +275,16 @@ describe("optimistic rows", () => {
 });
 
 describe("resolvePullRequestStacks", () => {
-  it("chains open pull requests by base branch, base first, siblings sharing a depth", () => {
+  it("stacks open pull requests by base branch, base first, siblings sharing a depth", () => {
     const base = entry(10, { headBranch: "a" });
     const mid = entry(11, { headBranch: "b", baseBranch: "a" });
     const top = entry(12, { headBranch: "c", baseBranch: "b" });
     const side = entry(13, { headBranch: "d", baseBranch: "a" });
     const lone = entry(14, { headBranch: "e" });
     const stacks = resolvePullRequestStacks([top, lone, side, mid, base]);
-    const chain = stacks.get(12)!.chain;
-    expect(chain.layers.map((e) => e.number)).toEqual([10, 11, 12, 13]);
-    expect(chain.depths).toEqual([0, 1, 2, 1]);
+    const stack = stacks.get(12)!.stack;
+    expect(stack.layers.map((e) => e.number)).toEqual([10, 11, 12, 13]);
+    expect(stack.depths).toEqual([0, 1, 2, 1]);
     expect(stacks.get(11)).toMatchObject({ position: 2, size: 4 });
     expect(stacks.has(14)).toBe(false);
   });

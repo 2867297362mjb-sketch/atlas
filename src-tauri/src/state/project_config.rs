@@ -34,8 +34,8 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 
 use super::atlas_config::{
-    document_added_keys, settings_keys_in, validate, write_atomic, AppSettings,
-    PROJECT_SETTING_KEYS, PROJECT_TIGHTEN_ONLY_KEYS,
+    document_added_keys, settings_keys_in, validate, AppSettings, PROJECT_SETTING_KEYS,
+    PROJECT_TIGHTEN_ONLY_KEYS,
 };
 
 pub const PROJECT_CONFIG_FILE: &str = "config.toml";
@@ -215,7 +215,8 @@ pub fn write_patch(
     if let Some(error) = parsed.error {
         return Err(error);
     }
-    write_atomic(&path, &text).map_err(|e| format!("could not write {}: {e}", path.display()))?;
+    atlas_fs::replace_file(&path, &text)
+        .map_err(|e| format!("could not write {}: {e}", path.display()))?;
     Ok(parsed)
 }
 

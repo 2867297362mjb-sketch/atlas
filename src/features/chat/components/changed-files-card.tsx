@@ -169,7 +169,7 @@ export const ChangedFilesCard = memo(function ChangedFilesCard({
   const hasFolders = cardGroups.some((g) => g.tree.some((n) => n.kind === "dir"));
 
   const allExpanded = useChangedFilesStore((s) => s.expanded[turnKey] === true);
-  const { setExpanded } = useChangedFilesStore.use.actions();
+  const { setExpanded } = useChangedFilesStore((s) => s.actions);
   // What the card measures before it has ever been laid out (see `cardStyle`).
   // A group header is one row.
   const firstRows = useMemo(() => {
@@ -346,7 +346,7 @@ const ChangedFilesTree = memo(function ChangedFilesTree({
         )}
       </ContextMenuTrigger>
       {menuFile && (
-        <ContextMenuContent>
+        <ContextMenuContent aria-label="File actions">
           <ContextMenuItem onClick={() => openTurnDiff(turnKey, menuFile.source)}>
             Show diff
           </ContextMenuItem>

@@ -68,7 +68,7 @@ export const TerminalView = memo(function TerminalView({
   const [found, setFound] = useState<FindResult>(NO_MATCHES);
 
   const pendingFocus = useTerminalStore((s) => s.pendingFocus);
-  const { clearPendingTerminalFocus } = useTerminalStore.use.actions();
+  const { clearPendingTerminalFocus } = useTerminalStore((s) => s.actions);
 
   // Attach the session's surface to this view's host; detach on unmount. The
   // surface element is the session's, so a remount re-parents it and nothing

@@ -106,18 +106,6 @@ fn summarizer_path(project_path: &str) -> PathBuf {
     atlas_dir(project_path).join("memory-summarizer.json")
 }
 
-/// Atomic write: create `.atlas/`, write to a sibling `.tmp`, then rename over
-/// the target (atomic on POSIX). Mirrors `plans.rs`.
-fn atomic_write(path: &Path, payload: &str) -> Result<(), String> {
-    if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, payload).map_err(|e| e.to_string())?;
-    fs::rename(&tmp, path).map_err(|e| e.to_string())?;
-    Ok(())
-}
-
 fn read_sharing_file(project_path: &str) -> SharingFile {
     let path = sharing_path(project_path);
     let Ok(raw) = fs::read_to_string(&path) else {
@@ -206,7 +194,7 @@ impl MemorySharingState {
         let mut file = read_sharing_file(project_path);
         change(&mut file);
         let payload = serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?;
-        atomic_write(&sharing_path(project_path), &payload)?;
+        atlas_fs::replace_file(sharing_path(project_path), &payload).map_err(|e| e.to_string())?;
         self.toggles.lock().insert(project_path.to_string(), file);
         Ok(())
     }
@@ -258,7 +246,7 @@ pub fn memory_summarizer_get(project_path: String) -> Result<SummarizerPref, Str
 #[tauri::command(async)]
 pub fn memory_summarizer_set(project_path: String, pref: SummarizerPref) -> Result<(), String> {
     let payload = serde_json::to_string_pretty(&pref).map_err(|e| e.to_string())?;
-    atomic_write(&summarizer_path(&project_path), &payload)?;
+    atlas_fs::replace_file(summarizer_path(&project_path), &payload).map_err(|e| e.to_string())?;
     Ok(())
 }
 

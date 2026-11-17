@@ -44,13 +44,13 @@ export type GitManagerView = "changes" | "history";
  * branch; the dialogs live here because the bar's operations open them.
  */
 export function GitManagerPanel({ view }: { view: GitManagerView }) {
-  const isRepo = useGitStore.use.isRepo();
-  const repoPath = useGitStore.use.repoPath();
-  const ahead = useGitStore.use.ahead();
-  const behind = useGitStore.use.behind();
-  const branchesFull = useGitStore.use.branchesFull();
-  const files = useGitStore.use.files();
-  const actions = useGitStore.use.actions();
+  const isRepo = useGitStore((s) => s.isRepo);
+  const repoPath = useGitStore((s) => s.repoPath);
+  const ahead = useGitStore((s) => s.ahead);
+  const behind = useGitStore((s) => s.behind);
+  const branchesFull = useGitStore((s) => s.branchesFull);
+  const files = useGitStore((s) => s.files);
+  const actions = useGitStore((s) => s.actions);
 
   const [busy, setBusy] = useState<string | null>(null);
   const [mergeOpen, setMergeOpen] = useState(false);
@@ -206,7 +206,7 @@ function FetchButton({
   onClick: () => void;
   busy: boolean;
 }) {
-  const autoFetch = useGitStore.use.autoFetch();
+  const autoFetch = useGitStore((s) => s.autoFetch);
   const status = repoPath ? autoFetch[repoPath] : undefined;
   const [, setTick] = useState(0);
   useEffect(() => {

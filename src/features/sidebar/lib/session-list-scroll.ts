@@ -9,7 +9,6 @@
 // frame.
 
 import { create } from "zustand";
-import { createSelectors } from "@/lib/create-selectors";
 
 /** How long the list has to be still before hover cards come back. */
 const SETTLE_MS = 150;
@@ -18,9 +17,7 @@ interface SessionListScrollState {
   scrolling: boolean;
 }
 
-export const useSessionListScroll = createSelectors(
-  create<SessionListScrollState>()(() => ({ scrolling: false })),
-);
+export const useSessionListScroll = create<SessionListScrollState>()(() => ({ scrolling: false }));
 
 let settleTimer: ReturnType<typeof setTimeout> | undefined;
 

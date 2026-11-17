@@ -113,6 +113,9 @@ const ENV_KEY_VARS: &[(&str, &[&str])] = &[
         &["CHEAPER_INFERENCE_API_KEY", "CHEAPERINFERENCE_API_KEY"],
     ),
     ("runcrate", &["RUNCRATE_API_KEY"]),
+    ("opper", &["OPPER_API_KEY"]),
+    ("standardcompute", &["STANDARDCOMPUTE_API_KEY"]),
+    ("uberllm", &["UBERLLM_API_KEY"]),
 ];
 
 /// One env-imported key: which provider it maps to, the variable it came from,
@@ -519,29 +522,24 @@ fn backup_once(path: &Path) {
     }
 }
 
-/// Write `content` to `path` atomically (temp file + rename), so a crash mid-write
-/// can never leave a truncated profile — the difference between a working shell
-/// and a broken login.
+/// Replace the profile at `path` with `content` through
+/// [`atlas_fs::replace_file_with_mode`], so a crash mid-write can never leave a
+/// truncated profile — the difference between a working shell and a broken
+/// login.
 fn write_atomic(path: &Path, content: &str) -> Result<(), String> {
-    if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
-    }
-    let created = !path.exists();
-    let tmp = path.with_extension("atlas-tmp");
-    fs::write(&tmp, content).map_err(|e| format!("write temp: {e}"))?;
+    // Match the file we are replacing; a file we create ourselves holds
+    // secrets and starts owner-only.
     #[cfg(unix)]
-    {
+    let mode = {
         use std::os::unix::fs::PermissionsExt;
-        // Match the file we are replacing; a file we create ourselves holds
-        // secrets and starts owner-only.
-        let mode = fs::metadata(path)
+        fs::metadata(path)
             .ok()
-            .map(|m| m.permissions().mode() & 0o777);
-        let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(mode.unwrap_or(0o600)));
-    }
-    fs::rename(&tmp, path).map_err(|e| format!("replace {}: {e}", path.display()))?;
-    let _ = created;
-    Ok(())
+            .map_or(0o600, |m| m.permissions().mode() & 0o777)
+    };
+    #[cfg(not(unix))]
+    let mode = 0o600;
+    atlas_fs::replace_file_with_mode(path, content, mode)
+        .map_err(|e| format!("replace {}: {e}", path.display()))
 }
 
 /// Reflect a change into the live snapshot + agent env so the running app picks
@@ -795,5 +793,35 @@ mod tests {
         assert!(entry.is_some(), "runcrate must be in ENV_KEY_VARS");
         let (_, vars) = entry.unwrap();
         assert_eq!(vars, &["RUNCRATE_API_KEY"]);
+    }
+
+    #[test]
+    fn test_opper_env_vars() {
+        let entry = ENV_KEY_VARS
+            .iter()
+            .find(|(provider, _)| *provider == "opper");
+        assert!(entry.is_some(), "opper must be in ENV_KEY_VARS");
+        let (_, vars) = entry.unwrap();
+        assert_eq!(vars, &["OPPER_API_KEY"]);
+    }
+
+    #[test]
+    fn test_standardcompute_env_vars() {
+        let entry = ENV_KEY_VARS
+            .iter()
+            .find(|(provider, _)| *provider == "standardcompute");
+        assert!(entry.is_some(), "standardcompute must be in ENV_KEY_VARS");
+        let (_, vars) = entry.unwrap();
+        assert_eq!(vars, &["STANDARDCOMPUTE_API_KEY"]);
+    }
+
+    #[test]
+    fn test_uberllm_env_vars() {
+        let entry = ENV_KEY_VARS
+            .iter()
+            .find(|(provider, _)| *provider == "uberllm");
+        assert!(entry.is_some(), "uberllm must be in ENV_KEY_VARS");
+        let (_, vars) = entry.unwrap();
+        assert_eq!(vars, &["UBERLLM_API_KEY"]);
     }
 }

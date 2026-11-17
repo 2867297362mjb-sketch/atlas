@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Editor } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => null) }));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
 
 import { docChips, docToText, textToDoc } from "@/components/composer/composer-doc";
 import { CommsMention, pillFromHTML } from "../components/comms-mention-pill";

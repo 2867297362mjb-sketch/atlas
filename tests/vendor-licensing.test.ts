@@ -3,6 +3,8 @@ import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { walkAll } from "./support/walk";
+import { expectFloor } from "./support/floor";
 
 /**
  * Apache-2.0 obligations for the engine (issue #44, spec D11 / Phase 1).
@@ -134,6 +136,7 @@ function computeModifiedVendoredFiles(): string[] {
     forkBlobs.set(rel, meta.split(" ")[2]);
   }
   const files = walk(VENDOR);
+  expectFloor("files under vendor/atlas-engine", files.length, 3400);
   // Repo-relative with `/`: git matches `.gitattributes` against the path it
   // is given, and a Windows absolute path (`C:\...`) matches no pattern — so
   // the CRLF fixtures' nested `-text` rule was skipped, their bytes were
@@ -154,16 +157,9 @@ function computeModifiedVendoredFiles(): string[] {
     .map((abs) => path.relative(REPO_ROOT, abs).split(path.sep).join("/"));
 }
 
-/** Every file under `dir`, `target/` excluded, as repo-relative paths. */
+/** Every file under `dir`, `target/` excluded, sorted. */
 function walk(dir: string): string[] {
-  const out: string[] = [];
-  for (const e of readdirSync(dir, { withFileTypes: true })) {
-    const p = path.join(dir, e.name);
-    if (e.isDirectory()) {
-      if (e.name !== "target") out.push(...walk(p));
-    } else out.push(p);
-  }
-  return out.sort();
+  return walkAll(dir, { skip: ["target"] }).sort();
 }
 
 /**
@@ -284,7 +280,7 @@ describe("§4(b) — modified files say they were modified", () => {
 
   it("finds the modification set (parser health)", () => {
     // If this returned nothing, the rule below would hold vacuously forever.
-    expect(modifiedVendoredFiles().length).toBeGreaterThan(5);
+    expectFloor("engine files modified since the fork point", modifiedVendoredFiles().length, 2000);
   });
 
   // Reads every modified engine file. The hashing is in `beforeAll`; the

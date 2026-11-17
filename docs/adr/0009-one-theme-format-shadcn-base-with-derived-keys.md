@@ -1,6 +1,6 @@
 # ADR-0009: One theme format — shadcn base tokens, optional palette and keys, everything else derived
 
-**Status:** Accepted (2026-09-17). Amended by ADR-0022: no base token is required any more. Plan and audit: `docs-atlas/content/private/theme-system.mdx`.
+**Status:** Accepted (2026-09-17). Amended by ADR-0022: no base token is required any more. The resolver, `keys.toml` and the built-in themes now live in `@tryatlas/design` (ADR-0027). Plan and audit: `docs-atlas/content/private/theme-system.mdx`.
 
 ## Context
 
@@ -56,4 +56,4 @@ Replacing the 23 existing call sites was considered and rejected: each is a pres
 
 - **The token names are a public contract.** Renaming a base token or theme key breaks community themes, so the TOML carries `schema = 1`.
 - **`accent` changes meaning.** It now follows shadcn: a hover/selected surface. Atlas's brand colour is `primary`.
-- **User settings move.** `atlasTheme` and `codeEditorTheme` in `config.toml` are replaced by `theme`, `themeMode` and `themeOverrides`. Old values are migrated once.
+- **User settings move.** `atlasTheme` and `codeEditorTheme` in `config.toml` are replaced by `theme`, `themeMode` and `themeOverrides` (`theme` has since been split into `themeLight` and `themeDark`). Old values are migrated once.

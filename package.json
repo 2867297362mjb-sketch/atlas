@@ -17,17 +17,20 @@
     "build:app:dmg:intel": "bash scripts/build-dmg.sh intel",
     "build:app:win": "node scripts/with-posthog-env.mjs tauri build --target x86_64-pc-windows-msvc --bundles msi",
     "build:app:linux": "node scripts/with-posthog-env.mjs tauri build --config src-tauri/tauri.linux.conf.json",
-    "lint": "oxlint src/ tests/ scripts/",
-    "format": "oxfmt --write src/ tests/ scripts/",
-    "format:check": "oxfmt --check src/ tests/ scripts/",
+    "lint": "oxlint src/ tests/ scripts/ e2e/ playwright.config.ts",
+    "format": "oxfmt --write src/ tests/ scripts/ e2e/ playwright.config.ts",
+    "format:check": "oxfmt --check src/ tests/ scripts/ e2e/ playwright.config.ts",
     "doctor": "node scripts/doctor.mjs",
     "test": "vitest run",
     "test:contracts": "vitest run tests/",
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "playwright test",
     "theme:keys": "node scripts/generate-theme-keys.mjs",
     "theme:pierre": "node scripts/theme-pierre.mjs",
     "theme:keys:check": "node scripts/generate-theme-keys.mjs --check",
     "settings:gen": "node scripts/generate-settings.mjs",
     "settings:gen:check": "node scripts/generate-settings.mjs --check",
+    "bindings:gen": "ATLAS_BLESS=1 cargo test -p atlas-agent-wire --test bindings && ATLAS_BLESS=1 cargo test -p atlas --lib state::app_state_bindings",
     "icons:render": "node scripts/app-icons.mjs",
     "icons:check": "node scripts/app-icons.mjs --check",
     "test:rust": "bash scripts/test-rust.sh",
@@ -45,7 +48,7 @@
   },
   "dependencies": {
     "@base-ui/react": "1.8.0",
-    "@tryatlas/design": "github:tryatlas/design#v0.1.15",
+    "@tryatlas/design": "github:tryatlas/design#v0.1.19",
     "@codemirror/commands": "^6.11.1",
     "@codemirror/lang-cpp": "^6.0.3",
     "@codemirror/lang-css": "^6.3.1",
@@ -136,7 +139,9 @@
     "zustand": "^5.0.16"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
     "@pierre/theme": "2.0.0",
+    "@playwright/test": "1.64.1",
     "@shadcn/lint": "^0.2.3",
     "@tailwindcss/vite": "^4.3.3",
     "@tauri-apps/cli": "^2.12.4",
@@ -149,10 +154,12 @@
     "@types/node": "^26.6.5",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "@vitejs/plugin-react": "^6.1.2",
+    "@vitejs/plugin-react": "^6.2.1",
+    "@vitest/coverage-v8": "^5.0.5",
     "happy-dom": "^21.0.4",
     "husky": "^9.1.7",
     "lint-staged": "^17.6.0",
+    "oxc-transform-react": "0.156.0",
     "oxfmt": "^0.75.0",
     "oxlint": "^1.90.0",
     "tailwindcss": "^4.3.3",
@@ -172,7 +179,7 @@
     "@codemirror/view": "^6.43.0"
   },
   "lint-staged": {
-    "{src,tests,scripts}/**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}": [
+    "{src,tests,scripts,e2e}/**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}": [
       "oxfmt --write",
       "oxlint"
     ],

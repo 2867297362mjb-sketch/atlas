@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { bracketBody } from "./support/source";
 
 /**
  * Every path that binds a tab to a live agent session must put the AGENT into
@@ -40,6 +41,11 @@ const read = (p: string) => readFileSync(path.join(REPO_ROOT, p), "utf8");
 /** Where `applyModeOnResume` is implemented — the one definition. */
 const RESUME_MODE = "src/features/chat/lib/resume-mode.ts";
 
+/** Where `settleMode` is implemented: validate the pick against what the
+ *  agent advertises, push it, and answer the agent's mode if it refuses. Both
+ *  `applyModeOnResume` and the `session/new` arm call it. */
+const CONFIGURATION = "src/features/chat/lib/session-configuration.ts";
+
 /**
  * Every binding site, and the call that carries the user's pick to the agent.
  *
@@ -51,13 +57,13 @@ const RESUME_MODE = "src/features/chat/lib/resume-mode.ts";
 const BIND_SITES = [
   {
     what: "session/new, at bind time",
-    file: "src/features/chat/hooks/use-agent-bind.ts",
-    // The fresh-session arm inlines `resolveEffectiveMode` + `setMode` rather
-    // than calling `applyModeOnResume`: it has the `SessionInit` already and
-    // seeds Claude's own permission pill, which `applyModeOnResume` only
-    // touches on an un-honoured pick. What must be present is the validation
-    // and the push, in that order.
-    via: "resolveEffectiveMode",
+    file: "src/features/chat/lib/session-bind.ts",
+    // The fresh-session arm does not call `applyModeOnResume`: it has the
+    // `SessionInit` already and seeds Claude's own permission pill, which
+    // `applyModeOnResume` only touches on an un-honoured pick. It makes the
+    // call `applyModeOnResume` itself makes, `settleMode`, which is the
+    // validation and the push, in that order (checked below).
+    via: "settleMode",
   },
   {
     what: "sidebar resume (openThread)",
@@ -76,12 +82,14 @@ const BIND_SITES = [
   },
 ] as const;
 
+const REBIND = "src/features/chat/lib/agent-rebind.ts";
+
 /** The body of the function that actually respawns and rebinds. */
 function rebindBody(): string {
-  const src = read("src/features/chat/lib/agent-rebind.ts");
-  const start = src.indexOf("async function respawnAndRebind");
-  expect(start, "agent-rebind.ts no longer defines respawnAndRebind").toBeGreaterThan(-1);
-  return src.slice(start, src.indexOf("\n}\n", start));
+  return bracketBody(read(REBIND), /\basync function respawnAndRebind\b/, {
+    lang: "ts",
+    where: REBIND,
+  });
 }
 
 describe("resume-mode coverage", () => {
@@ -106,15 +114,25 @@ describe("resume-mode coverage", () => {
   it("pushes the mode to the agent rather than only seeding the picker", () => {
     // `applyModeOnResume`'s whole job is the `setMode` round-trip; a caller
     // that only wanted the pill seeded would use `setAcpModes` directly. If
-    // the push ever goes, this is what catches it.
-    const src = read(RESUME_MODE);
-    expect(src).toMatch(/await agents\.setMode\(/);
+    // the push ever goes, this is what catches it. The round-trip is
+    // `settleMode`'s: `applyModeOnResume` has to await it, and it has to
+    // validate before it pushes.
+    expect(read(RESUME_MODE)).toMatch(/await sessionConfiguration\.settleMode\(/);
+    const settle = bracketBody(read(CONFIGURATION), /\basync function settleMode\b/, {
+      lang: "ts",
+      where: CONFIGURATION,
+    });
+    const validate = settle.indexOf("resolveEffectiveMode(");
+    const push = settle.indexOf("await deps.agents.setMode(");
+    expect(validate, "settleMode never validates the pick").toBeGreaterThan(-1);
+    expect(push, "settleMode never pushes the mode").toBeGreaterThan(-1);
+    expect(validate, "the pick must be validated before it is pushed").toBeLessThan(push);
   });
 
   it("restores the mode BEFORE the tab is bound", () => {
     // Ordering, not presence. The send gate is `setAcpBinding`, not
     // `setDisconnected(false)`: a tab whose agent died while starting has no
-    // `acpSessionId`, so the bind is a `justBound` edge (`drain-gate.ts`) and
+    // `acpSessionId`, so the bind is a `justBound` edge (`send-gate.ts`) and
     // the queued message goes out on the next commit. A mode restored after
     // the bind races that message, and an `await` between the bind and
     // `setDisconnected(false)` lets it see the tab still disconnected and
@@ -138,10 +156,10 @@ describe("resume-mode coverage", () => {
     // queue into `handleSend`; without a per-tab guard each caller respawns
     // the agent and rebinds, and the loser can leave the tab on a session the
     // mode was never applied to.
-    const src = read("src/features/chat/lib/agent-rebind.ts");
-    const start = src.indexOf("function rebindDisconnectedSession");
-    expect(start).toBeGreaterThan(-1);
-    const guard = src.slice(start, src.indexOf("\n}\n", start));
+    const guard = bracketBody(read(REBIND), /\bfunction rebindDisconnectedSession\b/, {
+      lang: "ts",
+      where: REBIND,
+    });
     expect(guard).toMatch(/rebindsInFlight\.get\(tabId\)/);
     expect(guard).toMatch(/rebindsInFlight\.delete\(tabId\)/);
   });
@@ -161,7 +179,10 @@ describe("resume-mode coverage", () => {
     const catchStart = body.indexOf("} catch", call);
     expect(catchStart).toBeGreaterThan(-1);
 
-    const handler = body.slice(catchStart, body.indexOf("}", body.indexOf(";", catchStart)));
+    const handler = bracketBody(body.slice(catchStart), "catch", {
+      lang: "ts",
+      where: `${REBIND}: the mode restore's catch`,
+    });
     expect(handler).toMatch(/console\.warn\(/);
     expect(handler).not.toMatch(/return false/);
   });

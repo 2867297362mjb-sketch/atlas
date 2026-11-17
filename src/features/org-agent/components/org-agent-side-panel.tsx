@@ -26,10 +26,10 @@ import { GradualBlur, HintGroup, HintItem, IconButton } from "@tryatlas/design";
 
 export function OrgAgentSidePanel() {
   useTipOnMount("ask-atlas");
-  const activeId = useOrgAgentStore.use.activeId();
-  const floatingId = useOrgAgentStore.use.floatingId();
-  const pageId = useOrgAgentStore.use.pageId();
-  const { newChat } = useOrgAgentStore.use.actions();
+  const activeId = useOrgAgentStore((s) => s.activeId);
+  const floatingId = useOrgAgentStore((s) => s.floatingId);
+  const pageId = useOrgAgentStore((s) => s.pageId);
+  const { newChat } = useOrgAgentStore((s) => s.actions);
   const active = activeId;
 
   // Opened with nothing in it: a fresh conversation, so the panel never
@@ -82,12 +82,12 @@ export function OrgAgentSidePanel() {
  *  (`pane-tab.tsx`) — icon and title, the selected one filled — with New
  *  right after the last; Minimise and Full screen at the end, plain icons. */
 function TabStrip() {
-  const tabs = useOrgAgentStore.use.tabs();
-  const activeId = useOrgAgentStore.use.activeId();
-  const floatingId = useOrgAgentStore.use.floatingId();
-  const pageId = useOrgAgentStore.use.pageId();
-  const unread = useOrgAgentStore.use.unread();
-  const { activate, closeTab, newChat, minimise, fullScreen } = useOrgAgentStore.use.actions();
+  const tabs = useOrgAgentStore((s) => s.tabs);
+  const activeId = useOrgAgentStore((s) => s.activeId);
+  const floatingId = useOrgAgentStore((s) => s.floatingId);
+  const pageId = useOrgAgentStore((s) => s.pageId);
+  const unread = useOrgAgentStore((s) => s.unread);
+  const { activate, closeTab, newChat, minimise, fullScreen } = useOrgAgentStore((s) => s.actions);
   const stripRef = useRef<HTMLDivElement>(null);
   const edges = useStripEdges(stripRef);
   const mask = fadeMask(edges);
@@ -117,58 +117,65 @@ function TabStrip() {
             return (
               <TabTitle key={id} id={id}>
                 {(title, busy, waiting) => (
-                  <div
-                    role="tab"
-                    tabIndex={0}
-                    aria-selected={active}
-                    title={away ? `${title} — open in the ${away}` : title}
-                    onClick={() => activate(id)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        activate(id);
-                      }
-                    }}
-                    className={cn(
-                      // The window's tab (`pane-tab.tsx`): a status mark on the
-                      // left that turns into the close button on hover, then the
-                      // title.
-                      "group/tab flex h-6 max-w-44 shrink-0 cursor-pointer items-center gap-1.5 rounded-md pr-2 pl-1 text-xs outline-none transition-colors select-none",
-                      "focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset",
-                      active
-                        ? "bg-element-selected text-foreground"
-                        : "text-muted-foreground hover:bg-element-hover hover:text-foreground",
-                    )}
-                  >
-                    <span className="relative flex size-4 shrink-0 items-center justify-center">
-                      <span className="flex items-center justify-center group-hover/tab:invisible">
-                        {waiting ? (
-                          <span className="size-1.5 rounded-full bg-warning" />
-                        ) : busy ? (
-                          <span className="size-1.5 animate-pulse rounded-full bg-foreground" />
-                        ) : unread.includes(id) ? (
-                          <span className="size-1.5 rounded-full bg-primary" />
-                        ) : away === "floating" ? (
-                          <PictureInPicture2 size={14} />
-                        ) : away ? (
-                          <Maximize2 size={13} />
-                        ) : (
-                          <MessageSquare size={14} />
-                        )}
+                  // The close button is the tab's sibling: inside a
+                  // `role="tab"` it would be folded into the tab.
+                  <div role="presentation" className="group/tab relative flex max-w-44 shrink-0">
+                    <div
+                      role="tab"
+                      tabIndex={0}
+                      aria-selected={active}
+                      title={away ? `${title} — open in the ${away}` : title}
+                      onClick={() => activate(id)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          activate(id);
+                        }
+                      }}
+                      className={cn(
+                        // The window's tab (`pane-tab.tsx`): a status mark on the
+                        // left that turns into the close button on hover, then the
+                        // title.
+                        "flex h-6 min-w-0 cursor-pointer items-center gap-1.5 rounded-md pr-2 pl-1 text-xs outline-none transition-colors select-none",
+                        "focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset",
+                        active
+                          ? "bg-element-selected text-foreground"
+                          : "text-muted-foreground group-hover/tab:bg-element-hover group-hover/tab:text-foreground",
+                      )}
+                    >
+                      <span className="relative flex size-4 shrink-0 items-center justify-center">
+                        <span className="flex items-center justify-center group-hover/tab:invisible">
+                          {waiting ? (
+                            <span className="size-1.5 rounded-full bg-warning" />
+                          ) : busy ? (
+                            <span className="size-1.5 animate-pulse rounded-full bg-foreground" />
+                          ) : unread.includes(id) ? (
+                            <span className="size-1.5 rounded-full bg-primary" />
+                          ) : away === "floating" ? (
+                            <PictureInPicture2 size={14} />
+                          ) : away ? (
+                            <Maximize2 size={13} />
+                          ) : (
+                            <MessageSquare size={14} />
+                          )}
+                        </span>
                       </span>
-                      <button
-                        type="button"
-                        aria-label={`Close ${title}`}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          closeTab(id);
-                        }}
-                        className="absolute inset-0 hidden items-center justify-center rounded-sm text-muted-foreground group-hover/tab:flex hover:bg-element-selected hover:text-foreground"
-                      >
-                        <X size={12} />
-                      </button>
-                    </span>
-                    <span className="truncate">{title}</span>
+                      <span className="truncate">{title}</span>
+                    </div>
+                    <button
+                      type="button"
+                      // Out of the Tab order, as it was while hidden: it is
+                      // invisible until hover. Assistive clients still press it.
+                      tabIndex={-1}
+                      aria-label={`Close ${title}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        closeTab(id);
+                      }}
+                      className="absolute top-1 left-1 flex size-4 items-center justify-center rounded-sm text-muted-foreground opacity-0 group-hover/tab:opacity-100 hover:bg-element-selected hover:text-foreground"
+                    >
+                      <X size={12} />
+                    </button>
                   </div>
                 )}
               </TabTitle>
@@ -232,7 +239,7 @@ function TabTitle({
 /** What the panel shows for a conversation that is open somewhere else —
  *  never the conversation itself, which would then be on screen twice. */
 function Elsewhere({ id, where }: { id: string; where: "floating" | "page" }) {
-  const { restoreToPanel } = useOrgAgentStore.use.actions();
+  const { restoreToPanel } = useOrgAgentStore((s) => s.actions);
   const pageShown = useLayoutStore((s) => s.destinationShown && s.destination?.type === "agent");
   const floating = where === "floating";
   const Glyph = floating ? PictureInPicture2 : Maximize2;

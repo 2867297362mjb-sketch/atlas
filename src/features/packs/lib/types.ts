@@ -1,4 +1,4 @@
-// Packs feature — shared types. These mirror the Rust `commands/skills.rs`
+// Packs feature — shared types. These mirror the Rust `crates/atlas-skills`
 // pack IPC contract exactly (serde emits camelCase). The frontend never touches
 // the filesystem; all pack state flows through `packs-api.ts` → `invoke()`.
 //

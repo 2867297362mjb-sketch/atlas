@@ -4,7 +4,6 @@
 
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { createSelectors } from "@/lib/create-selectors";
 
 interface FileTabTreeState {
   shown: boolean;
@@ -13,16 +12,14 @@ interface FileTabTreeState {
   };
 }
 
-export const useFileTabTreeStore = createSelectors(
-  create<FileTabTreeState>()(
-    persist(
-      (set) => ({
-        shown: true,
-        actions: {
-          setShown: (shown) => set({ shown }),
-        },
-      }),
-      { name: "atlas.explorer.file-tab-tree", partialize: (s) => ({ shown: s.shown }) },
-    ),
+export const useFileTabTreeStore = create<FileTabTreeState>()(
+  persist(
+    (set) => ({
+      shown: true,
+      actions: {
+        setShown: (shown) => set({ shown }),
+      },
+    }),
+    { name: "atlas.explorer.file-tab-tree", partialize: (s) => ({ shown: s.shown }) },
   ),
 );

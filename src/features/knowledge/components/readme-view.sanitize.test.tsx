@@ -11,7 +11,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
   openUrl: vi.fn(async () => {}),
   revealItemInDir: vi.fn(),
 }));
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => null) }));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
 
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ReadmeView } from "./readme-view";

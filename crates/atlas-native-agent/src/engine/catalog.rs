@@ -182,22 +182,17 @@ pub fn row(
 ///
 /// A file rather than an in-memory value because that is the only route the
 /// engine offers: `Config` reads a catalogue from the `model_catalog_json` path
-/// and nothing else populates it. Written whole (temp file, then rename):
+/// and nothing else populates it. Written whole ([`atlas_fs::replace_file`]):
 /// the engine re-reads this file on every thread start, and a half-written
 /// one is a failed thread rather than a fallback.
 pub async fn write_models_json(home: &Path, catalogue: &ModelsResponse) -> Result<PathBuf> {
-    tokio::fs::create_dir_all(home)
-        .await
-        .with_context(|| format!("creating the engine home at {}", home.display()))?;
     let path = home.join(CATALOG_FILE);
-    let tmp = home.join(format!("{CATALOG_FILE}.{}.tmp", std::process::id()));
     let body = serde_json::to_vec_pretty(catalogue).context("serializing the model catalog")?;
-    tokio::fs::write(&tmp, body)
+    let target = path.clone();
+    tokio::task::spawn_blocking(move || atlas_fs::replace_file(target, body))
         .await
-        .with_context(|| format!("writing the model catalog to {}", tmp.display()))?;
-    tokio::fs::rename(&tmp, &path)
-        .await
-        .with_context(|| format!("moving the model catalog into place at {}", path.display()))?;
+        .context("the model catalog write did not finish")?
+        .with_context(|| format!("writing the model catalog to {}", path.display()))?;
     Ok(path)
 }
 

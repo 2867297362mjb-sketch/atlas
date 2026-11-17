@@ -2,14 +2,8 @@ import { useEffect, useRef, useState, useMemo, memo, Suspense } from "react";
 import { useLayoutStore, type ProjectView } from "../stores/layout-store";
 import { ChatPanel } from "@/features/chat/components/chat-panel";
 import { FileDockColumn } from "@/features/explorer/components/file-dock";
-import {
-  GROUP_OF,
-  IDLE_EXPENSIVE_TYPES,
-  PERSISTENT_TYPES,
-  PersistentPanel,
-  TabContent,
-  type PersistentTab,
-} from "./tab-panels";
+import { isIdleExpensive, isPersistent } from "@/lib/tab-registry";
+import { GROUP_OF, PersistentPanel, TabContent, type PersistentTab } from "./tab-panels";
 import { SurfaceLauncher } from "./surface-launcher";
 import { PanelLoading } from "./views/panel-loading";
 
@@ -25,7 +19,7 @@ export const TabContentContainer = memo(function TabContentContainer({
   /** Handed to terminal tabs so they can record their owner. */
   projectId: string;
 }) {
-  const { setActiveTab } = useLayoutStore.use.actions();
+  const { setActiveTab } = useLayoutStore((s) => s.actions);
   const ref = useRef<HTMLDivElement>(null);
   const [height, setHeight] = useState(0);
 
@@ -109,7 +103,7 @@ export const TabContentContainer = memo(function TabContentContainer({
 
   // Persist expensive tabs across tab switches within this column. For a
   // BACKGROUND project we additionally drop the types that keep working while
-  // hidden (see IDLE_EXPENSIVE_TYPES) — off-screen terminals/browser embeds/
+  // hidden (`persistent-idle-expensive`, in the tab registry) — off-screen terminals/browser embeds/
   // graphs were a major source of idle heat. Chat/knowledge/settings stay
   // mounted even in background projects: unmounting chat re-ran the whole
   // transcript-load path (window fill, markdown settle, anchor) on every
@@ -126,9 +120,9 @@ export const TabContentContainer = memo(function TabContentContainer({
   // subtree out of focus, hit-testing and find. Same contract the terminal
   // uses for its inactive panes. The active chat wrapper is the same absolute
   // box, so toggling a sibling's mode never relayouts the visible thread.
-  // The explicit predicate is load-bearing: `Set.has` does not narrow, and
-  // `PersistentPanel` below relies on `tab.type` being the `PersistentTabType`
-  // union for its exhaustiveness check.
+  // The explicit predicate is load-bearing: `PersistentPanel` below relies on
+  // `tab.type` being the `PersistentTabType` union for its exhaustiveness
+  // check.
   //
   // Mounted in id order, not strip order. Dragging a tab to a new place in the
   // strip must not move its panel's DOM: React reorders keyed siblings with
@@ -136,8 +130,7 @@ export const TabContentContainer = memo(function TabContentContainer({
   // for the tabs already open, so a reorder touches nothing here.
   const persistentTabs = tabs
     .filter(
-      (t): t is PersistentTab =>
-        PERSISTENT_TYPES.has(t.type) && (isActive || !IDLE_EXPENSIVE_TYPES.has(t.type)),
+      (t): t is PersistentTab => isPersistent(t.type) && (isActive || !isIdleExpensive(t.type)),
     )
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   const activeIsNonPersistent = !persistentTabs.find((t) => t.id === activeTab.id);
@@ -169,7 +162,7 @@ export const TabContentContainer = memo(function TabContentContainer({
                   className="absolute inset-0"
                   inert={hidden}
                   // Pauses the session's working shimmers while it is hidden
-                  // (`src/lib/visible-animation.ts`): `visibility:hidden` does
+                  // (`@tryatlas/design/session`'s `visible-animation.ts`): `visibility:hidden` does
                   // not stop CSS animations the way `display:none` does.
                   data-atlas-offstage={hidden || undefined}
                   style={{

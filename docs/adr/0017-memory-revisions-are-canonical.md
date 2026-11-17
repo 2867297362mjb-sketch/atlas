@@ -1,6 +1,6 @@
 # ADR-0017: Shared memory's revisions are canonical; everything else is a projection
 
-**Status:** Accepted (2026-10-07). Milestone M1 of `docs/superpowers/plans/2026-10-03-memory-system/`.
+**Status:** Accepted (2026-10-07). Milestone M1 of `docs/superpowers/plans/2026-10-03-memory-system/` (not kept in the repo).
 
 **For agents:** if you are changing how shared memory is written, read `crates/atlas-memory/src/record.rs` (`after_write`, `before_delete`, `remember_guarded`, the v5 migration) first. Every write appends a revision; nothing but `clear` and `purge` deletes one.
 

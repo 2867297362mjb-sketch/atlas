@@ -156,7 +156,7 @@ const TREE_LAYOUT_ID = "git-review-diff-tree";
 
 /** The whitespace mode every diff panel follows: the panel's toggle, or the setting. */
 export function useDiffIgnoreWhitespace(): boolean {
-  const stored = useDiffPanelStore.use.ignoreWhitespace();
+  const stored = useDiffPanelStore((s) => s.ignoreWhitespace);
   const setting = useSettingsStore((s) => s.settings.diffIgnoreWhitespace);
   return stored ?? setting;
 }
@@ -271,13 +271,13 @@ export function DiffPanelView({
     copyPathOf,
     absPathOf,
   } = source;
-  const layout = useDiffPanelStore.use.layout();
+  const layout = useDiffPanelStore((s) => s.layout);
   // The global `wordWrap` setting: the button below flips it for file tabs too.
   const { wrap: wordWrap, toggle: toggleWordWrap } = useWordWrap();
-  const fileTreeOpen = useDiffPanelStore.use.fileTreeOpen();
+  const fileTreeOpen = useDiffPanelStore((s) => s.fileTreeOpen);
   const ignoreWhitespace = useDiffIgnoreWhitespace();
   const collapseByDefault = useSettingsStore((s) => s.settings.diffFilesCollapsed);
-  const actionsApi = useDiffPanelStore.use.actions();
+  const actionsApi = useDiffPanelStore((s) => s.actions);
 
   // ── Folds: the reader's departures from each file's default, which is
   // folded when the setting says so (on unless turned off: a diff opens as a

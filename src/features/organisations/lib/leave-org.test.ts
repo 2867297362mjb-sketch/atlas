@@ -5,8 +5,10 @@ import type { Organisation } from "../types";
 // `org-switch` reaches most of the app's stores at import time. Only what
 // `leaveOrgAndData` touches when the left org is not the active one (so no
 // `switchOrg` teardown runs) is given behaviour; the rest is inert.
-const invoke = vi.fn(async (..._args: unknown[]) => null);
-vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+import { tauri } from "@/test/tauri-fake";
+
+const invoke = tauri.invoke;
 vi.mock("sonner", () => ({ toast: Object.assign(() => {}, { error: () => {} }) }));
 vi.mock("@/features/log/lib/log", () => ({ logEvent: () => {} }));
 vi.mock("@/features/log/stores/log-store", () => ({ useLogStore: { getState: () => ({}) } }));
@@ -70,7 +72,8 @@ const state = {
 };
 vi.mock("../stores/org-store", () => ({ useOrgStore: { getState: () => state } }));
 
-const { leaveOrgAndData } = await import("./org-switch");
+const { leaveOrgAndData, switchOrg } = await import("./org-switch");
+const { pushActiveOrgAtBoot, resetActiveOrgChangeForTests } = await import("./active-org-change");
 
 const org = (id: string, remoteId?: string): Organisation => ({
   id,
@@ -150,5 +153,25 @@ describe("leaveOrgAndData", () => {
     state.organisations = [org("local-a"), org("local-b", "org_b")];
     await expect(leaveOrgAndData("local-a")).rejects.toMatch(/isn't synced/);
     expect(leaveOrg).not.toHaveBeenCalled();
+  });
+});
+
+describe("switchOrg", () => {
+  it("leaves the boot push of the active org pending when the switch is declined", async () => {
+    // Nothing was pushed to Rust: "Go back" on the running-agents prompt
+    // aborts before any of it. Marking the launch reconciled here used to
+    // cancel the boot push for good, leaving chat and billing on whichever
+    // org Rust had stored.
+    state.organisations = [org("local-a", "org_a"), org("local-b", "org_b")];
+    state.activeOrganisationId = "local-a";
+    agents.busy = 1;
+
+    resetActiveOrgChangeForTests();
+
+    await switchOrg("local-b");
+
+    expect(invoke).not.toHaveBeenCalledWith("auth_set_active_org", expect.anything());
+    expect(pushActiveOrgAtBoot({ signedIn: true, activeOrg: org("local-a", "org_a") })).toBe(true);
+    expect(invoke).toHaveBeenCalledWith("auth_set_active_org", { orgId: "org_a" });
   });
 });

@@ -109,16 +109,16 @@ export function filterSessions(
  * keystroke re-filters sessions without re-bucketing the chart.
  */
 export function useUsageView(): UsageView {
-  const data = useUsageStore.use.data();
-  const loading = useUsageStore.use.loading();
-  const error = useUsageStore.use.error();
-  const fetchedAt = useUsageStore.use.fetchedAt();
-  const range = useUsageStore.use.range();
-  const facets = useUsageStore.use.facets();
-  const groupBy = useUsageStore.use.groupBy();
-  const metric = useUsageStore.use.metric();
-  const table = useUsageStore.use.table();
-  const search = useUsageStore.use.search();
+  const data = useUsageStore((s) => s.data);
+  const loading = useUsageStore((s) => s.loading);
+  const error = useUsageStore((s) => s.error);
+  const fetchedAt = useUsageStore((s) => s.fetchedAt);
+  const range = useUsageStore((s) => s.range);
+  const facets = useUsageStore((s) => s.facets);
+  const groupBy = useUsageStore((s) => s.groupBy);
+  const metric = useUsageStore((s) => s.metric);
+  const table = useUsageStore((s) => s.table);
+  const search = useUsageStore((s) => s.search);
   // Resolved theme colours, rebuilt on `atlas:theme-applied` — the chart's
   // segments are inline styles and cannot follow a custom property.
   const { seriesColor, otherColor } = useSeriesPalette();

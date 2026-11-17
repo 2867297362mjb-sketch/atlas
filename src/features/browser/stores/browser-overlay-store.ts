@@ -1,6 +1,5 @@
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
-import { createSelectors } from "@/lib/create-selectors";
 
 /**
  * Tracks whether any DOM overlay is currently open, so the embedded browser
@@ -23,26 +22,24 @@ interface BrowserOverlayActions {
   };
 }
 
-export const useBrowserOverlayStore = createSelectors(
-  create<BrowserOverlayState & BrowserOverlayActions>()(
-    immer((set) => ({
-      overlayOpen: false,
-      embedCount: 0,
-      actions: {
-        setOverlayOpen: (open) =>
-          set((s) => {
-            s.overlayOpen = open;
-          }),
-        registerEmbed: () =>
-          set((s) => {
-            s.embedCount += 1;
-          }),
-        unregisterEmbed: () =>
-          set((s) => {
-            s.embedCount = Math.max(0, s.embedCount - 1);
-            if (s.embedCount === 0) s.overlayOpen = false;
-          }),
-      },
-    })),
-  ),
+export const useBrowserOverlayStore = create<BrowserOverlayState & BrowserOverlayActions>()(
+  immer((set) => ({
+    overlayOpen: false,
+    embedCount: 0,
+    actions: {
+      setOverlayOpen: (open) =>
+        set((s) => {
+          s.overlayOpen = open;
+        }),
+      registerEmbed: () =>
+        set((s) => {
+          s.embedCount += 1;
+        }),
+      unregisterEmbed: () =>
+        set((s) => {
+          s.embedCount = Math.max(0, s.embedCount - 1);
+          if (s.embedCount === 0) s.overlayOpen = false;
+        }),
+    },
+  })),
 );

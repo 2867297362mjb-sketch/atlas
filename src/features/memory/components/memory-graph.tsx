@@ -9,19 +9,19 @@ const VIEW_KEY = "atlas-memory-graph-view-mode";
 
 /** The Memory tab's Graph sub-tab: store wiring for `MemoryGraphView`. */
 export function MemoryGraph() {
-  const projectPath = useAppStore.use.currentProject()?.path ?? null;
-  const phase = useMemoryGraphStore.use.phase();
-  const progress = useMemoryGraphStore.use.progress();
-  const error = useMemoryGraphStore.use.error();
-  const graph = useMemoryGraphStore.use.graph();
-  const docCount = useMemoryGraphStore.use.docCount();
-  const query = useMemoryGraphStore.use.query();
-  const querying = useMemoryGraphStore.use.querying();
-  const results = useMemoryGraphStore.use.results();
-  const matchedIds = useMemoryGraphStore.use.matchedIds();
-  const selectedId = useMemoryGraphStore.use.selectedId();
+  const projectPath = useAppStore((s) => s.currentProject)?.path ?? null;
+  const phase = useMemoryGraphStore((s) => s.phase);
+  const progress = useMemoryGraphStore((s) => s.progress);
+  const error = useMemoryGraphStore((s) => s.error);
+  const graph = useMemoryGraphStore((s) => s.graph);
+  const docCount = useMemoryGraphStore((s) => s.docCount);
+  const query = useMemoryGraphStore((s) => s.query);
+  const querying = useMemoryGraphStore((s) => s.querying);
+  const results = useMemoryGraphStore((s) => s.results);
+  const matchedIds = useMemoryGraphStore((s) => s.matchedIds);
+  const selectedId = useMemoryGraphStore((s) => s.selectedId);
   const { init, download, buildIndex, runQuery, setQuery, clearQuery, select } =
-    useMemoryGraphStore.use.actions();
+    useMemoryGraphStore((s) => s.actions);
 
   useEffect(() => {
     if (projectPath) void init(projectPath);

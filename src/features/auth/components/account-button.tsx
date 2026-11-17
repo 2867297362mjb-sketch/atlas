@@ -28,10 +28,10 @@ export function AccountButton({
   /** Rows folded into the account menu after Privacy. */
   menuExtra?: ReactNode;
 } = {}) {
-  const snapshot = useAuthStore.use.snapshot();
-  const starting = useAuthStore.use.starting();
-  const { beginSignIn, closeDialog } = useAuthStore.use.actions();
-  const dialogOpen = useAuthStore.use.dialogOpen();
+  const snapshot = useAuthStore((s) => s.snapshot);
+  const starting = useAuthStore((s) => s.starting);
+  const { beginSignIn, closeDialog } = useAuthStore((s) => s.actions);
+  const dialogOpen = useAuthStore((s) => s.dialogOpen);
 
   const connecting = snapshot.status === "connecting";
   const signedIn = snapshot.status === "signed-in";

@@ -22,7 +22,7 @@ export type TeamAccess =
 
 export function useTeamAccess(): TeamAccess {
   const signedIn = useAuthStore((s) => s.snapshot.status === "signed-in");
-  const { beginSignIn } = useAuthStore.use.actions();
+  const { beginSignIn } = useAuthStore((s) => s.actions);
   const synced = useOrgStore((s) => {
     const org = s.organisations.find((o) => o.id === s.activeOrganisationId);
     return !!(org?.syncEnabled && org?.remoteId);

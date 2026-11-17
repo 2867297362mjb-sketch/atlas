@@ -50,7 +50,7 @@ export const ComposerOptionsPill = memo(function ComposerOptionsPill({ tabId }: 
   // `undefined` = no live session has spoken for this tab yet. An explicit `[]`
   // is a live session saying "no knobs", and the cache must not override it.
   const rawConfigOptions = useChatStore((s) => s.sessions[tabId]?.acpConfigOptions);
-  const { setAcpConfigOption } = useChatStore.use.actions();
+  const { setAcpConfigOption } = useChatStore((s) => s.actions);
 
   // Cache read is keyed by agent and re-run when the live value changes, so a
   // tab that switches agents picks up the new agent's remembered knobs at once.

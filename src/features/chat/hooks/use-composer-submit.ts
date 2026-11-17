@@ -10,7 +10,7 @@ import { forkSessionToNewTab } from "../lib/fork-session";
 import type { StagedImage } from "../lib/image-attachment";
 import { forgetSentTexts } from "../lib/mention-registry";
 import type { MentionData } from "../lib/mentions";
-import { enqueuePrompt } from "../lib/turn-queue";
+import { sessionSend } from "../lib/session-send";
 
 export function useComposerSubmit({
   tabId,
@@ -70,13 +70,13 @@ export function useComposerSubmit({
       case "queue-command":
         if (plan.message) {
           const mentions = inputRef.current?.getMentions() ?? [];
-          enqueuePrompt(tabId, plan.message, mentions);
+          sessionSend.enqueue(tabId, plan.message, mentions);
           forgetSentTexts(mentions);
         }
         break;
       case "enqueue": {
         const mentions = inputRef.current?.getMentions() ?? [];
-        enqueuePrompt(tabId, plan.text, mentions);
+        sessionSend.enqueue(tabId, plan.text, mentions);
         forgetSentTexts(mentions);
         break;
       }

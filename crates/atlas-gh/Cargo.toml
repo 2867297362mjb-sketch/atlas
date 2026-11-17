@@ -1,0 +1,21 @@
+[package]
+name = "atlas-gh"
+version = "0.1.0"
+edition = "2021"
+description = "Running the user's GitHub CLI for Atlas: one spawn chokepoint for `gh` with a fixed environment, a timeout that kills, two permit pools (interactive and background), a rate-limit pause per API, and a typed taxonomy for a run that produced no answer."
+
+[lib]
+name = "atlas_gh"
+
+[dependencies]
+atlas-process = { path = "../atlas-process" }
+tokio = { workspace = true, features = ["io-util", "process", "sync", "time"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+# The workspace lint table is only real for members that opt in —
+# without this stanza it is dead configuration (#60).
+[lints]
+workspace = true

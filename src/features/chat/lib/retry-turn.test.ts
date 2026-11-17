@@ -108,6 +108,42 @@ describe("retrying the last turn", () => {
     });
   });
 
+  it("retry after a failed turn rewinds it and re-sends its prompt, once", async () => {
+    // A failed turn leaves the session in `error`, which is not busy: the
+    // retry is offered (`send-gate.ts`), and it removes the failed turn from
+    // the agent's context before sending, rather than appending under it.
+    session = { ...session, status: "error" };
+    rewindLastTurn.mockResolvedValue("try this");
+    send.mockResolvedValue(undefined);
+    const run = retryLastTurn("tab");
+    deliverRewindDelta();
+    await run;
+    expect(rewindLastTurn).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledWith(expect.anything(), "try this");
+    expect(addMessage).toHaveBeenCalledWith("tab", "user", "try this");
+    expect(updateSessionStatus).toHaveBeenCalledWith("tab", "running");
+    expect(enqueueMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not rewind while a turn runs, a stop is pending, or the agent is gone", async () => {
+    for (const over of [
+      { status: "running" },
+      { status: "waiting" },
+      { stopping: true },
+      { disconnected: true },
+      { resumePending: true },
+      { unrestoredModeId: "plan" },
+    ]) {
+      session = { ...session, ...over };
+      await retryLastTurn("tab");
+      session = { ...session, status: "idle", stopping: undefined, disconnected: undefined };
+      session = { ...session, resumePending: undefined, unrestoredModeId: undefined };
+    }
+    expect(rewindLastTurn).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it("rewinds once when clicked twice in a row", async () => {
     // The status gate cannot catch this: `updateSessionStatus("running")` only
     // runs AFTER the rewind resolves, so between the two clicks the session

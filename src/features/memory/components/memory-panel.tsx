@@ -1,11 +1,11 @@
 import { useTipOnMount } from "@/features/tips/lib/use-tip-on-mount";
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { Download, FileOutput, FolderInput, MoreHorizontal, RefreshCw, Trash2 } from "lucide-react";
 import { FileTreeConfirmDelete } from "@/features/explorer/components/file-tree-confirm-delete";
 import { chainBroken, healthLine, useMemoryHealth } from "../lib/use-memory-health";
 import { reviewCount } from "../lib/memory-review-items";
+import { acceptMemoryHistory } from "../lib/shared-memory-api";
 import { MemoryActivity } from "./memory-activity";
 import { MemoryAgentFiles } from "./memory-agent-files";
 import { MemoryEntries } from "./memory-entries";
@@ -67,13 +67,13 @@ import {
 
 export function MemoryPanel() {
   useTipOnMount("memory");
-  const project = useAppStore.use.currentProject();
+  const project = useAppStore((s) => s.currentProject);
   const projectPath = project?.path ?? null;
   const projectName = project?.name ?? projectPath?.split("/").pop() ?? "this project";
-  const sub = useMemoryStore.use.subTab();
-  const { setSubTab } = useMemoryStore.use.actions();
-  const review = useSharedMemoryStore.use.review();
-  const { load, refresh, clear } = useSharedMemoryStore.use.actions();
+  const sub = useMemoryStore((s) => s.subTab);
+  const { setSubTab } = useMemoryStore((s) => s.actions);
+  const review = useSharedMemoryStore((s) => s.review);
+  const { load, refresh, clear } = useSharedMemoryStore((s) => s.actions);
   const [importing, setImporting] = useState(false);
   const [importingRepo, setImportingRepo] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
@@ -293,7 +293,7 @@ function MemoryHealthLine({ projectPath }: { projectPath: string | null }) {
   const accept = async () => {
     setConfirm(false);
     try {
-      await invoke<boolean>("memory_accept_history", { projectPath });
+      await acceptMemoryHistory(projectPath);
       toast.success("Memory history accepted");
     } catch (err) {
       toast.error(`Couldn't accept: ${err instanceof Error ? err.message : String(err)}`);

@@ -48,6 +48,7 @@ import {
 import { OrgAgentInput, type OrgAgentInputHandle } from "./org-agent-input";
 import { Notice, PendingTurn, TurnView } from "./org-agent-turn";
 import { Button, HintGroup, HintItem, Hint } from "@tryatlas/design";
+import { onWindowEvent } from "@/lib/window-events";
 
 /** The starters: the web's three, and the one a team lead asks first. */
 const STARTERS: { text: string; Icon: LucideIcon }[] = [
@@ -86,11 +87,11 @@ export function OrgAgentThread({
 }) {
   const log = useOrgAgentStore((s) => s.logs[askId]);
   const summary = useOrgAgentStore((s) => s.asks[askId]);
-  const outbox = useOrgAgentStore.use.outbox();
+  const outbox = useOrgAgentStore((s) => s.outbox);
   const loading = useOrgAgentStore((s) => s.loading.includes(askId));
   const loadError = useOrgAgentStore((s) => s.loadErrors[askId]);
   const votes = useOrgAgentStore((s) => s.votes[askId] ?? EMPTY_VOTES);
-  const { send, openAsk, stop } = useOrgAgentStore.use.actions();
+  const { send, openAsk, stop } = useOrgAgentStore((s) => s.actions);
   const scroller = useRef<HTMLDivElement>(null);
   const atEnd = useRef(true);
   const page = size === "page";
@@ -212,10 +213,10 @@ function ThreadSkeleton({ measure, busy }: { measure: string; busy: boolean }) {
 
 /** Why the agent cannot answer right now, when it cannot. */
 function ConnectionLine() {
-  const connection = useOrgAgentStore.use.connection();
-  const atlas = useOrgAgentStore.use.atlas();
-  const error = useOrgAgentStore.use.error();
-  const { clearError } = useOrgAgentStore.use.actions();
+  const connection = useOrgAgentStore((s) => s.connection);
+  const atlas = useOrgAgentStore((s) => s.atlas);
+  const error = useOrgAgentStore((s) => s.error);
+  const { clearError } = useOrgAgentStore((s) => s.actions);
   const signedIn = useAuthStore((s) => s.snapshot.status === "signed-in");
 
   let line: React.ReactNode = null;
@@ -261,7 +262,7 @@ function ConnectionLine() {
 // ── The empty conversation ──────────────────────────────────────────────────
 
 function Welcome({ onPick }: { onPick: (question: string) => void }) {
-  const snapshot = useAuthStore.use.snapshot();
+  const snapshot = useAuthStore((s) => s.snapshot);
   const firstName =
     snapshot.status === "signed-in" ? snapshot.user?.name.trim().split(/\s+/)[0] : undefined;
   const greeting = firstName ? `Hi, ${firstName} 👋` : "Welcome back 👋";
@@ -349,9 +350,9 @@ function Composer({
   const collapsed = empty && !focused;
   const trayShown = useComposerFold(collapsed, card, tray);
   const enterToSend = useSettingsStore((s) => s.settings.enterToSend);
-  const orgId = useOrgAgentStore.use.orgId();
+  const orgId = useOrgAgentStore((s) => s.orgId);
   const connected = useOrgAgentStore((s) => s.connection === "open");
-  const deepResearch = useOrgAgentStore.use.deepResearch();
+  const deepResearch = useOrgAgentStore((s) => s.deepResearch);
 
   useEffect(() => {
     if (autoFocus) input.current?.focus();
@@ -481,11 +482,11 @@ function Composer({
 /** The tray: mention, the level and Deep research on the left; today's
  *  count on the right. */
 function Tray({ compact, onMention }: { compact: boolean; onMention: () => void }) {
-  const effort = useOrgAgentStore.use.effort();
-  const deepResearch = useOrgAgentStore.use.deepResearch();
-  const info = useOrgAgentStore.use.effortInfo();
-  const atlas = useOrgAgentStore.use.atlas();
-  const { setEffort, setDeepResearch, refreshEffort } = useOrgAgentStore.use.actions();
+  const effort = useOrgAgentStore((s) => s.effort);
+  const deepResearch = useOrgAgentStore((s) => s.deepResearch);
+  const info = useOrgAgentStore((s) => s.effortInfo);
+  const atlas = useOrgAgentStore((s) => s.atlas);
+  const { setEffort, setDeepResearch, refreshEffort } = useOrgAgentStore((s) => s.actions);
   const [open, setOpen] = useState(false);
 
   // The picker's data, read when the composer opens.
@@ -610,8 +611,7 @@ function useAppearance(): "dark" | "light" {
   useEffect(() => {
     const update = () =>
       setAppearance(document.documentElement.classList.contains("dark") ? "dark" : "light");
-    window.addEventListener("atlas:theme-applied", update);
-    return () => window.removeEventListener("atlas:theme-applied", update);
+    return onWindowEvent("atlas:theme-applied", update);
   }, []);
   return appearance;
 }

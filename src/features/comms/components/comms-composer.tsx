@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
-import { invoke } from "@tauri-apps/api/core";
+import { clipboardFilePaths } from "@/lib/clipboard-api";
 import { toast } from "sonner";
 import { filesFromClipboard, hasFiles, scratchPathForFile } from "@/lib/scratch-file";
 import { useCommsStore } from "../stores/comms-store";
@@ -79,10 +79,10 @@ export function CommsComposer({
   // re-rendered the entire transcript above it.
   const composer = useCommsStore((s) => s.composers[convId]) ?? EMPTY_COMPOSER;
   const { draft, replyTo, editing, attachments } = composer;
-  const actions = useCommsStore.use.actions();
+  const actions = useCommsStore((s) => s.actions);
   // Only so a mention of YOU reads differently in the pill, as it does in the
   // rendered message.
-  const me = useCommsStore.use.me();
+  const me = useCommsStore((s) => s.me);
   const onChange = (value: string) => actions.setDraft(convId, value);
   const onSend = () => actions.send(convId);
   const onCommitEdit = () => actions.commitEdit(convId);
@@ -141,7 +141,7 @@ export function CommsComposer({
     }
     if (hasFiles(dt)) {
       e.preventDefault();
-      void invoke<string[]>("clipboard_file_paths")
+      void clipboardFilePaths()
         .then((paths) => {
           if (paths.length > 0) actions.attachFiles(convId, paths);
         })

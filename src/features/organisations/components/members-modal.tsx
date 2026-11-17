@@ -34,9 +34,9 @@ export function MembersModal({
   onOpenChange: (open: boolean) => void;
 }) {
   const orgId = org?.remoteId ?? null;
-  const byOrg = useMembersStore.use.byOrg();
-  const { load, setRole, remove, invite, cancelInvite } = useMembersStore.use.actions();
-  const snapshot = useAuthStore.use.snapshot();
+  const byOrg = useMembersStore((s) => s.byOrg);
+  const { load, setRole, remove, invite, cancelInvite } = useMembersStore((s) => s.actions);
+  const snapshot = useAuthStore((s) => s.snapshot);
 
   const roster = (orgId && byOrg[orgId]) || null;
   const members = useMemo(() => roster?.members ?? [], [roster]);

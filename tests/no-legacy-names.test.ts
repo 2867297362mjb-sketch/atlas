@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { expectFloor } from "./support/floor";
 
 /**
  * The retired names stay retired (ADR-0011).
@@ -188,6 +189,17 @@ describe("the retired names stay out of the tree", () => {
   beforeAll(() => {
     for (const rel of files) readText(rel);
   }, 120_000);
+
+  it("lists and reads the tracked tree", () => {
+    // `git ls-files` answering nothing (a moved root, a broken checkout) or
+    // every read failing would leave both scans below with nothing to flag.
+    expectFloor("files git tracks", files.length, 7000);
+    expectFloor(
+      "tracked files read as text",
+      files.filter((rel) => readText(rel) !== null).length,
+      6000,
+    );
+  });
 
   it("the engine no longer lives under its upstream name", () => {
     expect(existsSync(path.join(REPO_ROOT, "vendor", "codex"))).toBe(false);

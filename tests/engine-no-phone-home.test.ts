@@ -1,7 +1,9 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { walk } from "./support/walk";
+import { expectFloor } from "./support/floor";
 
 /**
  * The engine phones home nowhere (issue #43, spec D2 / Phase 1).
@@ -36,19 +38,7 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 const VENDOR = path.join(REPO_ROOT, "vendor", "atlas-engine");
 
 /** Source-ish files worth scanning. Excludes lockfiles and binary fixtures. */
-const SCANNED = new Set([".rs", ".toml", ".json", ".md", ".bazel", ".sh", ".py", ".ts"]);
-
-function walk(dir = VENDOR): string[] {
-  if (!existsSync(dir)) return [];
-  const out: string[] = [];
-  for (const e of readdirSync(dir, { withFileTypes: true })) {
-    if (e.name === "target" || e.name === "node_modules") continue;
-    const p = path.join(dir, e.name);
-    if (e.isDirectory()) out.push(...walk(p));
-    else if (SCANNED.has(path.extname(e.name))) out.push(p);
-  }
-  return out;
-}
+const SCANNED = [".rs", ".toml", ".json", ".md", ".bazel", ".sh", ".py", ".ts"];
 
 /**
  * The engine tree is ~4k files and every assertion below scans all of it.
@@ -62,7 +52,7 @@ function walk(dir = VENDOR): string[] {
  */
 let walked: string[] | null = null;
 function sourceFiles(): string[] {
-  walked ??= walk();
+  walked ??= walk(VENDOR, SCANNED);
   return walked;
 }
 
@@ -148,14 +138,14 @@ describe("the engine's egress surface (parser health)", () => {
   it("scans a plausible number of engine files", () => {
     // A traversal that silently stopped would make every assertion below pass
     // by finding nothing. The engine is ~4k files.
-    expect(sourceFiles().length).toBeGreaterThan(1000);
+    expectFloor("source files under vendor/atlas-engine", sourceFiles().length, 3200);
   });
 
   it("still finds the engine's ordinary network code", () => {
     // Proves the scanner reads content, not just names: the engine legitimately
     // talks to whatever model provider the user configured, and that must
     // survive. A test that forbade all HTTP would be wrong, not strict.
-    expect(filesMatching(/reqwest/).length).toBeGreaterThan(10);
+    expectFloor("engine files that name reqwest", filesMatching(/reqwest/).length, 15);
   });
 });
 
@@ -198,8 +188,8 @@ describe("the ChatGPT analytics client is gone", () => {
     // but nothing behind them may reach the network. No client, no POST.
     // `walk`, not `sourceFiles`: this assertion is scoped to one crate, and
     // the memoized `sourceFiles()` is the whole engine tree.
-    const analytics = walk(path.join(VENDOR, "analytics"));
-    expect(analytics.length, "analytics crate not found").toBeGreaterThan(3);
+    const analytics = walk(path.join(VENDOR, "analytics"), SCANNED);
+    expectFloor("source files in the engine's analytics crate", analytics.length, 5);
 
     const offenders = analytics
       .filter((f) => /reqwest|\.post\(|\.send\(\)\s*$/m.test(textOf(f)))

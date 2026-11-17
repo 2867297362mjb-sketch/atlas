@@ -2,13 +2,18 @@
 //! used to persist via zustand's localStorage middleware. Shape matches the
 //! JS side via `#[serde(rename_all = "camelCase")]` so the frontend can use
 //! the deserialized payload verbatim.
+//!
+//! The frontend's TypeScript for these structs is generated from them
+//! (`app_state_bindings.rs` → `src/bindings/app-state/`): after changing a
+//! field or a serde attribute here, run `bun run bindings:gen`.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Runtime};
+use ts_rs::TS;
 
 /// Current schema version. Bump and migrate (or reset) when fields change
 /// shape. Older payloads with a smaller `version` are loadable as long as
@@ -31,14 +36,14 @@ pub const SCHEMA_VERSION: u32 = 4;
 /// Just enough to name a project: the {name, path} pair the legacy v1
 /// `current_project` field and the recents list carry. `Project` proper is
 /// below.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectRef {
     pub name: String,
     pub path: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RecentProject {
     pub name: String,
@@ -53,6 +58,7 @@ pub struct RecentProject {
     /// put one org's project names and absolute paths in front of every other
     /// org, one click away from being forked into the wrong one.
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub org_id: Option<String>,
 }
 
@@ -60,7 +66,7 @@ pub struct RecentProject {
 /// `id` is the stable key that replaces `webview.label()` everywhere Rust
 /// state used to be keyed per-window (file index, git watcher, mention
 /// cache, recent files).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Project {
     pub id: String,
@@ -69,15 +75,18 @@ pub struct Project {
     /// Owning Organisation. `None` on pre-v3 payloads — `migrate()` backfills
     /// it to the default org. The sidebar filters projects by the active org.
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub org_id: Option<String>,
     /// Optional git remote. The ONLY field (besides id/name) that syncs to the
     /// server (`workspace_refs.git_url`) for one-click clone; the source tree
     /// itself never syncs. `None` for local-only projects.
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub git_url: Option<String>,
     /// ISO-8601 timestamp of the last time this project was the active
     /// one; used to order the sidebar / pick a fallback on close.
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub last_active_at: Option<String>,
 }
 
@@ -86,7 +95,7 @@ pub struct Project {
 /// user opts into sync per org (Chrome-profile model). The shape is a superset
 /// of the server `organization` row so cloud sync is a thin adapter:
 /// `{ id, name, slug, logo, metadata }` map to the server; the rest is local.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Organisation {
     pub id: String,
@@ -95,15 +104,19 @@ pub struct Organisation {
     /// from `name` at create time; kept stable thereafter.
     pub slug: String,
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub color: Option<String>,
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub logo: Option<String>,
     /// ISO-8601 creation timestamp.
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub created_at: Option<String>,
     /// Per-org memory of the last active project, so an org switch restores
     /// the user where they left off. Local-only (the server has no such notion).
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub active_workspace_id: Option<String>,
     /// Opt-in cloud sync flag (Chrome-profile model). `false` = local-only.
     #[serde(default)]
@@ -112,16 +125,18 @@ pub struct Organisation {
     /// "Turn on sync". `None` while local-only. Reconciliation seam for the
     /// auth branch.
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub remote_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AppState {
     /// Legacy single-project field. Kept for migration from v1 `state.json`;
     /// the frontend now derives "current project" from
     /// `active_workspace_id`. New writes leave this `None`.
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub current_project: Option<ProjectRef>,
     #[serde(default)]
     pub recent_projects: Vec<RecentProject>,
@@ -131,17 +146,20 @@ pub struct AppState {
     #[serde(default)]
     pub workspaces: Vec<Project>,
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub active_workspace_id: Option<String>,
     /// The Organisation layer above projects (v3). Each project is
     /// tagged with an `org_id`; the sidebar shows only the active org's set.
     #[serde(default)]
     pub organisations: Vec<Organisation>,
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub active_organisation_id: Option<String>,
     /// Stable anonymous id for opt-in product telemetry (PostHog `distinct_id`).
     /// Generated once on first launch (see `lib.rs` setup); never contains PII.
     /// `None` on old `state.json` files — backfilled + persisted at startup.
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub telemetry_anon_id: Option<String>,
     #[serde(default = "default_version")]
     pub version: u32,
@@ -163,7 +181,8 @@ fn default_version() -> u32 {
 /// Listing the frontend-owned fields here — rather than special-casing the one
 /// field that got bitten — means the next Rust-owned field added to `AppState`
 /// is safe by construction instead of by remembering.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, TS)]
+#[cfg_attr(test, derive(Serialize))]
 #[serde(rename_all = "camelCase")]
 pub struct AppStatePatch {
     #[serde(default)]
@@ -174,10 +193,12 @@ pub struct AppStatePatch {
     #[serde(default)]
     pub workspaces: Vec<Project>,
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub active_workspace_id: Option<String>,
     #[serde(default)]
     pub organisations: Vec<Organisation>,
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub active_organisation_id: Option<String>,
 }
 
@@ -323,8 +344,9 @@ impl AppState {
     /// The counterpart to [`AppStatePatch`]: what is absent from the patch is
     /// absent because Rust owns it, and stays untouched here.
     pub fn apply_patch(&mut self, p: AppStatePatch) {
-        // Legacy v1 field — the frontend already sends `null` and derives the
-        // current project from `active_workspace_id`. Never re-adopted.
+        // Legacy v1 field — the frontend derives the current project from
+        // `active_workspace_id`, and the patch has no key for this one.
+        // Never re-adopted.
         self.current_project = None;
         self.recent_projects = p.recent_projects;
         self.workspaces = p.workspaces;
@@ -339,7 +361,7 @@ impl AppState {
     /// `<app_data_dir>/state.json`. Returns `None` if the data dir can't be
     /// resolved (no $HOME / no `APPDATA`, etc.) — caller falls back to
     /// `AppState::default()`.
-    fn path(app: &AppHandle) -> Option<PathBuf> {
+    fn path<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
         app.path().app_data_dir().ok().map(|d| d.join("state.json"))
     }
 
@@ -355,9 +377,17 @@ impl AppState {
     /// (issue #64) so `serde_json` would otherwise silently drop it on the
     /// floor as an unrecognized key. The caller feeds this to
     /// `atlas_config::bootstrap` for the one-time `config.toml` export.
-    pub fn load(app: &AppHandle) -> Self {
-        let raw = Self::path(app).and_then(|path| std::fs::read_to_string(&path).ok());
-        Self::from_raw(raw.as_deref())
+    pub fn load<R: Runtime>(app: &AppHandle<R>) -> Self {
+        match Self::path(app) {
+            Some(path) => Self::load_at(&path),
+            None => Self::from_raw(None),
+        }
+    }
+
+    /// [`Self::load`] for a known path, so the read is reachable without an
+    /// `AppHandle`.
+    fn load_at(path: &Path) -> Self {
+        Self::from_raw(std::fs::read_to_string(path).ok().as_deref())
     }
 
     /// The parse+migrate half of [`Self::load`], split out so it is reachable
@@ -421,37 +451,153 @@ impl AppState {
     /// `state.json` loses every project. `sync_all` before the rename is what
     /// makes the atomicity
     /// real — otherwise the rename can reach disk ahead of its bytes.
-    pub fn save(app: &AppHandle, state: &AppState) -> std::io::Result<()> {
-        use std::io::Write;
-
+    pub fn save<R: Runtime>(app: &AppHandle<R>, state: &AppState) -> std::io::Result<()> {
         let Some(path) = Self::path(app) else {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 "could not resolve app_data_dir",
             ));
         };
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        let tmp = path.with_extension(format!("json.tmp.{}", uuid::Uuid::new_v4()));
-        let merged = Self::merged_for_save(&path, state)
+        Self::save_at(&path, state)
+    }
+
+    /// [`Self::save`] for a known path, so the write is reachable without an
+    /// `AppHandle`.
+    fn save_at(path: &Path, state: &AppState) -> std::io::Result<()> {
+        let merged = Self::merged_for_save(path, state)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
         let raw = serde_json::to_string_pretty(&merged)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
-        let written = (|| -> std::io::Result<()> {
-            let mut f = std::fs::File::create(&tmp)?;
-            f.write_all(raw.as_bytes())?;
-            f.sync_all()
-        })();
-        if let Err(e) = written {
-            let _ = std::fs::remove_file(&tmp);
-            return Err(e);
+        atlas_fs::replace_file(path, raw)
+    }
+}
+
+/// The values the round-trip tests, the bindings fixtures and the frontend's
+/// restart test are all built from.
+///
+/// Every struct is written as a literal with no `..Default::default()`, on
+/// purpose: a field added to one of them does not compile here until it is
+/// given a value, so it cannot skip the round trip.
+#[cfg(test)]
+pub(crate) mod fixtures {
+    use super::*;
+
+    /// Every field holds a value that is not its default, bar the two the
+    /// load path itself decides: `current_project`, which `migrate` always
+    /// clears, and `version`, which it always sets.
+    pub(crate) fn full_state() -> AppState {
+        AppState {
+            current_project: None,
+            recent_projects: vec![
+                RecentProject {
+                    name: "atlas".into(),
+                    path: "/Users/dev/atlas".into(),
+                    last_opened: "2026-11-02T09:30:00.000Z".into(),
+                    org_id: Some("org-1".into()),
+                },
+                RecentProject {
+                    name: "server".into(),
+                    path: "/Users/dev/server".into(),
+                    last_opened: "2026-10-28T17:05:00.000Z".into(),
+                    org_id: Some("org-2".into()),
+                },
+            ],
+            workspaces: vec![
+                Project {
+                    id: "ws-1".into(),
+                    name: "atlas".into(),
+                    path: "/Users/dev/atlas".into(),
+                    org_id: Some("org-1".into()),
+                    git_url: Some("git@example.com:dev/atlas.git".into()),
+                    last_active_at: Some("2026-11-02T09:30:00.000Z".into()),
+                },
+                Project {
+                    id: "ws-2".into(),
+                    name: "server".into(),
+                    path: "/Users/dev/server".into(),
+                    org_id: Some("org-2".into()),
+                    git_url: Some("https://example.com/dev/server.git".into()),
+                    last_active_at: Some("2026-10-28T17:05:00.000Z".into()),
+                },
+            ],
+            active_workspace_id: Some("ws-1".into()),
+            organisations: vec![
+                Organisation {
+                    id: "org-1".into(),
+                    name: "Personal".into(),
+                    slug: "personal-0a1b2c3d4e".into(),
+                    color: Some("#3366ff".into()),
+                    logo: Some("data:image/png;base64,AAAA".into()),
+                    created_at: Some("2026-01-15T08:00:00.000Z".into()),
+                    active_workspace_id: Some("ws-1".into()),
+                    sync_enabled: false,
+                    remote_id: None,
+                },
+                Organisation {
+                    id: "org-2".into(),
+                    name: "Northwind".into(),
+                    slug: "northwind".into(),
+                    color: Some("#ff6633".into()),
+                    logo: Some("https://example.com/northwind.png".into()),
+                    created_at: Some("2026-03-20T12:00:00.000Z".into()),
+                    active_workspace_id: Some("ws-2".into()),
+                    sync_enabled: true,
+                    remote_id: Some("srv-org-2".into()),
+                },
+            ],
+            active_organisation_id: Some("org-1".into()),
+            telemetry_anon_id: Some("5b0c6c1e-7a52-4f0e-9d0b-3a8a3f1f2c11".into()),
+            version: SCHEMA_VERSION,
         }
-        if let Err(e) = std::fs::rename(&tmp, &path) {
-            let _ = std::fs::remove_file(&tmp);
-            return Err(e);
+    }
+
+    /// The least a migrated state can hold: one organisation, and every
+    /// optional field empty. What it serializes to is how an absent value
+    /// crosses the wire (`null`, or a missing key).
+    pub(crate) fn minimal_state() -> AppState {
+        AppState {
+            current_project: None,
+            recent_projects: vec![RecentProject {
+                name: "atlas".into(),
+                path: "/Users/dev/atlas".into(),
+                last_opened: "2026-11-02T09:30:00.000Z".into(),
+                org_id: None,
+            }],
+            workspaces: vec![Project {
+                id: "ws-1".into(),
+                name: "atlas".into(),
+                path: "/Users/dev/atlas".into(),
+                org_id: Some("org-1".into()),
+                git_url: None,
+                last_active_at: None,
+            }],
+            active_workspace_id: None,
+            organisations: vec![Organisation {
+                id: "org-1".into(),
+                name: "Personal".into(),
+                slug: "personal-0a1b2c3d4e".into(),
+                color: None,
+                logo: None,
+                created_at: None,
+                active_workspace_id: None,
+                sync_enabled: false,
+                remote_id: None,
+            }],
+            active_organisation_id: Some("org-1".into()),
+            telemetry_anon_id: None,
+            version: SCHEMA_VERSION,
         }
-        Ok(())
+    }
+
+    /// The save the frontend sends for `state`: every field it owns.
+    pub(crate) fn patch_of(state: &AppState) -> AppStatePatch {
+        AppStatePatch {
+            recent_projects: state.recent_projects.clone(),
+            workspaces: state.workspaces.clone(),
+            active_workspace_id: state.active_workspace_id.clone(),
+            organisations: state.organisations.clone(),
+            active_organisation_id: state.active_organisation_id.clone(),
+        }
     }
 }
 
@@ -522,13 +668,11 @@ mod tests {
     /// against a field the frontend had never actually set.
     fn frontend_payload() -> AppStatePatch {
         serde_json::from_value(serde_json::json!({
-            "currentProject": null,
             "recentProjects": [],
             "workspaces": [],
             "activeWorkspaceId": "proj-1",
             "organisations": [],
             "activeOrganisationId": null,
-            "version": 4,
         }))
         .expect("frontend payload deserializes as a patch")
     }
@@ -673,5 +817,308 @@ mod tests {
         }))
         .expect("an older state file parses even with the retired settings key present");
         assert_eq!(state.recent_projects.len(), 1);
+    }
+
+    // ── A restart: what is saved is what loads ─────────────────────────────
+
+    /// Compare two states one field at a time. Both are taken apart with no
+    /// `..`, so a field added to `AppState` does not compile until it is
+    /// compared here.
+    fn assert_same_state(loaded: AppState, expected: AppState) {
+        let AppState {
+            current_project,
+            recent_projects,
+            workspaces,
+            active_workspace_id,
+            organisations,
+            active_organisation_id,
+            telemetry_anon_id,
+            version,
+        } = loaded;
+        assert_eq!(current_project, expected.current_project, "currentProject");
+        assert_eq!(recent_projects, expected.recent_projects, "recentProjects");
+        assert_eq!(workspaces, expected.workspaces, "workspaces");
+        assert_eq!(
+            active_workspace_id, expected.active_workspace_id,
+            "activeWorkspaceId"
+        );
+        assert_eq!(organisations, expected.organisations, "organisations");
+        assert_eq!(
+            active_organisation_id, expected.active_organisation_id,
+            "activeOrganisationId"
+        );
+        assert_eq!(
+            telemetry_anon_id, expected.telemetry_anon_id,
+            "telemetryAnonId"
+        );
+        assert_eq!(version, expected.version, "version");
+    }
+
+    fn fixture(name: &str) -> String {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/state/fixtures")
+            .join(name);
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+    }
+
+    /// Save through `save_at`, then load through `load_at` as the next launch
+    /// does. Nothing is dropped, renamed or reset on the way.
+    #[test]
+    fn a_fully_populated_state_survives_a_restart() {
+        let (_dir, path) = tmp_state_path();
+        let saved = fixtures::full_state();
+
+        AppState::save_at(&path, &saved).unwrap();
+
+        assert_same_state(AppState::load_at(&path), saved);
+    }
+
+    /// The same with every optional field empty: an absent value is written
+    /// as `null` and reads back as `None`, not as something migrated in.
+    #[test]
+    fn a_state_with_every_optional_field_empty_survives_a_restart() {
+        let (_dir, path) = tmp_state_path();
+        let saved = fixtures::minimal_state();
+
+        AppState::save_at(&path, &saved).unwrap();
+
+        assert_same_state(AppState::load_at(&path), saved);
+    }
+
+    /// A second save over the first leaves no trace of the first, and no
+    /// temp file beside it.
+    #[test]
+    fn a_later_save_replaces_the_earlier_one() {
+        let (dir, path) = tmp_state_path();
+        AppState::save_at(&path, &fixtures::full_state()).unwrap();
+        let later = fixtures::minimal_state();
+
+        AppState::save_at(&path, &later).unwrap();
+
+        assert_same_state(AppState::load_at(&path), later);
+        let names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["state.json"]);
+    }
+
+    /// The frontend's save carries every field it owns, so applying it to the
+    /// state it was built from changes nothing: the Rust-owned id included.
+    #[test]
+    fn the_frontends_own_save_reproduces_the_state() {
+        for state in [fixtures::full_state(), fixtures::minimal_state()] {
+            let mut applied = state.clone();
+            applied.apply_patch(fixtures::patch_of(&state));
+            assert_same_state(applied, state);
+        }
+    }
+
+    /// A key this build does not know is not an error on load, and a save
+    /// carries it through: another build of Atlas may own it.
+    #[test]
+    fn an_unknown_key_is_tolerated_on_load_and_kept_by_a_save() {
+        let (_dir, path) = tmp_state_path();
+        let mut on_disk = serde_json::to_value(fixtures::full_state()).unwrap();
+        on_disk["fromANewerBuild"] = serde_json::json!({ "kept": true });
+        on_disk["workspaces"][0]["fromANewerBuild"] = serde_json::json!(1);
+        std::fs::write(&path, on_disk.to_string()).unwrap();
+
+        let loaded = AppState::load_at(&path);
+        assert_same_state(loaded.clone(), fixtures::full_state());
+
+        AppState::save_at(&path, &loaded).unwrap();
+        let raw: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(raw["fromANewerBuild"], serde_json::json!({ "kept": true }));
+        // Only a TOP-LEVEL unknown key survives: the lists are rewritten from
+        // the typed state, so a key nested in a row is dropped by the save.
+        assert!(raw["workspaces"][0].get("fromANewerBuild").is_none());
+    }
+
+    /// Every field but the three a row cannot do without is optional in the
+    /// file, and an absent one loads as its default.
+    #[test]
+    fn a_missing_optional_field_loads_as_its_default() {
+        let (_dir, path) = tmp_state_path();
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "recentProjects": [
+                    { "name": "atlas", "path": "/Users/dev/atlas", "lastOpened": "then" }
+                ],
+                "workspaces": [{ "id": "ws-1", "name": "atlas", "path": "/Users/dev/atlas" }],
+                "organisations": [{ "id": "org-1", "name": "Northwind", "slug": "northwind" }],
+                "activeOrganisationId": "org-1",
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let loaded = AppState::load_at(&path);
+
+        assert_same_state(
+            loaded,
+            AppState {
+                current_project: None,
+                recent_projects: vec![RecentProject {
+                    name: "atlas".into(),
+                    path: "/Users/dev/atlas".into(),
+                    last_opened: "then".into(),
+                    org_id: None,
+                }],
+                workspaces: vec![Project {
+                    id: "ws-1".into(),
+                    name: "atlas".into(),
+                    path: "/Users/dev/atlas".into(),
+                    // Not a default: `migrate` gives an untagged project to
+                    // the active organisation.
+                    org_id: Some("org-1".into()),
+                    git_url: None,
+                    last_active_at: None,
+                }],
+                active_workspace_id: None,
+                organisations: vec![Organisation {
+                    id: "org-1".into(),
+                    name: "Northwind".into(),
+                    slug: "northwind".into(),
+                    color: None,
+                    logo: None,
+                    created_at: None,
+                    active_workspace_id: None,
+                    sync_enabled: false,
+                    remote_id: None,
+                }],
+                active_organisation_id: Some("org-1".into()),
+                telemetry_anon_id: None,
+                version: SCHEMA_VERSION,
+            },
+        );
+    }
+
+    /// A required field missing from one row fails the whole parse, and the
+    /// load falls back to a first run. Pinned because it is the costly case:
+    /// one bad row and the next save writes the empty state over the file.
+    #[test]
+    fn a_row_missing_a_required_field_resets_the_whole_state() {
+        let (_dir, path) = tmp_state_path();
+        let mut on_disk = serde_json::to_value(fixtures::full_state()).unwrap();
+        on_disk["workspaces"][1]
+            .as_object_mut()
+            .unwrap()
+            .remove("path");
+        std::fs::write(&path, on_disk.to_string()).unwrap();
+
+        let loaded = AppState::load_at(&path);
+
+        assert!(loaded.workspaces.is_empty());
+        assert!(loaded.recent_projects.is_empty());
+        assert_eq!(loaded.organisations.len(), 1);
+        assert_eq!(loaded.organisations[0].name, "Personal");
+        assert_eq!(loaded.telemetry_anon_id, None);
+    }
+
+    // ── Migrations: one fixture per schema version that shipped ────────────
+
+    /// v1 held one project, in `currentProject`. It becomes the only project,
+    /// active, in a new default organisation.
+    #[test]
+    fn a_v1_file_migrates_its_one_project_into_a_default_organisation() {
+        let state = AppState::from_raw(Some(&fixture("state-v1.json")));
+
+        assert_eq!(state.version, SCHEMA_VERSION);
+        assert_eq!(state.current_project, None);
+        assert_eq!(state.organisations.len(), 1);
+        let org = &state.organisations[0];
+        assert_eq!(org.name, "Personal");
+        assert!(org.slug.starts_with("personal-"), "slug: {}", org.slug);
+        assert_eq!(
+            state.active_organisation_id.as_deref(),
+            Some(org.id.as_str())
+        );
+        assert_eq!(state.workspaces.len(), 1);
+        let project = &state.workspaces[0];
+        assert_eq!(
+            (project.name.as_str(), project.path.as_str()),
+            ("atlas", "/Users/dev/atlas")
+        );
+        assert_eq!(project.org_id.as_deref(), Some(org.id.as_str()));
+        assert_eq!(
+            state.active_workspace_id.as_deref(),
+            Some(project.id.as_str())
+        );
+        assert_eq!(org.active_workspace_id, state.active_workspace_id);
+        assert_eq!(state.recent_projects.len(), 1);
+        assert_eq!(state.recent_projects[0].org_id, None);
+    }
+
+    /// v2 had projects and no organisations. Every project is given to a new
+    /// default organisation, which remembers the active one.
+    #[test]
+    fn a_v2_file_migrates_its_projects_into_a_default_organisation() {
+        let state = AppState::from_raw(Some(&fixture("state-v2.json")));
+
+        assert_eq!(state.version, SCHEMA_VERSION);
+        assert_eq!(state.organisations.len(), 1);
+        let org = &state.organisations[0];
+        assert_eq!(
+            state.active_organisation_id.as_deref(),
+            Some(org.id.as_str())
+        );
+        assert_eq!(org.active_workspace_id.as_deref(), Some("ws-2"));
+        assert_eq!(state.active_workspace_id.as_deref(), Some("ws-2"));
+        let ids: Vec<_> = state.workspaces.iter().map(|w| w.id.as_str()).collect();
+        assert_eq!(ids, ["ws-1", "ws-2"]);
+        for project in &state.workspaces {
+            assert_eq!(project.org_id.as_deref(), Some(org.id.as_str()));
+        }
+        assert_eq!(
+            state.workspaces[0].last_active_at.as_deref(),
+            Some("2025-03-01T09:00:00Z")
+        );
+    }
+
+    /// v3 is today's shape plus the keys v4 retired. The state loads as
+    /// written, bar the two repairs `migrate` makes; the retired keys are
+    /// ignored by the load and dropped by the next save.
+    #[test]
+    fn a_v3_file_loads_as_written_and_its_retired_keys_go_on_the_next_save() {
+        let (_dir, path) = tmp_state_path();
+        std::fs::write(&path, fixture("state-v3.json")).unwrap();
+
+        let state = AppState::load_at(&path);
+
+        assert_eq!(state.version, SCHEMA_VERSION);
+        assert_eq!(state.telemetry_anon_id.as_deref(), Some("device-uuid"));
+        assert_eq!(state.active_organisation_id.as_deref(), Some("org-1"));
+        assert_eq!(state.active_workspace_id.as_deref(), Some("ws-1"));
+        assert_eq!(state.organisations.len(), 2);
+        // The untouched default organisation's literal handle is replaced…
+        assert!(state.organisations[0].slug.starts_with("personal-"));
+        assert_eq!(
+            state.organisations[0].active_workspace_id.as_deref(),
+            Some("ws-1")
+        );
+        // …and a synced organisation's is the server's, so it stays.
+        assert_eq!(state.organisations[1].slug, "northwind");
+        assert_eq!(
+            state.organisations[1].remote_id.as_deref(),
+            Some("srv-org-2")
+        );
+        assert!(state.organisations[1].sync_enabled);
+        assert_eq!(
+            state.workspaces[0].git_url.as_deref(),
+            Some("git@example.com:dev/atlas.git")
+        );
+        // The untagged project goes to the active organisation.
+        assert_eq!(state.workspaces[1].org_id.as_deref(), Some("org-1"));
+
+        AppState::save_at(&path, &state).unwrap();
+        let raw: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        for retired in ["settings", "settingsConfigMigrated", "groups"] {
+            assert!(raw.get(retired).is_none(), "{retired} survived a save");
+        }
+        assert_same_state(AppState::load_at(&path), state);
     }
 }

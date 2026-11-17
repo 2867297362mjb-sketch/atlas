@@ -5,9 +5,10 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
+import { onWindowEvent } from "@/lib/window-events";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => null) }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
 
 const { jumpToCommentAnchor } = await import("./jump-to-comment");
 const { useChatCommentsStore, useThreadOpenSignal } = await import("../stores/chat-comments-store");
@@ -19,12 +20,12 @@ const messages = [
 ];
 
 let jumps: unknown[] = [];
-const onJump = (e: Event) => jumps.push((e as CustomEvent).detail);
+let offJump = () => {};
 
 beforeEach(() => {
   vi.useFakeTimers();
   jumps = [];
-  window.addEventListener("atlas:chat-jump", onJump);
+  offJump = onWindowEvent("atlas:chat-jump", (detail) => void jumps.push(detail));
   useChatStore.setState((s) => ({
     ...s,
     sessions: { ...s.sessions, t1: { ...s.sessions.t1, messages } as never },
@@ -38,7 +39,7 @@ beforeEach(() => {
   useChatCommentsStore.getState().actions.clearFocus("t1");
 });
 afterEach(() => {
-  window.removeEventListener("atlas:chat-jump", onJump);
+  offJump();
   vi.useRealTimers();
 });
 

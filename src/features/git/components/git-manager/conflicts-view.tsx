@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { gitConflictState, gitResolveFile } from "../../lib/git-changes-api";
 import { FileCode2, Check, Sparkles } from "lucide-react";
 import { SectionHeader } from "./section-header";
 import { useGitStore } from "../../stores/git-store";
@@ -35,14 +35,14 @@ export function ConflictsView({
   op: InProgressOp;
   onOpenFile: (path: string) => void;
 }) {
-  const repoPath = useGitStore.use.repoPath();
-  const files = useGitStore.use.files();
-  const actions = useGitStore.use.actions();
+  const repoPath = useGitStore((s) => s.repoPath);
+  const files = useGitStore((s) => s.files);
+  const actions = useGitStore((s) => s.actions);
   const [state, setState] = useState<ConflictState | null>(null);
 
   const load = useCallback(() => {
     if (!repoPath) return;
-    invoke<ConflictState>("git_conflict_state", { path: repoPath })
+    gitConflictState(repoPath)
       .then(setState)
       .catch(() => setState(null));
   }, [repoPath]);
@@ -56,7 +56,7 @@ export function ConflictsView({
   const resolve = async (file: string, resolution: "ours" | "theirs" | "manual") => {
     if (!repoPath) return;
     try {
-      await invoke("git_resolve_file", { path: repoPath, file, resolution });
+      await gitResolveFile(repoPath, file, resolution);
       await actions.refresh(repoPath);
       load();
     } catch (e) {

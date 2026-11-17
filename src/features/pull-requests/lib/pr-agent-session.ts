@@ -25,6 +25,7 @@ import { agentMeta } from "@/features/agents/lib/agent-meta";
 import { activateProject } from "@/features/sidebar/lib/sidebar-actions";
 import type { SwitchableAgent } from "@/types/agent";
 import type { Handoff } from "./pull-request-handoff";
+import { emitWindowEvent } from "@/lib/window-events";
 
 export interface ActionAgent {
   agent: SwitchableAgent;
@@ -104,11 +105,7 @@ export async function openHandoffSession(opts: {
     const next = current.trim() ? `${current}\n\n${text}` : text;
     chat.actions.setDraft(into, next);
     useLayoutStore.getState().actions.setActiveTab(into);
-    requestAnimationFrame(() =>
-      window.dispatchEvent(
-        new CustomEvent("atlas:chat-insert", { detail: { text: next, tabId: into } }),
-      ),
-    );
+    requestAnimationFrame(() => emitWindowEvent("atlas:chat-insert", { text: next, tabId: into }));
     return into;
   }
   const tabId = openAgentChatInNewTab(agent);
@@ -117,8 +114,6 @@ export async function openHandoffSession(opts: {
   }
   useChatStore.getState().actions.setDraft(tabId, text);
   // A composer that mounted before the draft was written still gets it.
-  requestAnimationFrame(() =>
-    window.dispatchEvent(new CustomEvent("atlas:chat-insert", { detail: { text, tabId } })),
-  );
+  requestAnimationFrame(() => emitWindowEvent("atlas:chat-insert", { text, tabId }));
   return tabId;
 }

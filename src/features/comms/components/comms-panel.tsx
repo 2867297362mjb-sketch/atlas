@@ -39,14 +39,14 @@ import {
  */
 export function CommsPanel({ split = false }: { split?: boolean } = {}) {
   useTipOnMount("team-chat");
-  const conversations = useCommsStore.use.conversations();
-  const reads = useCommsStore.use.reads();
-  const memberList = useCommsStore.use.members();
-  const me = useCommsStore.use.me();
-  const tabs = useCommsStore.use.tabs();
-  const activeTabId = useCommsStore.use.activeTabId();
-  const connection = useCommsStore.use.connection();
-  const actions = useCommsStore.use.actions();
+  const conversations = useCommsStore((s) => s.conversations);
+  const reads = useCommsStore((s) => s.reads);
+  const memberList = useCommsStore((s) => s.members);
+  const me = useCommsStore((s) => s.me);
+  const tabs = useCommsStore((s) => s.tabs);
+  const activeTabId = useCommsStore((s) => s.activeTabId);
+  const connection = useCommsStore((s) => s.connection);
+  const actions = useCommsStore((s) => s.actions);
 
   const members = useMemo(() => new Map(memberList.map((m) => [m.id, m])), [memberList]);
   const convById = useMemo(() => new Map(conversations.map((c) => [c.id, c])), [conversations]);
@@ -60,8 +60,8 @@ export function CommsPanel({ split = false }: { split?: boolean } = {}) {
   // Chat is org-scoped and every route names a *server* org id, so a local-only
   // organisation has nothing to talk to. There is no `useActiveOrg` helper —
   // the find is the convention across the app.
-  const organisations = useOrgStore.use.organisations();
-  const activeOrganisationId = useOrgStore.use.activeOrganisationId();
+  const organisations = useOrgStore((s) => s.organisations);
+  const activeOrganisationId = useOrgStore((s) => s.activeOrganisationId);
   const activeOrg = organisations.find((o) => o.id === activeOrganisationId) ?? null;
   const connected = !!(activeOrg?.syncEnabled && activeOrg?.remoteId);
 
@@ -72,9 +72,9 @@ export function CommsPanel({ split = false }: { split?: boolean } = {}) {
   // `connection.orgId` without touching the org store, and keying off the
   // stale id kept the previous org's names on screen forever.
   const remoteId = connection.orgId || activeOrg?.remoteId;
-  const signedIn = useAuthStore.use.snapshot().status === "signed-in";
-  const rosterByOrg = useMembersStore.use.byOrg();
-  const { load: loadMembers } = useMembersStore.use.actions();
+  const signedIn = useAuthStore((s) => s.snapshot).status === "signed-in";
+  const rosterByOrg = useMembersStore((s) => s.byOrg);
+  const { load: loadMembers } = useMembersStore((s) => s.actions);
   // Fetch the markdown chunk as soon as the panel exists, so the first message
   // body never waits on it. Not done in `App.tsx` alongside the other priming:
   // that path is about the boot budget, and this panel is lazy precisely so it

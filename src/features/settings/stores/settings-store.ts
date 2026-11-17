@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { createSelectors } from "@/lib/create-selectors";
 import { applyUiScale } from "@/features/settings/lib/ui-scale";
 import {
   applyDisplaySettings,
@@ -11,7 +10,6 @@ import {
   getActiveTheme,
   setInterfaceContrast,
 } from "@/features/theme/apply-theme";
-import { THEME_APPLIED_EVENT } from "@/features/theme/theme-values";
 import { applyConfiguredIconTheme } from "@/features/icon-theme/stores/icon-theme-store";
 import {
   updateSettings as updateAtlasConfig,
@@ -22,6 +20,8 @@ import {
   type SettingsPatch,
 } from "@/features/settings/lib/atlas-config-api";
 import { DEFAULT_SETTINGS, type AppSettings } from "@/features/settings/lib/app-settings";
+import { useModelPricingStore } from "./model-pricing-store";
+import { onWindowEvent } from "@/lib/window-events";
 
 // Re-exported because most of the app reaches for `AppSettings` through the
 // store it reads settings from; the definition itself lives one directory over
@@ -110,6 +110,9 @@ function applyIcons(iconTheme: string, themeMode: AppSettings["themeMode"]): voi
  *  settings write, twice (the reconcile and the `atlas:config-changed` echo) —
  *  and each apply collapses mermaid diagrams and re-themes every terminal. */
 function applySettingsSideEffects(next: AppSettings, previous: AppSettings): void {
+  if (!sameValue(next.modelPriceOverrides, previous.modelPriceOverrides)) {
+    useModelPricingStore.getState().actions.setOverrides(next.modelPriceOverrides);
+  }
   if (next.uiScale !== previous.uiScale) applyUiScale(next.uiScale);
   if (displaySettingsChanged(next, previous)) applyDisplaySettings(next);
   if (
@@ -158,118 +161,117 @@ function configErrorFrom(status: ConfigStatus | undefined): string | null {
     : `config.toml is currently invalid; Atlas is running on the last settings that loaded cleanly. ${status.error}`;
 }
 
-export const useSettingsStore = createSelectors(
-  create<SettingsState>()((set, get) => ({
-    settings: DEFAULT_SETTINGS,
-    configGeneration: 0,
-    configError: null,
-    actions: {
-      updateSettings: (partial: Partial<AppSettings>) => {
-        // Optimistic: apply immediately so the control feels instant, then
-        // reconcile with whatever `config.toml` actually ends up holding.
-        // Rust validates the full candidate and can reject it outright, or —
-        // on a stale `configGeneration` — refuse to apply and return a
-        // Conflict instead (see `atlas-config-api.ts`). A generation can go
-        // stale without any UI involvement at all (an internal Rust-side
-        // write, e.g. the Local Model Manager persisting a model switch, or
-        // an external edit), so a Conflict here does NOT mean someone else
-        // wanted this same key — it just means the base this patch was
-        // computed against is out of date. Adopt the fresh generation and
-        // retry the original patch; only surface an error once
-        // `SETTINGS_WRITE_ATTEMPTS` of them have conflicted in a row (an
-        // actual sustained race, not just staleness). A single retry wasn't
-        // enough: during a burst of rapid changes — dragging the zoom slider,
-        // say — a second unrelated write can land between the retry and its
-        // read, silently dropping the user's action.
-        const previous = get().settings;
-        const optimistic = { ...previous, ...partial };
-        set({ settings: optimistic });
-        applySettingsSideEffects(optimistic, previous);
+export const useSettingsStore = create<SettingsState>()((set, get) => ({
+  settings: DEFAULT_SETTINGS,
+  configGeneration: 0,
+  configError: null,
+  actions: {
+    updateSettings: (partial: Partial<AppSettings>) => {
+      // Optimistic: apply immediately so the control feels instant, then
+      // reconcile with whatever `config.toml` actually ends up holding.
+      // Rust validates the full candidate and can reject it outright, or —
+      // on a stale `configGeneration` — refuse to apply and return a
+      // Conflict instead (see `atlas-config-api.ts`). A generation can go
+      // stale without any UI involvement at all (an internal Rust-side
+      // write, e.g. the Local Model Manager persisting a model switch, or
+      // an external edit), so a Conflict here does NOT mean someone else
+      // wanted this same key — it just means the base this patch was
+      // computed against is out of date. Adopt the fresh generation and
+      // retry the original patch; only surface an error once
+      // `SETTINGS_WRITE_ATTEMPTS` of them have conflicted in a row (an
+      // actual sustained race, not just staleness). A single retry wasn't
+      // enough: during a burst of rapid changes — dragging the zoom slider,
+      // say — a second unrelated write can land between the retry and its
+      // read, silently dropping the user's action.
+      const previous = get().settings;
+      const optimistic = { ...previous, ...partial };
+      set({ settings: optimistic });
+      applySettingsSideEffects(optimistic, previous);
 
-        const attempt = (generation: number, attemptsLeft: number) => {
-          updateAtlasConfig(partial as SettingsPatch, generation)
-            .then((outcome) => {
-              if (outcome.kind === "conflict") {
-                if (attemptsLeft <= 1) {
-                  console.warn(
-                    "updateSettings: still conflicting after adopting the latest generation",
-                  );
-                  set({
-                    settings: outcome.settings,
-                    configGeneration: outcome.generation,
-                    configError:
-                      "Settings change conflicted with a concurrent edit — please try again.",
-                  });
-                  applySettingsSideEffects(outcome.settings, optimistic);
-                  return;
-                }
-                set({ configGeneration: outcome.generation });
-                attempt(outcome.generation, attemptsLeft - 1);
+      const attempt = (generation: number, attemptsLeft: number) => {
+        updateAtlasConfig(partial as SettingsPatch, generation)
+          .then((outcome) => {
+            if (outcome.kind === "conflict") {
+              if (attemptsLeft <= 1) {
+                console.warn(
+                  "updateSettings: still conflicting after adopting the latest generation",
+                );
+                set({
+                  settings: outcome.settings,
+                  configGeneration: outcome.generation,
+                  configError:
+                    "Settings change conflicted with a concurrent edit — please try again.",
+                });
+                applySettingsSideEffects(outcome.settings, optimistic);
                 return;
               }
-              set({
-                settings: outcome.settings,
-                configGeneration: outcome.generation,
-                configError: null,
-              });
-              applySettingsSideEffects(outcome.settings, optimistic);
-            })
-            .catch((e) => {
-              console.warn("update_atlas_settings failed:", e);
-              set({ settings: previous, configError: String(e) });
-              applySettingsSideEffects(previous, optimistic);
+              set({ configGeneration: outcome.generation });
+              attempt(outcome.generation, attemptsLeft - 1);
+              return;
+            }
+            set({
+              settings: outcome.settings,
+              configGeneration: outcome.generation,
+              configError: null,
             });
-        };
-        attempt(get().configGeneration, SETTINGS_WRITE_ATTEMPTS);
-      },
-      clearConfigError: () => set({ configError: null }),
-      resetConfig: async () => {
-        const previous = get().settings;
-        const snapshot = await resetAtlasConfig();
-        set({
-          settings: snapshot.settings,
-          configGeneration: snapshot.generation,
-          configError: null,
-        });
-        applySettingsSideEffects(snapshot.settings, previous);
-      },
-      hydrate: (payload) => {
-        // Merge with defaults so an older/mid-migration response missing a
-        // brand-new key gets the modern default rather than `undefined` —
-        // belt-and-suspenders on top of Rust's own field-level defaulting.
-        const settings: AppSettings = {
-          ...DEFAULT_SETTINGS,
-          ...payload.settings,
-        };
-        set({
-          settings,
-          configGeneration: payload.configGeneration ?? 0,
-          // A `config.toml` that failed to load at startup is the one case the
-          // user cannot otherwise notice: every preference silently reads back
-          // as an Atlas default (`shareTelemetry` included). Rust computes the
-          // status at boot; hard-nulling it here is what kept it off screen.
-          configError: configErrorFrom(payload.configStatus),
-        });
-
-        // Re-apply the persisted interface zoom (needs the Tauri WebView API,
-        // so it can only run here, not in the pre-mount boot path).
-        applyUiScale(settings.uiScale);
-        applyDisplaySettings(settings);
-        // Resolve and apply the persisted theme for the current appearance
-        // across chrome, editor, terminal, diffs and syntax variables.
-        setInterfaceContrast(settings.interfaceContrast);
-        applyConfiguredTheme(
-          { light: settings.themeLight, dark: settings.themeDark },
-          settings.themeMode,
-          settings.themeOverrides,
-        );
-        // The icon catalog is only listed here; no icon is fetched until a
-        // row asks for one (decision 12).
-        applyIcons(settings.iconTheme, settings.themeMode);
-      },
+            applySettingsSideEffects(outcome.settings, optimistic);
+          })
+          .catch((e) => {
+            console.warn("update_atlas_settings failed:", e);
+            set({ settings: previous, configError: String(e) });
+            applySettingsSideEffects(previous, optimistic);
+          });
+      };
+      attempt(get().configGeneration, SETTINGS_WRITE_ATTEMPTS);
     },
-  })),
-);
+    clearConfigError: () => set({ configError: null }),
+    resetConfig: async () => {
+      const previous = get().settings;
+      const snapshot = await resetAtlasConfig();
+      set({
+        settings: snapshot.settings,
+        configGeneration: snapshot.generation,
+        configError: null,
+      });
+      applySettingsSideEffects(snapshot.settings, previous);
+    },
+    hydrate: (payload) => {
+      // Merge with defaults so an older/mid-migration response missing a
+      // brand-new key gets the modern default rather than `undefined` —
+      // belt-and-suspenders on top of Rust's own field-level defaulting.
+      const settings: AppSettings = {
+        ...DEFAULT_SETTINGS,
+        ...payload.settings,
+      };
+      set({
+        settings,
+        configGeneration: payload.configGeneration ?? 0,
+        // A `config.toml` that failed to load at startup is the one case the
+        // user cannot otherwise notice: every preference silently reads back
+        // as an Atlas default (`shareTelemetry` included). Rust computes the
+        // status at boot; hard-nulling it here is what kept it off screen.
+        configError: configErrorFrom(payload.configStatus),
+      });
+
+      useModelPricingStore.getState().actions.setOverrides(settings.modelPriceOverrides);
+      // Re-apply the persisted interface zoom (needs the Tauri WebView API,
+      // so it can only run here, not in the pre-mount boot path).
+      applyUiScale(settings.uiScale);
+      applyDisplaySettings(settings);
+      // Resolve and apply the persisted theme for the current appearance
+      // across chrome, editor, terminal, diffs and syntax variables.
+      setInterfaceContrast(settings.interfaceContrast);
+      applyConfiguredTheme(
+        { light: settings.themeLight, dark: settings.themeDark },
+        settings.themeMode,
+        settings.themeOverrides,
+      );
+      // The icon catalog is only listed here; no icon is fetched until a
+      // row asks for one (decision 12).
+      applyIcons(settings.iconTheme, settings.themeMode);
+    },
+  },
+}));
 
 // `config.toml` can change for reasons other than this window's own
 // `updateSettings` call: the Settings UI edited it in another window (not
@@ -300,7 +302,7 @@ if (typeof window !== "undefined") {
 // `system`, a hot-reloaded theme file — can change the appearance the icons
 // should follow. See `applyIcons`.
 if (typeof window !== "undefined") {
-  window.addEventListener(THEME_APPLIED_EVENT, () => {
+  onWindowEvent("atlas:theme-applied", () => {
     const { settings } = useSettingsStore.getState();
     applyIcons(settings.iconTheme, settings.themeMode);
   });

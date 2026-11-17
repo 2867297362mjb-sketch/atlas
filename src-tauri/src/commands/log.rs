@@ -118,10 +118,8 @@ pub async fn clear_pinned_log(org: String) -> Result<(), String> {
 pub async fn rewrite_pinned_log(org: String, entries_json: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         let path = pinned_path(&org)?;
-        ensure_dir(&path)?;
         // Caller passes the full body (each line one entry, newline separated).
-        fs::write(&path, &entries_json).map_err(|e| e.to_string())?;
-        Ok(())
+        atlas_fs::replace_file(&path, &entries_json).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -180,7 +178,7 @@ pub async fn append_project_log(project: String, entry_json: String) -> Result<(
                         .find('\n')
                         .map(|i| keep_from + i + 1)
                         .unwrap_or(keep_from);
-                    let _ = fs::write(&path, &content[start..]);
+                    let _ = atlas_fs::replace_file(&path, &content[start..]);
                 }
             }
         }
@@ -201,4 +199,41 @@ pub async fn clear_project_log(project: String) -> Result<(), String> {
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Past the cap the log is rewritten whole, from a line boundary.
+    #[tokio::test]
+    async fn an_oversized_project_log_is_trimmed_to_whole_lines() {
+        let project = tempfile::tempdir().unwrap();
+        let root = project.path().to_string_lossy().to_string();
+
+        // The first append is also the one that creates the profile directory.
+        append_project_log(root.clone(), r#"{"n":"first"}"#.into())
+            .await
+            .unwrap();
+        let line = format!("{{\"pad\":\"{}\"}}\n", "x".repeat(1000));
+        let filler = line.repeat(PROJECT_LOG_CAP_BYTES as usize / line.len() + 1);
+        std::fs::write(project_log_path(&root), filler).unwrap();
+        append_project_log(root.clone(), r#"{"n":"last"}"#.into())
+            .await
+            .unwrap();
+
+        let log = load_project_log(root).await.unwrap();
+        assert!(
+            (log.len() as u64) < PROJECT_LOG_CAP_BYTES,
+            "trimmed: {}",
+            log.len()
+        );
+        let lines: Vec<&str> = log.lines().collect();
+        assert!(lines[0].starts_with(r#"{"pad":"#), "starts on a line");
+        assert_eq!(lines.last(), Some(&r#"{"n":"last"}"#));
+        assert_eq!(
+            crate::commands::file_names_in(&atlas_profile::dir_in(project.path())),
+            ["logs.jsonl"]
+        );
+    }
 }

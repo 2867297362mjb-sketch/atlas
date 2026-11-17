@@ -8,6 +8,7 @@ import {
   THEME_KEY_REGISTRY,
   type ThemeMode,
 } from "@tryatlas/design/theme";
+import { onWindowEvent } from "@/lib/window-events";
 
 /** Where the primitives and the Foundations scales are reviewed (ADR-0027). */
 const STORYBOOK_URL = "https://design.tryatlas.cc";
@@ -37,8 +38,7 @@ function useCssValues(names: readonly string[]): Record<string, string> {
   const [tick, setTick] = useState(0);
   useEffect(() => {
     const bump = () => setTick((n) => n + 1);
-    window.addEventListener("atlas:theme-applied", bump);
-    return () => window.removeEventListener("atlas:theme-applied", bump);
+    return onWindowEvent("atlas:theme-applied", bump);
   }, []);
   return useMemo(() => {
     void tick;
@@ -273,8 +273,8 @@ function StorybookNote() {
 const MODES: ThemeMode[] = ["system", "dark", "light"];
 
 function Header() {
-  const themes = useThemeStore.use.themes();
-  const actions = useThemeStore.use.actions();
+  const themes = useThemeStore((s) => s.themes);
+  const actions = useThemeStore((s) => s.actions);
   const [themeId, setThemeId] = useState("atlas");
   const [mode, setMode] = useState<ThemeMode>("dark");
 

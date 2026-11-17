@@ -338,6 +338,12 @@ pub struct AppSettings {
     /// flipping a flag first.
     #[serde(default = "default_true")]
     pub enable_atlas_logs: bool,
+    /// How many days of Atlas's own daily log files to keep. The file sink
+    /// is installed before the rest of this config is read, so
+    /// `logging::init` reads just this key and a change applies at the
+    /// next launch, which also deletes the files past the new count.
+    #[serde(default = "default_log_retention_days")]
+    pub log_retention_days: u32,
     /// Show dotfiles / dot-directories (e.g. `.git`, `.atlas`, `.env`) in
     /// the explorer file tree. Default ON so nothing is silently hidden;
     /// users who want a cleaner tree can turn it off.
@@ -582,6 +588,11 @@ pub struct AppSettings {
     /// Terminal font size in pixels.
     #[serde(default = "default_font_size")]
     pub terminal_font_size: u32,
+    /// The terminal keeps an accessible copy of its screen, for screen
+    /// readers and assistive clients. Off by default: it costs work on every
+    /// write.
+    #[serde(default)]
+    pub terminal_screen_reader: bool,
     /// Hide whitespace-only changes in read-only diffs. Never applied where a
     /// diff can be staged, since a patch without whitespace no longer applies.
     #[serde(default)]
@@ -649,6 +660,20 @@ pub struct AppSettings {
     /// worker treats an absent key as ON in development builds.
     #[serde(default)]
     pub security_scan: bool,
+    /// User prices in USD per million tokens, used for local cost estimates.
+    /// Always serialized (the frontend reads it off every settings payload);
+    /// `document_for` writes it inline so the file never grows a table header.
+    #[serde(default)]
+    pub model_price_overrides: BTreeMap<String, ModelPriceOverride>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ModelPriceOverride {
+    pub input: f64,
+    pub output: f64,
+    pub cache_read: f64,
+    pub cache_write: f64,
 }
 
 /// The longest `pullRequestGuideInstructions` accepted, in bytes.
@@ -706,6 +731,14 @@ pub fn default_auto_settle_after_days() -> u32 {
     DEFAULT_AUTO_SETTLE_AFTER_DAYS
 }
 
+pub const DEFAULT_LOG_RETENTION_DAYS: u32 = 7;
+pub const MIN_LOG_RETENTION_DAYS: u32 = 1;
+pub const MAX_LOG_RETENTION_DAYS: u32 = 90;
+
+pub fn default_log_retention_days() -> u32 {
+    DEFAULT_LOG_RETENTION_DAYS
+}
+
 pub fn default_terminal_notify_min_duration_ms() -> u32 {
     10_000
 }
@@ -715,6 +748,7 @@ impl Default for AppSettings {
         Self {
             auto_add_atlas_gitignore: true,
             enable_atlas_logs: true,
+            log_retention_days: default_log_retention_days(),
             show_hidden_files: true,
             show_tips: true,
             preferred_editor: String::new(),
@@ -775,6 +809,7 @@ impl Default for AppSettings {
             terminal_font_family: String::new(),
             editor_font_size: DEFAULT_FONT_SIZE,
             terminal_font_size: DEFAULT_FONT_SIZE,
+            terminal_screen_reader: false,
             diff_ignore_whitespace: false,
             diff_files_collapsed: true,
             diff_palette: DiffPalette::default(),
@@ -793,6 +828,7 @@ impl Default for AppSettings {
             pull_request_guide_model: String::new(),
             pull_request_guide_instructions: String::new(),
             security_scan: false,
+            model_price_overrides: BTreeMap::new(),
         }
     }
 }
@@ -851,6 +887,27 @@ pub struct ValidationIssue {
 const MAX_TERMINAL_NOTIFY_MS: u32 = 3_600_000;
 
 pub fn validate(settings: &AppSettings) -> Result<(), ValidationIssue> {
+    for (model, price) in &settings.model_price_overrides {
+        if model.trim().is_empty() || model != model.trim() {
+            return Err(ValidationIssue {
+                key: "modelPriceOverrides",
+                message: "model names must be nonempty with no surrounding whitespace".into(),
+            });
+        }
+        for rate in [
+            price.input,
+            price.output,
+            price.cache_read,
+            price.cache_write,
+        ] {
+            if !rate.is_finite() || rate < 0.0 {
+                return Err(ValidationIssue {
+                    key: "modelPriceOverrides",
+                    message: format!("{model}: prices must be finite, nonnegative numbers"),
+                });
+            }
+        }
+    }
     if !settings.ui_scale.is_finite()
         || settings.ui_scale < MIN_UI_SCALE
         || settings.ui_scale > MAX_UI_SCALE
@@ -860,6 +917,15 @@ pub fn validate(settings: &AppSettings) -> Result<(), ValidationIssue> {
             message: format!(
                 "must be a finite number between {MIN_UI_SCALE} and {MAX_UI_SCALE}, got {}",
                 settings.ui_scale
+            ),
+        });
+    }
+    if !(MIN_LOG_RETENTION_DAYS..=MAX_LOG_RETENTION_DAYS).contains(&settings.log_retention_days) {
+        return Err(ValidationIssue {
+            key: "logRetentionDays",
+            message: format!(
+                "must be between {MIN_LOG_RETENTION_DAYS} and {MAX_LOG_RETENTION_DAYS}, got {}",
+                settings.log_retention_days
             ),
         });
     }
@@ -1080,7 +1146,21 @@ fn document_for(settings: &AppSettings) -> toml_edit::DocumentMut {
         settings: settings.clone(),
     };
     let text = toml::to_string_pretty(&file).expect("AppSettings always serializes to TOML");
-    annotate(&text)
+    // `toml` writes a map as a trailing `[settings.modelPriceOverrides]` table,
+    // and a key a user later appends below that header lands inside it. Write
+    // it inline, the form `apply_patch` uses too.
+    let mut document: toml_edit::DocumentMut =
+        text.parse().expect("freshly-serialized TOML always parses");
+    if let Some(settings) = document.get_mut("settings").and_then(|i| i.as_table_mut()) {
+        // Removed and re-inserted, not replaced in place: the header's key
+        // decor would otherwise print `modelPriceOverrides= {}`.
+        if let Some(toml_edit::Item::Table(table)) = settings.remove("modelPriceOverrides") {
+            let mut inline = table.into_inline_table();
+            inline.fmt();
+            settings.insert("modelPriceOverrides", toml_edit::value(inline));
+        }
+    }
+    annotate(&document.to_string())
         .parse()
         .expect("freshly-generated TOML always parses")
 }
@@ -1235,6 +1315,7 @@ where
 pub struct SettingsPatch {
     pub auto_add_atlas_gitignore: Option<bool>,
     pub enable_atlas_logs: Option<bool>,
+    pub log_retention_days: Option<u32>,
     pub show_hidden_files: Option<bool>,
     pub show_tips: Option<bool>,
     pub preferred_editor: Option<String>,
@@ -1296,6 +1377,7 @@ pub struct SettingsPatch {
     pub terminal_font_family: Option<String>,
     pub editor_font_size: Option<u32>,
     pub terminal_font_size: Option<u32>,
+    pub terminal_screen_reader: Option<bool>,
     pub diff_ignore_whitespace: Option<bool>,
     pub diff_files_collapsed: Option<bool>,
     pub diff_palette: Option<DiffPalette>,
@@ -1314,15 +1396,22 @@ pub struct SettingsPatch {
     pub pull_request_guide_model: Option<String>,
     pub pull_request_guide_instructions: Option<String>,
     pub security_scan: Option<bool>,
+    pub model_price_overrides: Option<BTreeMap<String, ModelPriceOverride>>,
 }
 
 impl SettingsPatch {
     fn apply_to(&self, settings: &mut AppSettings) {
+        if let Some(v) = &self.model_price_overrides {
+            settings.model_price_overrides = v.clone();
+        }
         if let Some(v) = self.auto_add_atlas_gitignore {
             settings.auto_add_atlas_gitignore = v;
         }
         if let Some(v) = self.enable_atlas_logs {
             settings.enable_atlas_logs = v;
+        }
+        if let Some(v) = self.log_retention_days {
+            settings.log_retention_days = v;
         }
         if let Some(v) = self.show_hidden_files {
             settings.show_hidden_files = v;
@@ -1480,6 +1569,7 @@ impl SettingsPatch {
             terminal_font_family,
             editor_font_size,
             terminal_font_size,
+            terminal_screen_reader,
             diff_ignore_whitespace,
             diff_files_collapsed,
             diff_palette,
@@ -1557,6 +1647,7 @@ impl SettingsPatch {
         );
         set_bool!(new_session_uses_last_agent, "newSessionUsesLastAgent");
         set_bool!(word_wrap, "wordWrap");
+        set_bool!(terminal_screen_reader, "terminalScreenReader");
         set_bool!(diff_ignore_whitespace, "diffIgnoreWhitespace");
         set_bool!(diff_files_collapsed, "diffFilesCollapsed");
         set_bool!(show_turn_rail, "showTurnRail");
@@ -1633,6 +1724,9 @@ impl SettingsPatch {
         if let Some(v) = self.terminal_notify_min_duration_ms {
             table["terminalNotifyMinDurationMs"] = toml_edit::value(i64::from(v));
         }
+        if let Some(v) = self.log_retention_days {
+            table["logRetentionDays"] = toml_edit::value(i64::from(v));
+        }
 
         if let Some(v) = self.ui_scale {
             table["uiScale"] = toml_edit::value(f64::from(v));
@@ -1655,6 +1749,18 @@ impl SettingsPatch {
         }
         if let Some(v) = &self.theme_overrides {
             table["themeOverrides"] = theme_override_item(v);
+        }
+        if let Some(overrides) = &self.model_price_overrides {
+            let mut models = toml_edit::InlineTable::new();
+            for (model, price) in overrides {
+                let mut rates = toml_edit::InlineTable::new();
+                rates.insert("input", price.input.into());
+                rates.insert("output", price.output.into());
+                rates.insert("cacheRead", price.cache_read.into());
+                rates.insert("cacheWrite", price.cache_write.into());
+                models.insert(model, rates.into());
+            }
+            table["modelPriceOverrides"] = toml_edit::value(models);
         }
         if let Some(v) = &self.icon_theme {
             table["iconTheme"] = toml_edit::value(v.as_str());
@@ -1762,7 +1868,7 @@ fn theme_override_item(theme_override: &ThemeOverride) -> toml_edit::Item {
 /// discriminated union in `atlas-config-api.ts`. Deriving `Serialize` here
 /// rather than mirroring the enum into a separate wire type in
 /// `commands::atlas_config` keeps one definition of the three states.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase", tag = "status")]
 pub enum ConfigStatus {
     Ok,
@@ -1959,7 +2065,7 @@ impl ConfigManager {
             }
         };
         if fresh.last_raw != raw {
-            write_atomic(&self.path, &fresh.last_raw)
+            atlas_fs::replace_file(&self.path, &fresh.last_raw)
                 .map_err(|error| ConfigError::Io(error.to_string()))?;
         }
         self.document = fresh.document;
@@ -2069,7 +2175,7 @@ impl ConfigManager {
             }
             _ => {}
         }
-        write_atomic(&self.path, text).map_err(|e| ConfigError::Io(e.to_string()))?;
+        atlas_fs::replace_file(&self.path, text).map_err(|e| ConfigError::Io(e.to_string()))?;
         Ok(true)
     }
 
@@ -2090,7 +2196,7 @@ impl ConfigManager {
         let settings = AppSettings::default();
         let document = document_for(&settings);
         let text = document.to_string();
-        write_atomic(&self.path, &text).map_err(|e| ConfigError::Io(e.to_string()))?;
+        atlas_fs::replace_file(&self.path, &text).map_err(|e| ConfigError::Io(e.to_string()))?;
 
         self.document = document;
         self.effective = settings.clone();
@@ -2110,7 +2216,7 @@ impl ConfigManager {
     fn create_fresh_with(path: PathBuf, mut settings: AppSettings) -> Result<Self, ConfigError> {
         let document = document_for(&settings);
         let text = document.to_string();
-        write_atomic(&path, &text).map_err(|e| ConfigError::Io(e.to_string()))?;
+        atlas_fs::replace_file(&path, &text).map_err(|e| ConfigError::Io(e.to_string()))?;
         fallback_unknown_theme(&mut settings);
         Ok(Self {
             path,
@@ -2122,52 +2228,6 @@ impl ConfigManager {
             unknown_keys: Vec::new(),
         })
     }
-}
-
-/// Atomic write: a unique temp file in the same directory (so distinct UI
-/// writes, a first-run create, and any external tooling can never collide on one
-/// fixed `.tmp` name), flushed then renamed over the target.
-pub(crate) fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
-    use std::io::Write;
-
-    if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir)?;
-    }
-    let file_name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| CONFIG_FILE_NAME.to_string());
-    let unique = format!("{file_name}.tmp.{}", uuid::Uuid::new_v4());
-    let tmp = path.with_file_name(unique);
-
-    // `sync_all` before the rename, not just `fs::write`: without it the
-    // rename can reach the disk ahead of the bytes it points at, so power
-    // loss just after the UI said "saved" can leave config.toml pointing at
-    // an empty or half-written inode. On the failure paths the temp file is
-    // removed rather than left as litter next to the real config.
-    let written = (|| -> std::io::Result<()> {
-        let mut f = fs::File::create(&tmp)?;
-        f.write_all(contents.as_bytes())?;
-        f.sync_all()
-    })();
-    if let Err(e) = written {
-        let _ = fs::remove_file(&tmp);
-        return Err(e);
-    }
-    if let Err(e) = fs::rename(&tmp, path) {
-        let _ = fs::remove_file(&tmp);
-        return Err(e);
-    }
-
-    // Make the rename itself durable. Best-effort: some filesystems refuse to
-    // open a directory for sync, and that is not worth failing an otherwise
-    // successful write over.
-    if let Some(dir) = path.parent() {
-        if let Ok(d) = fs::File::open(dir) {
-            let _ = d.sync_all();
-        }
-    }
-    Ok(())
 }
 
 /// `~/.config/atlas/` — deliberately NOT Tauri's `app_config_dir()`, which on
@@ -2239,7 +2299,7 @@ pub fn read(app: &AppHandle) -> AppSettings {
 ///
 /// Returns the committed snapshot (settings + generation) rather than just
 /// `AppSettings` so the caller can hand both to
-/// `commands::atlas_config::notify_settings_changed` — without that, an
+/// `settings_effects::apply` (as `When::Changed`) — without that, an
 /// internal write bumps `ConfigManager`'s generation on disk but the
 /// frontend's mirrored `configGeneration` goes stale, and the live telemetry
 /// gate (`TelemetryClient::enabled`) never re-syncs to a changed
@@ -2278,7 +2338,7 @@ pub fn bootstrap() -> ConfigManager {
 }
 
 /// The path half of [`bootstrap`], testable against a temp dir.
-fn bootstrap_at(path: PathBuf) -> ConfigManager {
+pub(crate) fn bootstrap_at(path: PathBuf) -> ConfigManager {
     if path.exists() {
         return ConfigManager::load_at(path);
     }
@@ -2302,8 +2362,8 @@ mod tests {
     use super::*;
 
     /// A fresh `config.toml` path inside its own temp directory, so parallel
-    /// tests never collide and `write_atomic`'s `create_dir_all` has
-    /// somewhere real to write the sibling `.tmp.<uuid>` file. Keep the
+    /// tests never collide and `replace_file`'s `create_dir_all` has
+    /// somewhere real to write its sibling temp file. Keep the
     /// `TempDir` alive for the test: dropping it deletes the directory.
     fn tmp_config_path() -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
@@ -2745,6 +2805,7 @@ someFutureKey = \"left alone\"
         let patch = SettingsPatch {
             auto_add_atlas_gitignore: Some(!defaults.auto_add_atlas_gitignore),
             enable_atlas_logs: Some(!defaults.enable_atlas_logs),
+            log_retention_days: Some(defaults.log_retention_days + 1),
             show_hidden_files: Some(!defaults.show_hidden_files),
             show_tips: Some(!defaults.show_tips),
             preferred_editor: Some("zed".to_string()),
@@ -2815,6 +2876,7 @@ someFutureKey = \"left alone\"
             terminal_font_family: Some("Menlo".to_string()),
             editor_font_size: Some(15),
             terminal_font_size: Some(14),
+            terminal_screen_reader: Some(!defaults.terminal_screen_reader),
             diff_ignore_whitespace: Some(!defaults.diff_ignore_whitespace),
             diff_files_collapsed: Some(!defaults.diff_files_collapsed),
             diff_palette: Some(DiffPalette::BlueOrange),
@@ -2833,6 +2895,15 @@ someFutureKey = \"left alone\"
             pull_request_guide_model: Some("opus".to_string()),
             pull_request_guide_instructions: Some("Show contracts first.\nSkip tests.".to_string()),
             security_scan: Some(!defaults.security_scan),
+            model_price_overrides: Some(BTreeMap::from([(
+                "private/model.v1".into(),
+                ModelPriceOverride {
+                    input: 1.0,
+                    output: 2.0,
+                    cache_read: 0.25,
+                    cache_write: 0.5,
+                },
+            )])),
         };
         let mut expected = defaults.clone();
         patch.apply_to(&mut expected);
@@ -3075,45 +3146,6 @@ red = "#ee0000"
         let text = "schemaVersion = 1\n\n[settings]\nenterToSend = false\n";
         assert!(mgr.write_if_unchanged(text).unwrap());
         assert_eq!(fs::read_to_string(&path).unwrap(), text);
-    }
-
-    fn temp_files_beside(path: &Path) -> Vec<String> {
-        fs::read_dir(path.parent().unwrap())
-            .unwrap()
-            .filter_map(Result::ok)
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .filter(|n| n.contains(".tmp."))
-            .collect()
-    }
-
-    /// `write_atomic` must not leave its `.tmp.<uuid>` sibling behind when the
-    /// swap FAILS — that's the path that used to litter, since the success
-    /// path renames the temp away by construction. A directory sitting at the
-    /// destination makes the rename fail deterministically.
-    #[test]
-    fn a_failed_atomic_write_cleans_up_its_temp_file() {
-        let (_dir, path) = tmp_config_path();
-        fs::create_dir_all(&path).unwrap();
-
-        assert!(
-            write_atomic(&path, "schemaVersion = 1\n").is_err(),
-            "renaming onto a dir fails"
-        );
-        assert!(
-            temp_files_beside(&path).is_empty(),
-            "a failed write left litter: {:?}",
-            temp_files_beside(&path)
-        );
-    }
-
-    /// ...and the success path both lands the content and leaves nothing.
-    #[test]
-    fn a_successful_atomic_write_lands_the_content_and_leaves_nothing() {
-        let (_dir, path) = tmp_config_path();
-        write_atomic(&path, "schemaVersion = 1\n").unwrap();
-
-        assert_eq!(fs::read_to_string(&path).unwrap(), "schemaVersion = 1\n");
-        assert!(temp_files_beside(&path).is_empty());
     }
 
     /// A comment line that misses its `\n\` continuation keeps the source's
@@ -3451,5 +3483,105 @@ red = "#ee0000"
             "an existing key's decor must not be rewritten"
         );
         ConfigManager::from_raw(path, &on_disk).expect("still a valid config");
+    }
+
+    #[test]
+    fn model_price_overrides_are_documented_persisted_and_removable() {
+        let (_dir, path) = tmp_config_path();
+        let raw = "schemaVersion = 1\n[settings]\n# my preference\nenterToSend = false\n";
+        fs::write(&path, raw).unwrap();
+        let mut mgr = ConfigManager::from_raw(path.clone(), raw).unwrap();
+        let overrides = BTreeMap::from([(
+            "private/model.v1".into(),
+            ModelPriceOverride {
+                input: 1.0,
+                output: 2.0,
+                cache_read: 0.25,
+                cache_write: 0.5,
+            },
+        )]);
+        mgr.apply_patch(
+            &SettingsPatch {
+                model_price_overrides: Some(overrides.clone()),
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+        let saved = fs::read_to_string(&path).unwrap();
+        assert!(saved.contains("# my preference\nenterToSend = false"));
+        let (_, comment) = SETTINGS_DOCS
+            .iter()
+            .find(|(key, _)| *key == "modelPriceOverrides")
+            .unwrap();
+        // Inline, so there is no table header for hand-added keys to fall into.
+        let fresh = document_for(&AppSettings::default()).to_string();
+        assert!(fresh.contains(&format!("{comment}\nmodelPriceOverrides = {{}}")));
+        assert!(!fresh.contains("[settings.modelPriceOverrides]"));
+        let appended = format!("{fresh}someFutureKey = \"x\"\n");
+        let mgr_appended = ConfigManager::from_raw(path.clone(), &appended).unwrap();
+        assert!(mgr_appended.effective().model_price_overrides.is_empty());
+        assert!(mgr_appended
+            .unknown_keys()
+            .contains(&"someFutureKey".to_string()));
+        // A nonempty map written whole (first run, reset) stays inline too.
+        let whole = document_for(&AppSettings {
+            model_price_overrides: overrides.clone(),
+            ..AppSettings::default()
+        })
+        .to_string();
+        assert!(!whole.contains("[settings.modelPriceOverrides"));
+        assert_eq!(
+            ConfigManager::from_raw(path.clone(), &whole)
+                .unwrap()
+                .effective()
+                .model_price_overrides,
+            overrides
+        );
+        assert!(saved.contains(&format!("{comment}\nmodelPriceOverrides = ")));
+        assert_eq!(
+            ConfigManager::from_raw(path.clone(), &saved)
+                .unwrap()
+                .effective()
+                .model_price_overrides,
+            overrides
+        );
+        mgr.apply_patch(
+            &SettingsPatch {
+                model_price_overrides: Some(BTreeMap::new()),
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+        assert!(ConfigManager::load_at(path)
+            .effective()
+            .model_price_overrides
+            .is_empty());
+    }
+
+    #[test]
+    fn model_price_overrides_require_four_finite_nonnegative_rates() {
+        let valid = "modelPriceOverrides = { model = { input = 0.0, output = 2.0, cacheRead = 0.25, cacheWrite = 0.5 } }";
+        assert!(validate(&parse_settings(valid).unwrap()).is_ok());
+        for field in ["input", "output", "cacheRead", "cacheWrite"] {
+            for value in ["-1.0", "nan", "inf"] {
+                let mut settings = parse_settings(valid).unwrap();
+                let price = settings.model_price_overrides.get_mut("model").unwrap();
+                let rate = match field {
+                    "input" => &mut price.input,
+                    "output" => &mut price.output,
+                    "cacheRead" => &mut price.cache_read,
+                    _ => &mut price.cache_write,
+                };
+                *rate = value.parse().unwrap();
+                assert_eq!(validate(&settings).unwrap_err().key, "modelPriceOverrides");
+            }
+        }
+        for model in ["", " model", "model "] {
+            let text = valid.replace("model =", &format!("\"{model}\" ="));
+            assert!(validate(&parse_settings(&text).unwrap()).is_err());
+        }
+        assert!(parse_settings("modelPriceOverrides = { model = { input = 1.0 } }").is_err());
     }
 }

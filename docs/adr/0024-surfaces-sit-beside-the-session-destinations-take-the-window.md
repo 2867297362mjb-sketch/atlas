@@ -1,9 +1,9 @@
 # ADR-0024: Surfaces sit beside the session; destinations take the window
 
-**Status:** Accepted (2026-10-23). Amended 2026-10-24 (one type in both placements, below).
+**Status:** Accepted (2026-10-23). Amended 2026-10-24 (one type in both placements, below). The lists of types below are as of the decision; the tab registry (`src/lib/tab-registry.ts`) holds the current sets: what this text calls `TAB_PLACEMENT` is each entry's `placement`, and `WINDOW_TYPES` is derived from each entry's `scope`.
 
-**For agents:** every tab type has exactly one placement, in `TAB_PLACEMENT`
-(`src/lib/constants.ts`): `session`, `surface`, `destination`, or (team chat only, see the
+**For agents:** every tab type has exactly one placement, the `placement` of its entry in
+the tab registry (`src/lib/tab-registry.ts`): `session`, `surface`, `destination`, or (team chat only, see the
 amendment) `surface-or-destination`. Adding a tab type without one is a compile error. Read
 the test below before choosing; don't add a type to a second list to get round it.
 `tests/tab-placement-contract.test.ts` checks the rest.

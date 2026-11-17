@@ -70,6 +70,7 @@ import { agentContextMention, type AgentContext } from "./agent-context";
 export type { AgentContext } from "./agent-context";
 
 import type { AskTarget } from "./open-ask";
+import { emitWindowEvent } from "@/lib/window-events";
 export type { AskTarget } from "./open-ask";
 // Opening the box needs none of the session machinery above, so it lives in
 // a leaf module that a low-level lib (git's error routing) can import
@@ -162,14 +163,14 @@ export function composeAsk(prompt: string, mentions: readonly MentionAgentContex
   return text ? `${text}\n\n${tokens} ` : `${tokens} `;
 }
 
-/** Dispatch a cancelable event until a listener takes it (calls
+/** Emit a cancelable `atlas:chat-send` until a listener takes it (calls
  *  `preventDefault`), retrying every RETRY_MS for a tab whose panel is still
  *  mounting. */
-function dispatchUntilHeard(name: string, detail: unknown, tries: number): Promise<boolean> {
+function sendUntilHeard(detail: ChatSendDetail, tries: number): Promise<boolean> {
   return new Promise((resolve) => {
     let made = 0;
     const attempt = () => {
-      if (!window.dispatchEvent(new CustomEvent(name, { detail, cancelable: true }))) {
+      if (!emitWindowEvent("atlas:chat-send", detail, { cancelable: true })) {
         resolve(true);
       } else if (++made >= tries) {
         resolve(false);
@@ -185,9 +186,7 @@ function dispatchUntilHeard(name: string, detail: unknown, tries: number): Promi
  *  else into the stored draft its composer reads on mount. */
 function draftInto(tabId: string, text: string): void {
   const detail: ChatInsertDetail = { text, tabId, append: true };
-  const heard = !window.dispatchEvent(
-    new CustomEvent("atlas:chat-insert", { detail, cancelable: true }),
-  );
+  const heard = !emitWindowEvent("atlas:chat-insert", detail, { cancelable: true });
   if (heard) return;
   const chat = useChatStore.getState();
   const cur = chat.drafts[tabId] ?? "";
@@ -222,7 +221,7 @@ export async function askAgent(opts: AskAgentOptions): Promise<AskResult> {
   let sent = false;
   if (opts.send) {
     const detail: ChatSendDetail = { tabId, text: text.trim(), mentions };
-    sent = await dispatchUntilHeard("atlas:chat-send", detail, MOUNT_TRIES);
+    sent = await sendUntilHeard(detail, MOUNT_TRIES);
   }
   // Not sent — by choice, or no panel took it — so nothing is lost: it waits
   // in the composer.
@@ -234,7 +233,7 @@ export async function askAgent(opts: AskAgentOptions): Promise<AskResult> {
 export function openAskedSession(tabId: string): void {
   useLayoutStore.getState().actions.setActiveTab(tabId);
   useChatStore.getState().actions.setActiveSession(tabId);
-  window.dispatchEvent(new CustomEvent("atlas:chat-focus", { detail: { tabId } }));
+  emitWindowEvent("atlas:chat-focus", { tabId });
 }
 
 /** The confirmation: "Sent to ‹session› · Open". */

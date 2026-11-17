@@ -1,5 +1,6 @@
 import { useLayoutStore } from "@/features/layout/stores/layout-store";
 import { useChatStore } from "@/features/chat/stores/chat-store";
+import { emitWindowEvent } from "@/lib/window-events";
 
 /**
  * Populate the agent chat composer with `text` — the shared mechanism behind
@@ -21,9 +22,7 @@ export function sendToAgentChat(text: string): void {
 
   layout.actions.setActiveTab(tabId);
 
-  requestAnimationFrame(() =>
-    window.dispatchEvent(new CustomEvent("atlas:chat-insert", { detail: { text: next, tabId } })),
-  );
+  requestAnimationFrame(() => emitWindowEvent("atlas:chat-insert", { text: next, tabId }));
 }
 
 /** The chat tab `sendToAgentChat` writes to: the active session when it is

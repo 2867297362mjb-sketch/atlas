@@ -244,7 +244,7 @@ export function ProjectFileTree({
 
   // ── Decorations ─────────────────────────────────────────────────────────
   const changes = useWorkingTreeChanges(root);
-  const hideArrows = useIconThemeStore.use.hidesExplorerArrows();
+  const hideArrows = useIconThemeStore((s) => s.hidesExplorerArrows);
 
   // ── Actions ─────────────────────────────────────────────────────────────
   const rowsRef = useRef(rows);
@@ -569,6 +569,7 @@ export function ProjectFileTree({
       root={root}
       header={header}
       truncated={searchResult?.truncated}
+      listed={ready && !(searchResult && searchResult.matchCount === 0) && display.length > 0}
       scrollRef={scrollRef}
       focused={focused}
       dropTarget={dropTarget}

@@ -90,7 +90,10 @@ describe("MessageGroup re-renders", () => {
         reactionsByMessage: { m2: [{ message_id: "m2", user_id: bob.id, emoji: "👍" }] },
       });
     });
-    expect([...bodyRenders.keys()]).toEqual(["body m2"]);
+    // Only m2's row re-renders, and under the React Compiler not even its body:
+    // the body's props did not change, so its element is reused. What must
+    // never happen is a neighbour re-rendering.
+    expect([...bodyRenders.keys()].filter((b) => b !== "body m2")).toEqual([]);
     expect(screen.getByText("👍")).toBeTruthy();
   });
 

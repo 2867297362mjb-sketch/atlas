@@ -13,9 +13,9 @@ import { NewDmMenuView } from "./views/new-dm-menu-view";
  * at creation, so every group starts fresh with no history to leak.
  */
 export function NewDmMenu() {
-  const memberList = useCommsStore.use.members();
-  const me = useCommsStore.use.me();
-  const actions = useCommsStore.use.actions();
+  const memberList = useCommsStore((s) => s.members);
+  const me = useCommsStore((s) => s.me);
+  const actions = useCommsStore((s) => s.actions);
 
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState(false);

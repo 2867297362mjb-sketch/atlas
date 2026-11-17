@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { expectFloor } from "./support/floor";
+import { bracketBody } from "./support/source";
 
 /**
  * Guards the organisation calls that cross to the window (ADR-0014 over
@@ -29,11 +31,10 @@ function windowTools(): string[] {
 }
 
 function offeredTools(): string[] {
-  const src = read(TOOLS_RS);
-  const body = src.slice(
-    src.indexOf("pub(super) fn tools()"),
-    src.indexOf("pub(super) fn tools_for("),
-  );
+  const body = bracketBody(read(TOOLS_RS), "pub(super) fn tools()", {
+    lang: "rust",
+    where: TOOLS_RS,
+  });
   return [...body.matchAll(/tool\(\s*"(org_[a-z_]+)"/g)].map((m) => m[1]);
 }
 
@@ -44,8 +45,9 @@ function dispatchedTools(): string[] {
 
 describe("organisation window action contract", () => {
   it("finds the tools on both sides", () => {
-    expect(windowTools().length).toBeGreaterThanOrEqual(1);
-    expect(offeredTools().length).toBeGreaterThanOrEqual(12);
+    expectFloor("tools WINDOW_TOOLS declares", windowTools().length, 1);
+    expectFloor("tools the organisation tool server offers", offeredTools().length, 12);
+    expectFloor("cases in the window's dispatcher", dispatchedTools().length, 1);
   });
 
   it("every window tool is a tool the model is offered", () => {

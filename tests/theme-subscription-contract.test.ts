@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { walk } from "./support/walk";
+import { expectFloor } from "./support/floor";
 
 /**
  * Every consumer that reads a RESOLVED theme colour must have a way to hear
@@ -27,7 +29,7 @@ import { fileURLToPath } from "node:url";
  *
  *   `onThemeApplied(cb)`   imperative owners (xterm, the two pixi scenes)
  *   `useThemeVersion()`    React (recharts, mermaid)
- *   a raw `window.addEventListener(THEME_APPLIED_EVENT, …)` (CodeMirror,
+ *   a direct `onWindowEvent("atlas:theme-applied", …)` (CodeMirror,
  *                          which reconfigures a compartment rather than
  *                          re-rendering)
  *
@@ -42,8 +44,7 @@ const SRC = path.join(REPO_ROOT, "src");
 const READER = /\b(?:themeColor|themeBase|themeDerived|themeHex|getActiveTheme)\s*\(/;
 
 /** Any of these means the file is told when the theme changed. */
-const SUBSCRIBER =
-  /\b(?:onThemeApplied|useThemeVersion)\s*\(|THEME_APPLIED_EVENT|atlas:theme-applied/;
+const SUBSCRIBER = /\b(?:onThemeApplied|useThemeVersion)\s*\(|atlas:theme-applied/;
 
 const ALLOW_MARKER = /theme-subscription-allow:\s*(.*)$/m;
 
@@ -105,15 +106,8 @@ const EXEMPT: Record<string, string> = {
     "Same as `canvas-export.ts`: a one-shot export. The Usage tab's PDF/JPEG capture reads the background once, at the moment the user asks for the file.",
 };
 
-function walk(dir: string): string[] {
-  const out: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...walk(full));
-    else if (/\.(ts|tsx)$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) out.push(full);
-  }
-  return out;
-}
+/** Shipping sources: a test mounts under one theme and never sees a switch. */
+const scanned = walk(SRC, [".ts", ".tsx"]).filter((file) => !/\.test\.tsx?$/.test(file));
 
 interface Reader {
   where: string;
@@ -121,7 +115,7 @@ interface Reader {
   allowReason: string | null;
 }
 
-const readers: Reader[] = walk(SRC).flatMap((file) => {
+const readers: Reader[] = scanned.flatMap((file) => {
   const raw = readFileSync(file, "utf8");
   const code = stripComments(raw);
   if (!READER.test(code)) return [];
@@ -138,9 +132,10 @@ const readers: Reader[] = walk(SRC).flatMap((file) => {
 
 describe("theme subscription contract", () => {
   it("finds the readers at all (no vacuous pass)", () => {
-    // Well under the real count (13 at the time of writing): a smoke alarm for
-    // "the regex stopped matching", not a coverage target.
-    expect(readers.length).toBeGreaterThanOrEqual(8);
+    // A smoke alarm for "the root moved" and "the regex stopped matching",
+    // not a coverage target.
+    expectFloor("shipping TypeScript files under src/", scanned.length, 1350);
+    expectFloor("files that read a resolved theme value", readers.length, 12);
     // And the seven subsystems the 2026-09-18 review named as the risk are all
     // still in the set, by the path they live at.
     for (const file of [
@@ -161,7 +156,7 @@ describe("theme subscription contract", () => {
     // Self-test for the comment stripping the checks above rely on.
     const commented = [
       "// listens for atlas:theme-applied via onThemeApplied(cb)",
-      "/* useThemeVersion() would go here; THEME_APPLIED_EVENT */",
+      "/* useThemeVersion() would go here; atlas:theme-applied */",
       'const url = "https://example.invalid/x"; // onThemeApplied(',
     ].join("\n");
     expect(SUBSCRIBER.test(stripComments(commented))).toBe(false);
@@ -179,7 +174,7 @@ describe("theme subscription contract", () => {
         "These read a RESOLVED theme colour and would keep the palette they were",
         "constructed with after a switch — the failure a freshly-mounted check",
         "cannot see. Subscribe with `onThemeApplied` / `useThemeVersion` / a",
-        "`THEME_APPLIED_EVENT` listener, or add a `theme-subscription-allow:`",
+        "`atlas:theme-applied` listener, or add a `theme-subscription-allow:`",
         "comment saying why the value cannot go stale.",
         ...deaf.map((f) => `  ${f}`),
       ].join("\n"),

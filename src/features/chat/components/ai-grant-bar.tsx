@@ -43,8 +43,8 @@ const BILLING_URL = "https://app.tryatlas.cc/settings/billing";
  * noise. Same conditions as the render below, read from the same stores.
  */
 export function useAiGrantBarShown(turnRunning: boolean): boolean {
-  const entitlement = useAiGrantStore.use.entitlement();
-  const dismissed = useAiGrantStore.use.dismissed();
+  const entitlement = useAiGrantStore((s) => s.entitlement);
+  const dismissed = useAiGrantStore((s) => s.dismissed);
   const local = isLocalOrg(useActiveOrganisation());
   if (dismissed || turnRunning) return false;
   return (entitlement?.state === "localOrg" && local) || entitlement?.state === "noGrant";
@@ -63,10 +63,10 @@ export function AiGrantBar({ turnRunning = false }: { turnRunning?: boolean }) {
   const orgName = org?.name ?? account?.orgs?.find((o) => o.id === activeOrgId)?.name ?? null;
   const local = isLocalOrg(org);
 
-  const entitlement = useAiGrantStore.use.entitlement();
-  const checking = useAiGrantStore.use.checking();
-  const dismissed = useAiGrantStore.use.dismissed();
-  const { refresh, dismiss } = useAiGrantStore.use.actions();
+  const entitlement = useAiGrantStore((s) => s.entitlement);
+  const checking = useAiGrantStore((s) => s.checking);
+  const dismissed = useAiGrantStore((s) => s.dismissed);
+  const { refresh, dismiss } = useAiGrantStore((s) => s.actions);
   // The switcher's "Turn on sync for {org}…" item, offered here as well so the
   // one action that unlocks the agent is beside the notice that names it.
   const enableSync = useOrgStore((s) => s.actions.enableSync);

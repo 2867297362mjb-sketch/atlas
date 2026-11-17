@@ -31,6 +31,7 @@ import {
   type LabelTone,
   type PaintState,
 } from "./memory-graph-paint";
+import { onWindowEvent } from "@/lib/window-events";
 
 const MIN_SCALE = 0.2;
 const MAX_SCALE = 4;
@@ -383,7 +384,7 @@ export function buildMemoryScene(app: Application, opts: MemorySceneOptions): ()
   window.addEventListener("wheel", wake, { passive: true });
   // Cold-wake warm-up: repaint fresh on the window-active rising edge so a
   // slept graph isn't caught by WebKit's post-idle throttle on first touch.
-  window.addEventListener("atlas:window-active", wake);
+  const offWindowActive = onWindowEvent("atlas:window-active", wake);
 
   // Every scene mutation (selection, search, timeline cutoff, drag, zoom)
   // reassigns `sceneRef.current` to a NEW object; pan only moves the viewport
@@ -498,7 +499,7 @@ export function buildMemoryScene(app: Application, opts: MemorySceneOptions): ()
     window.removeEventListener("pointerdown", wake);
     window.removeEventListener("pointermove", wake);
     window.removeEventListener("wheel", wake);
-    window.removeEventListener("atlas:window-active", wake);
+    offWindowActive();
     exitPanMode();
     Matter.Composite.clear(engine.world, false, true);
     Matter.Engine.clear(engine);

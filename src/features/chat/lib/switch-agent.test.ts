@@ -8,13 +8,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(async () => undefined),
-}));
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async () => () => {}),
-  emit: vi.fn(async () => {}),
-}));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
 const openAgentChatInNewTab = vi.fn();
 vi.mock("./open-agent-session", () => ({
   openAgentChatInNewTab: (...a: unknown[]) => openAgentChatInNewTab(...a),
@@ -33,20 +28,20 @@ import { invoke } from "@tauri-apps/api/core";
 import { useChatStore } from "../stores/chat-store";
 import { useRcStore } from "../stores/rc-store";
 import type { RcRoom } from "./rc-api";
+import { sessionSend } from "./session-send";
+import type { ChatSendDetail } from "../hooks/use-queue-drain";
 import { useMemorySharingStore } from "@/features/memory/stores/memory-sharing-store";
 import { useSettingsStore } from "@/features/settings/stores/settings-store";
 import { DEFAULT_SETTINGS, type AppSettings } from "@/features/settings/lib/app-settings";
 import {
-  CHAT_STOP_EVENT,
   REMEMBER_BEFORE_SWITCH_TIMEOUT_MS,
   REMEMBER_START_TIMEOUT_MS,
   REMEMBER_STOP_GRACE_MS,
-  SESSION_HANDOFF_EVENT,
   isStartingOnly,
-  isSwitchPending,
   switchAgentForTab,
   type SessionHandoffDetail,
 } from "./switch-agent";
+import { onWindowEvent } from "@/lib/window-events";
 
 const TAB = "tab-1";
 
@@ -144,18 +139,18 @@ describe("switchAgentForTab on an idle chat", () => {
   };
 
   const handoffs: SessionHandoffDetail[] = [];
-  const onHandoff = (e: Event) => handoffs.push((e as CustomEvent<SessionHandoffDetail>).detail);
+  let offHandoff = () => {};
 
   beforeEach(() => {
     localStorage.clear();
     openAgentChatInNewTab.mockClear();
     handoffs.length = 0;
-    window.addEventListener(SESSION_HANDOFF_EVENT, onHandoff);
+    offHandoff = onWindowEvent("atlas:chat-handoff-session", (d) => void handoffs.push(d));
     useChatStore.setState({ sessions: {}, queues: {}, activeSessionId: null });
     useChatStore.getState().actions.createSession(TAB, "codex");
     behave("reset");
   });
-  afterEach(() => window.removeEventListener(SESSION_HANDOFF_EVENT, onHandoff));
+  afterEach(() => offHandoff());
 
   it("keeps the conversation and opens the new agent in a new tab", () => {
     behave("new-tab");
@@ -290,20 +285,13 @@ describe("switchAgentForTab on an idle chat", () => {
 // is sent that command first, and the switch runs once that turn has ended
 // (or the user stops waiting) — as `agentSwitchBehavior` says.
 describe("switchAgentForTab with rememberBeforeSwitch", () => {
-  const sends: { tabId: string; text: string }[] = [];
-  const onSend = (e: Event) =>
-    sends.push((e as CustomEvent<{ tabId: string; text: string }>).detail);
+  const sends: ChatSendDetail[] = [];
   const stops: string[] = [];
   /** What the chat panel's Stop does, as far as the store sees: the turn ends
    *  cancelled. `false` leaves the turn running, as a wedged agent would. */
   let stopWorks = true;
-  const onStop = (e: Event) => {
-    const { tabId } = (e as CustomEvent<{ tabId: string }>).detail;
-    stops.push(tabId);
-    if (stopWorks) useChatStore.getState().actions.updateSessionStatus(tabId, "idle");
-  };
   const handoffs: SessionHandoffDetail[] = [];
-  const onHandoff = (e: Event) => handoffs.push((e as CustomEvent<SessionHandoffDetail>).detail);
+  let offs: Array<() => void> = [];
 
   const setup = (
     rememberBeforeSwitch = true,
@@ -341,17 +329,20 @@ describe("switchAgentForTab with rememberBeforeSwitch", () => {
     stops.length = 0;
     handoffs.length = 0;
     stopWorks = true;
-    window.addEventListener("atlas:chat-send", onSend);
-    window.addEventListener(CHAT_STOP_EVENT, onStop);
-    window.addEventListener(SESSION_HANDOFF_EVENT, onHandoff);
+    offs = [
+      onWindowEvent("atlas:chat-send", (detail) => void sends.push(detail)),
+      onWindowEvent("atlas:chat-stop", ({ tabId }) => {
+        stops.push(tabId);
+        if (stopWorks) useChatStore.getState().actions.updateSessionStatus(tabId, "idle");
+      }),
+      onWindowEvent("atlas:chat-handoff-session", (detail) => void handoffs.push(detail)),
+    ];
     useChatStore.setState({ sessions: {}, queues: {}, activeSessionId: null });
     useChatStore.getState().actions.createSession(TAB, "codex");
   });
   afterEach(() => {
     vi.useRealTimers();
-    window.removeEventListener("atlas:chat-send", onSend);
-    window.removeEventListener(CHAT_STOP_EVENT, onStop);
-    window.removeEventListener(SESSION_HANDOFF_EVENT, onHandoff);
+    for (const off of offs) off();
     useMemorySharingStore.setState({ enabled: true });
   });
 
@@ -593,8 +584,8 @@ describe("switchAgentForTab with rememberBeforeSwitch", () => {
     expect(agent()).toBe("atlas-agent");
   });
 
-  // The chat panel does not drain a queue while a switch is pending
-  // (`isSwitchPending`); clearing the session for an in-place switch used to
+  // The chat panel does not drain a queue while a switch is pending (the
+  // "switch" hold, read as `switchPending`); clearing the session for an in-place switch used to
   // drop whatever the user typed during the save.
   it("a message typed during the save goes to the new agent when switching in place", async () => {
     setup();
@@ -602,12 +593,12 @@ describe("switchAgentForTab with rememberBeforeSwitch", () => {
 
     switchAgentForTab(TAB, "claude-code");
     status("running");
-    expect(isSwitchPending(TAB)).toBe(true);
+    expect(sessionSend.state(TAB).switchPending).toBe(true);
     useChatStore.getState().actions.enqueueMessage(TAB, "now add a retry", []);
     status("idle");
     await vi.waitFor(() => expect(agent()).toBe("claude-code"));
 
-    expect(isSwitchPending(TAB)).toBe(false);
+    expect(sessionSend.state(TAB).switchPending).toBe(false);
     // Held for the new bind, like a first message sent while starting.
     const sess = useChatStore.getState().sessions[TAB];
     expect(sess.pendingSend).toEqual({ content: "now add a retry", mentions: [] });

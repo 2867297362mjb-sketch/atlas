@@ -1,17 +1,28 @@
 import { defineConfig } from "vitest/config";
+import react from "@vitejs/plugin-react";
 import path from "path";
 
 // Deliberately standalone rather than extending `vite.config.ts`. That config
 // carries the dev-server warmup list, `optimizeDeps` pre-bundling and the
 // Rollup chunk splitter — all of it irrelevant to tests, and all of it work
-// Vitest would redo on every run. Tests only need the `@` alias.
+// Vitest would redo on every run. Tests need the `@` alias, and the React
+// Compiler: production runs compiled components, so the tests must too. A
+// component that breaks under the compiler (a hook it cannot see, a value it
+// caches that should not be cached) passes every uncompiled test and fails only
+// in the shipped app. `react-compiler-contract.test.ts` keeps this in step with
+// `vite.config.ts`.
 export default defineConfig({
+  plugins: [react({ compiler: true })],
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "./src"),
     },
   },
   test: {
+    // In the checkout, not the default `node_modules/.vitest-cache`: worktrees
+    // symlink one `node_modules`, so they all shared that directory, and two
+    // runs at once failed each other with ENOTEMPTY or ENOENT on it.
+    fsModuleCachePath: path.resolve(import.meta.dirname, ".vitest-cache"),
     // `node` by default: the contract tests read the repo off disk and the
     // API-seam tests only need a mocked `invoke`. Files that need a DOM opt in
     // per-file with `// @vitest-environment happy-dom`.
@@ -35,6 +46,23 @@ export default defineConfig({
       },
     },
     include: ["tests/**/*.test.ts", "src/**/*.test.{ts,tsx}"],
+    // `bun run test:coverage` only; no threshold, on purpose. A number to
+    // hit rewards tests that execute lines without checking behaviour. The
+    // report is for finding code no test reaches at all. `include` makes
+    // files no test imports count as 0% instead of going missing.
+    coverage: {
+      provider: "v8",
+      reporter: ["text-summary", "json-summary", "html"],
+      reportsDirectory: "coverage",
+      include: ["src/**/*.{ts,tsx}"],
+      exclude: [
+        "src/**/*.test.{ts,tsx}",
+        "src/bindings/**",
+        "src/dev/**",
+        "src/**/*.gen.ts",
+        "src/**/*.d.ts",
+      ],
+    },
     server: {
       deps: {
         // The package's TimelineCalendar, run through Vite rather than loaded

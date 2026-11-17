@@ -1,5 +1,5 @@
 import { MessageSquare } from "lucide-react";
-import type { TabType } from "@/lib/constants";
+import type { TabType } from "@/lib/tab-registry";
 import { tabIcons } from "../pane-tab";
 
 /** A tab type with nothing to render yet. Takes the two fields of a layout

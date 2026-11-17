@@ -46,6 +46,7 @@ import {
 } from "../lib/ask-gutter";
 import type { EditorPosition } from "../lib/editor-views";
 import type { RevealTarget } from "../lib/reveal";
+import { onWindowEvent } from "@/lib/window-events";
 
 export interface CodeMirrorFileViewHandle {
   /** The live document, or undefined before the editor attaches. */
@@ -262,16 +263,15 @@ export function CodeMirrorFileView({
 
   // Re-skin in place when the theme changes, so the document and its undo
   // history survive.
-  const themeLight = useSettingsStore.use.settings().themeLight;
-  const themeDark = useSettingsStore.use.settings().themeDark;
+  const themeLight = useSettingsStore((s) => s.settings).themeLight;
+  const themeDark = useSettingsStore((s) => s.settings).themeDark;
   useEffect(() => {
     const refresh = () =>
       viewRef.current?.dispatch({
         effects: compartments.theme.reconfigure(editorThemeExtensions()),
       });
     refresh();
-    window.addEventListener("atlas:theme-applied", refresh);
-    return () => window.removeEventListener("atlas:theme-applied", refresh);
+    return onWindowEvent("atlas:theme-applied", refresh);
   }, [themeLight, themeDark, viewReady, compartments]);
 
   return (

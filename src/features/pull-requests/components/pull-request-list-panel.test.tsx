@@ -3,8 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
-vi.mock("@tauri-apps/api/core", () => ({ invoke }));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
 vi.mock("../lib/open-pull-request-tab", () => ({ openPullRequestTab: vi.fn() }));
 // happy-dom lays nothing out, so the virtualizer would draw no rows: every
 // item is "on screen", which is the worst case for the prefetch effect.
@@ -21,6 +20,8 @@ vi.mock("@tanstack/react-virtual", () => ({
   }),
 }));
 
+import type { MockHandler } from "@/dev/mock-backend/types";
+import { tauri } from "@/test/tauri-fake";
 import { resetGhGateForTests } from "../lib/pr-errors";
 import type { PrListEntry, PrListResult, PrProvider } from "../lib/pull-requests-types";
 import { AUTO_PAGES_WHILE_FILTERED, PullRequestListPanel } from "./pull-request-list-panel";
@@ -60,10 +61,15 @@ function page(numbers: number[], nextCursor: string | null): PrListResult {
   return { provider, entries: numbers.map(entry), nextCursor };
 }
 
-const listCalls = () => invoke.mock.calls.filter(([name]) => name === "pr_list");
+/** The host: who it is, and how it serves the list. Anything else answers `null`. */
+const serve = (list: MockHandler<PrListResult>) =>
+  tauri.handle({ pr_provider: () => provider, pr_list: list });
+
+const listCalls = () => tauri.calls("pr_list");
+const statsCalls = () => tauri.calls("pr_list_stats");
 const lastListQuery = () => {
   const calls = listCalls();
-  return calls[calls.length - 1]?.[1].query;
+  return calls[calls.length - 1]?.args.query;
 };
 
 function renderPanel() {
@@ -81,19 +87,15 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  invoke.mockReset();
+  tauri.reset();
   resetGhGateForTests();
 });
 
 describe("PullRequestListPanel paging", () => {
   it("does not ask for a failed next page again on its own, and offers Retry", async () => {
-    invoke.mockImplementation(async (name: string, args: { query?: { cursor?: string } }) => {
-      if (name === "pr_provider") return provider;
-      if (name === "pr_list") {
-        if (!args.query?.cursor) return page([1, 2, 3], "p2");
-        throw { kind: "failed", message: "boom" };
-      }
-      return null;
+    serve((args) => {
+      if (!args.query?.cursor) return page([1, 2, 3], "p2");
+      throw { kind: "failed", message: "boom" };
     });
     renderPanel();
     const retry = await screen.findByRole("button", { name: "Retry" });
@@ -113,14 +115,10 @@ describe("PullRequestListPanel paging", () => {
       JSON.stringify({ filters: { checks: "failing" } }),
     );
     let served = 0;
-    invoke.mockImplementation(async (name: string) => {
-      if (name === "pr_provider") return provider;
-      if (name === "pr_list") {
-        served += 1;
-        // Nothing matches the filter, so the end of the list stays in view.
-        return page([served * 10], `p${served + 1}`);
-      }
-      return null;
+    serve(() => {
+      served += 1;
+      // Nothing matches the filter, so the end of the list stays in view.
+      return page([served * 10], `p${served + 1}`);
     });
     renderPanel();
     await waitFor(() => expect(listCalls()).toHaveLength(AUTO_PAGES_WHILE_FILTERED), {
@@ -136,11 +134,8 @@ describe("PullRequestListPanel paging", () => {
 
 describe("PullRequestListPanel search qualifiers", () => {
   it("sends typed labels, exclusions and draft to the host, and the words as the search", async () => {
-    invoke.mockImplementation(async (name: string) => {
-      if (name === "pr_provider") return provider;
-      if (name === "pr_list") return page([1], null);
-      return [];
-    });
+    serve(() => page([1], null));
+    tauri.handle({ pr_list_stats: () => [] });
     renderPanel();
     await screen.findByRole("list", { name: "Pull requests" });
     fireEvent.change(screen.getByRole("searchbox", { name: "Search pull requests" }), {
@@ -161,39 +156,26 @@ describe("PullRequestListPanel search qualifiers", () => {
   });
 
   it("reads the line-count breakdowns for the rows on screen in one batch", async () => {
-    invoke.mockImplementation(async (name: string) => {
-      if (name === "pr_provider") return provider;
-      if (name === "pr_list") return page([5, 6, 7], null);
-      return [];
-    });
+    serve(() => page([5, 6, 7], null));
+    tauri.handle({ pr_list_stats: () => [] });
     renderPanel();
     await screen.findByRole("list", { name: "Pull requests" });
-    await waitFor(() =>
-      expect(invoke.mock.calls.filter(([name]) => name === "pr_list_stats")).toHaveLength(1),
-    );
-    const [, args] = invoke.mock.calls.find(([name]) => name === "pr_list_stats")!;
-    expect([...args.numbers].sort()).toEqual([5, 6, 7]);
+    await waitFor(() => expect(statsCalls()).toHaveLength(1));
+    expect([...statsCalls()[0].args.numbers].sort()).toEqual([5, 6, 7]);
     await new Promise((resolve) => setTimeout(resolve, 300));
     // Rows that were answered for are not asked about again.
-    expect(invoke.mock.calls.filter(([name]) => name === "pr_list_stats")).toHaveLength(1);
+    expect(statsCalls()).toHaveLength(1);
   });
 
   it("paints the last list at once on reopen, then asks the host again", async () => {
-    invoke.mockImplementation(async (name: string) => {
-      if (name === "pr_provider") return provider;
-      if (name === "pr_list") return page([41, 42], null);
-      return [];
-    });
+    serve(() => page([41, 42], null));
+    tauri.handle({ pr_list_stats: () => [] });
     const first = renderPanel();
     await screen.findByRole("button", { name: /#41/ });
     first.unmount();
 
     let answer: (value: PrListResult) => void = () => {};
-    invoke.mockImplementation(async (name: string) => {
-      if (name === "pr_provider") return provider;
-      if (name === "pr_list") return new Promise<PrListResult>((resolve) => (answer = resolve));
-      return [];
-    });
+    serve(() => new Promise<PrListResult>((resolve) => (answer = resolve)));
     renderPanel();
     expect(await screen.findByRole("button", { name: /#42/ })).toBeTruthy();
     await waitFor(() => expect(listCalls().length).toBeGreaterThan(1));

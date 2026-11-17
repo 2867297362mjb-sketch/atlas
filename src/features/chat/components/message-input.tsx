@@ -2,7 +2,7 @@ import { useTipsStore } from "@/features/tips/stores/tips-store";
 import { useRef } from "react";
 import { CONTENT_COLUMN } from "../lib/row-metrics";
 import { useChatStore } from "../stores/chat-store";
-import { removeQueuedPrompt } from "../lib/turn-queue";
+import { sessionSend } from "../lib/session-send";
 // The editor (`ChatInput`) and both pickers load as their own chunks
 // (`use-lazy-composer-chunks.ts`); only their types are imported here.
 import type { ChatInputHandle } from "./chat-input";
@@ -194,7 +194,7 @@ export function MessageInput({
             queue={queue}
             remoteDriving={remoteDriving}
             onEdit={editQueued}
-            onRemove={(i) => removeQueuedPrompt(tabId, i)}
+            onRemove={(i) => sessionSend.removeQueued(tabId, i)}
           />
         )}
 

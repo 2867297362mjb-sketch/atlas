@@ -49,7 +49,7 @@ export { EFFORT_LABEL, Notice, PromptBubble } from "./views/org-agent-turn-parts
 /** A message on its way: drawn at once, dimmed, until its echo takes its
  *  place. A refused one says why and offers Retry. */
 export function PendingTurn({ pending }: { pending: PendingSend }) {
-  const { retrySend, discardSend } = useOrgAgentStore.use.actions();
+  const { retrySend, discardSend } = useOrgAgentStore((s) => s.actions);
   return (
     <div className="flex flex-col gap-2">
       <PromptBubble
@@ -103,7 +103,7 @@ export function TurnView({
   vote: "up" | "down" | null;
   onOpen: (target: OrgAgentTarget) => void;
 }) {
-  const { send, regenerate, vote: rate, cancelResearch } = useOrgAgentStore.use.actions();
+  const { send, regenerate, vote: rate, cancelResearch } = useOrgAgentStore((s) => s.actions);
   const ended = turnEnded(turn);
   const working = live && !ended && status !== "idle";
   const groups = groupBlocks(turn.blocks);
@@ -197,7 +197,7 @@ export function TurnView({
 /** A question Atlas asked: its choices as buttons, and a line of free text
  *  when it allows one. */
 function QuestionView({ block }: { block: QuestionBlock }) {
-  const { answer } = useOrgAgentStore.use.actions();
+  const { answer } = useOrgAgentStore((s) => s.actions);
   const sending = useOrgAgentStore((s) => s.answering.includes(block.question_id));
   return <QuestionCardView block={block} sending={sending} answer={answer} />;
 }
@@ -248,7 +248,7 @@ function ApprovalView({
 }
 
 function ApprovalForm({ block }: { block: ApprovalBlock }) {
-  const { decide } = useOrgAgentStore.use.actions();
+  const { decide } = useOrgAgentStore((s) => s.actions);
   const deciding = useOrgAgentStore((s) => s.deciding.includes(block.approval_id));
   const connected = useOrgAgentStore((s) => s.connection === "open");
   const { card, approval_id } = block;

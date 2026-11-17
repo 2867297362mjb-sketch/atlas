@@ -34,6 +34,7 @@ import type { IBufferLine, Terminal } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
 import type { WebglAddon } from "@xterm/addon-webgl";
 import { onThemeApplied } from "@/features/theme/theme-values";
+import { useSettingsStore } from "@/features/settings/stores/settings-store";
 import { terminalTheme } from "./terminal-theme";
 import { ShellIntegration } from "./shell-integration";
 import { createTerminalEventSink } from "./terminal-notifier";
@@ -43,9 +44,9 @@ import { resolveTerminalFont } from "../utils/resolve-font";
 import {
   appliedTerminalFont,
   appliedTerminalFontSize,
-  DISPLAY_SETTINGS_APPLIED,
 } from "@/features/settings/lib/display-settings";
 import { collectPanes, useTerminalStore } from "../stores/terminal-store";
+import { onWindowEvent } from "@/lib/window-events";
 
 // ── Public shapes ──────────────────────────────────────────────────────────
 
@@ -89,6 +90,9 @@ const QUEUED_FLOOR_MS = 1500;
 /** `terminalFontSize`, as `display-settings.ts` last applied it. */
 const fontSize = () => appliedTerminalFontSize();
 const LINE_HEIGHT = 1.4;
+/** `terminalScreenReader`: xterm's accessible mirror of the screen, which
+ *  screen readers and assistive clients read instead of the canvas. */
+const screenReaderMode = () => useSettingsStore.getState().settings.terminalScreenReader;
 
 // ── Module state (survives HMR via globalThis) ─────────────────────────────
 
@@ -139,11 +143,19 @@ function startGlobalListeners(): void {
   });
   // The same for `terminalFontSize` and the terminal font.
   let applied = `${fontSize()}|${appliedTerminalFont()}`;
-  window.addEventListener(DISPLAY_SETTINGS_APPLIED, () => {
+  onWindowEvent("atlas:display-settings-applied", () => {
     const next = `${fontSize()}|${appliedTerminalFont()}`;
     if (next === applied) return;
     applied = next;
     for (const session of reg.sessions.values()) void session.refont();
+  });
+  // And `terminalScreenReader`, which xterm can switch on a live terminal.
+  let reader = screenReaderMode();
+  useSettingsStore.subscribe(() => {
+    const next = screenReaderMode();
+    if (next === reader) return;
+    reader = next;
+    for (const session of reg.sessions.values()) session.setScreenReaderMode(next);
   });
 }
 
@@ -182,7 +194,10 @@ export class TerminalSession {
   private opened = false;
   private linksRegistered = false;
 
+  /** The size the surface last measured. */
   private lastSize: { cols: number; rows: number } | null = null;
+  /** The size the PTY was last told: what it was created at, then each resize. */
+  private ptySize: { cols: number; rows: number } | null = null;
   private resizeTimer = 0;
   private fitPending = false;
   private findIdx = -1;
@@ -256,13 +271,12 @@ export class TerminalSession {
       return;
     }
     this.ptyId = id;
+    this.ptySize = size;
     reg.byPty.set(id, this);
     this.publish({ ptyId: id });
     this.registerLinks();
     // A size measured while the PTY was being created.
-    if (this.lastSize && (this.lastSize.cols !== size.cols || this.lastSize.rows !== size.rows)) {
-      void invoke("terminal_resize", { id, ...this.lastSize }).catch(() => {});
-    }
+    this.pushSize();
 
     // A command the opener queued for this terminal — an agent's login, today.
     // Written into the shell rather than exec'd, so it runs with a real tty and
@@ -338,6 +352,7 @@ export class TerminalSession {
       cursorBlink: true,
       allowProposedApi: true,
       theme: terminalTheme(),
+      screenReaderMode: screenReaderMode(),
       cols: this.lastSize?.cols ?? 80,
       rows: this.lastSize?.rows ?? 24,
     });
@@ -495,6 +510,10 @@ export class TerminalSession {
     if (this.xterm) this.xterm.options.theme = terminalTheme();
   }
 
+  setScreenReaderMode(on: boolean): void {
+    if (this.xterm) this.xterm.options.screenReaderMode = on;
+  }
+
   /** Take the current `terminalFontSize` and font, then refit. */
   async refont(): Promise<void> {
     if (!this.xterm) return;
@@ -611,13 +630,25 @@ export class TerminalSession {
     // First call fires now; the rest of a drag coalesces onto a trailing timer.
     const send = () => {
       this.resizeTimer = 0;
-      const id = this.ptyId;
-      const size = this.lastSize;
-      if (!id || !size) return;
-      void invoke("terminal_resize", { id, cols: size.cols, rows: size.rows }).catch(() => {});
+      this.pushSize();
     };
     if (!this.resizeTimer) send();
     this.resizeTimer = window.setTimeout(send, RESIZE_COALESCE_MS);
+  }
+
+  /**
+   * Tell the PTY the measured size, unless that is the size it already has.
+   * Every path that resizes ends here, so two of them reaching the same size
+   * is one `terminal_resize`: the trailing timer after a lone change, and the
+   * end of a create that a measurement overtook, used to send it a second time.
+   */
+  private pushSize(): void {
+    const id = this.ptyId;
+    const size = this.lastSize;
+    if (!id || !size) return;
+    if (this.ptySize && this.ptySize.cols === size.cols && this.ptySize.rows === size.rows) return;
+    this.ptySize = size;
+    void invoke("terminal_resize", { id, cols: size.cols, rows: size.rows }).catch(() => {});
   }
 
   // ── Input ────────────────────────────────────────────────────────────────

@@ -1,14 +1,17 @@
-//! The single git spawn chokepoint — every git subprocess in Atlas should go
-//! through [`GitCommand`]. It provides:
-//! per-call success-exit-code contracts, stderr→typed-error parsing on
-//! failure, and a streaming variant that feeds hook/progress output line by
-//! line while retaining a bounded tail for error context.
+//! The single git spawn chokepoint: every git subprocess in Atlas goes
+//! through [`GitCommand`] (`tests/spawn_audit.rs` fails on one that does
+//! not). It provides one environment with prompts off, per-call
+//! success-exit-code contracts, stderr→typed-error parsing on failure, a raw
+//! variant for callers that read the exit code or binary output themselves,
+//! and a streaming variant that feeds hook/progress output line by line
+//! while retaining a bounded tail for error context.
 //!
 //! Always the REAL git binary: hooks, credential helpers, LFS filters and
 //! user config all behave exactly as in a terminal.
 
 use crate::error::{self, GitErrorPayload};
 use std::collections::HashSet;
+use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -32,6 +35,79 @@ pub struct GitOutput {
     pub exit_code: i32,
     pub stdout: String,
     pub stderr: String,
+}
+
+/// A git process that ran to its exit, whatever the exit was: what
+/// [`GitCommand::output`] returns. Bytes, because a blob or a patch is not
+/// always text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitRawOutput {
+    /// `None` when a signal ended it.
+    pub exit_code: Option<i32>,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
+impl GitRawOutput {
+    pub fn success(&self) -> bool {
+        self.exit_code == Some(0)
+    }
+
+    pub fn stdout_text(&self) -> String {
+        String::from_utf8_lossy(&self.stdout).into_owned()
+    }
+
+    pub fn stderr_text(&self) -> String {
+        String::from_utf8_lossy(&self.stderr).into_owned()
+    }
+}
+
+/// What [`GitCommand::stdout_capped`] read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CappedStdout {
+    /// At most one byte more than the cap; the caller trims to a boundary
+    /// that means something to it (a file header, a line).
+    pub bytes: Vec<u8>,
+    /// The cap cut the output short and git was killed.
+    pub truncated: bool,
+    /// Whether git exited 0. Unknowable once killed, so `true` then.
+    pub success: bool,
+}
+
+/// Why a git run has no output at all: no process ran to its end.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GitRunError {
+    /// The binary could not be started because it is not there.
+    NotInstalled,
+    /// Killed after [`GitCommand::timeout`] passed.
+    TimedOut { command: String, limit: Duration },
+    /// The spawn or the wait failed for any other reason.
+    Failed(String),
+}
+
+impl std::fmt::Display for GitRunError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GitRunError::NotInstalled => {
+                f.write_str("git was not found on this system. Install git and try again.")
+            }
+            GitRunError::TimedOut { command, limit } => {
+                write!(f, "{command} timed out after {}s", limit.as_secs())
+            }
+            GitRunError::Failed(message) => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for GitRunError {}
+
+impl From<GitRunError> for GitErrorPayload {
+    fn from(e: GitRunError) -> Self {
+        match e {
+            GitRunError::TimedOut { command, limit } => timed_out(&command, limit),
+            other => GitErrorPayload::internal(other.to_string()),
+        }
+    }
 }
 
 /// Keep only the newest `cap` bytes of streamed output (whole lines) — the
@@ -58,8 +134,9 @@ fn push_capped(buf: &mut String, line: &str) {
 /// A single git invocation. Build with [`GitCommand::new`], chain options,
 /// then call [`run`](Self::run) or [`run_streaming`](Self::run_streaming).
 pub struct GitCommand {
-    cwd: PathBuf,
-    args: Vec<String>,
+    program: OsString,
+    cwd: Option<PathBuf>,
+    args: Vec<OsString>,
     envs: Vec<(String, String)>,
     success_exit_codes: HashSet<i32>,
     stdin: Option<Vec<u8>>,
@@ -69,9 +146,17 @@ pub struct GitCommand {
 
 impl GitCommand {
     pub fn new(cwd: impl Into<PathBuf>, args: &[&str]) -> Self {
+        Self::new_owned(
+            cwd,
+            args.iter().map(std::string::ToString::to_string).collect(),
+        )
+    }
+
+    pub fn new_owned(cwd: impl Into<PathBuf>, args: Vec<String>) -> Self {
         GitCommand {
-            cwd: cwd.into(),
-            args: args.iter().map(std::string::ToString::to_string).collect(),
+            program: "git".into(),
+            cwd: Some(cwd.into()),
+            args: args.into_iter().map(OsString::from).collect(),
             envs: Vec::new(),
             success_exit_codes: HashSet::from([0]),
             stdin: None,
@@ -80,16 +165,34 @@ impl GitCommand {
         }
     }
 
-    pub fn new_owned(cwd: impl Into<PathBuf>, args: Vec<String>) -> Self {
-        GitCommand {
-            cwd: cwd.into(),
-            args,
-            envs: Vec::new(),
-            success_exit_codes: HashSet::from([0]),
-            stdin: None,
-            read_only: false,
-            timeout: None,
-        }
+    /// A git that is not about any repository (`clone`, `ls-remote <url>`,
+    /// `--version`): it runs in the process's own directory.
+    pub fn without_repo(args: &[&str]) -> Self {
+        let mut cmd = Self::new(PathBuf::new(), args);
+        cmd.cwd = None;
+        cmd
+    }
+
+    /// Test seam: run another program in place of `git`. A parameter rather
+    /// than an environment variable or a `PATH` trick, so nothing outside
+    /// the call can redirect a real run.
+    pub fn program(mut self, program: impl Into<OsString>) -> Self {
+        self.program = program.into();
+        self
+    }
+
+    /// One more argument. Takes a path as it is, so a file name that is not
+    /// UTF-8 reaches git intact.
+    pub fn arg(mut self, arg: impl Into<OsString>) -> Self {
+        self.args.push(arg.into());
+        self
+    }
+
+    /// More arguments, after the ones already given.
+    pub fn args<S: AsRef<std::ffi::OsStr>>(mut self, args: &[S]) -> Self {
+        self.args
+            .extend(args.iter().map(|a| a.as_ref().to_os_string()));
+        self
     }
 
     /// Mark as a read query: prepends `--no-optional-locks` so background
@@ -137,7 +240,8 @@ impl GitCommand {
         self
     }
 
-    /// Kill git if it hasn't exited after `limit` ([`run`](Self::run) only).
+    /// Kill git if it hasn't exited after `limit` ([`run`](Self::run) and
+    /// [`output`](Self::output); a streaming run has none).
     /// For unattended network ops: a remote that never answers otherwise
     /// holds the calling thread for as long as TCP takes to give up, which
     /// can be minutes. Expiry is a `NetworkError`.
@@ -150,25 +254,30 @@ impl GitCommand {
     fn display(&self) -> String {
         let mut s = String::from("git");
         for a in &self.args {
+            let a = a.to_string_lossy();
             s.push(' ');
-            // Keep messages readable — elide long stdin-ish args.
-            if a.len() > 60 {
-                s.push_str(&a[..57]);
-                s.push('…');
-            } else {
-                s.push_str(a);
+            // Keep messages readable — elide long stdin-ish args. Cut on a
+            // character boundary: an argument can be a path in any script.
+            match a.char_indices().nth(57) {
+                Some((cut, _)) if a.len() > 60 => {
+                    s.push_str(&a[..cut]);
+                    s.push('…');
+                }
+                _ => s.push_str(&a),
             }
         }
         s
     }
 
     fn command(&self) -> Command {
-        let mut cmd = atlas_process::command("git");
+        let mut cmd = atlas_process::command(&self.program);
         if self.read_only {
             cmd.arg("--no-optional-locks");
         }
+        if let Some(cwd) = &self.cwd {
+            cmd.current_dir(cwd);
+        }
         cmd.args(&self.args)
-            .current_dir(&self.cwd)
             // Never hang on a credential prompt — fail fast and let the UI
             // route the typed AuthFailed error instead.
             .env("GIT_TERMINAL_PROMPT", "0")
@@ -186,6 +295,32 @@ impl GitCommand {
     /// otherwise a typed [`GitErrorPayload`] classified from stderr/stdout.
     pub fn run(self) -> Result<GitOutput, GitErrorPayload> {
         let display = self.display();
+        let success_exit_codes = self.success_exit_codes.clone();
+        let out = self.output()?;
+        let exit_code = out.exit_code.unwrap_or(-1);
+        let stdout = out.stdout_text();
+        let stderr = out.stderr_text();
+        if success_exit_codes.contains(&exit_code) {
+            Ok(GitOutput {
+                exit_code,
+                stdout,
+                stderr,
+            })
+        } else {
+            Err(error::payload(display, out.exit_code, &stderr, &stdout))
+        }
+    }
+
+    /// Run to exit and return what git printed, as bytes, whatever the exit
+    /// code: for a caller whose exit code is an answer (`merge-base
+    /// --is-ancestor`, `diff --no-index`), who reads binary output (a blob),
+    /// or who words its own failure. Nothing is classified;
+    /// [`success_codes`](Self::success_codes) does not apply.
+    ///
+    /// `Err` means no process ran to its end: no binary, a failed spawn, or
+    /// the [`timeout`](Self::timeout).
+    pub fn output(self) -> Result<GitRawOutput, GitRunError> {
+        let display = self.display();
         let mut cmd = self.command();
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
         cmd.stdin(if self.stdin.is_some() {
@@ -194,43 +329,84 @@ impl GitCommand {
             Stdio::null()
         });
 
-        let mut child = cmd.spawn().map_err(|e| spawn_error(&display, &e))?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| spawn_error(&display, self.cwd.as_deref(), &e))?;
 
         // Feed stdin from a thread so a chatty child can't deadlock us.
-        let stdin_thread = self.stdin.and_then(|bytes| {
-            child.stdin.take().map(|mut pipe| {
-                std::thread::spawn(move || {
-                    let _ = pipe.write_all(&bytes);
-                })
-            })
-        });
+        let stdin_fed = self
+            .stdin
+            .and_then(|bytes| child.stdin.take().map(|pipe| feed_stdin(pipe, bytes)));
 
         let out = match self.timeout {
             None => child.wait_with_output(),
             Some(limit) => match wait_with_deadline(child, limit) {
                 Ok(Some(out)) => Ok(out),
-                Ok(None) => return Err(timed_out(&display, limit)),
+                Ok(None) => {
+                    return Err(GitRunError::TimedOut {
+                        command: display,
+                        limit,
+                    })
+                }
                 Err(e) => Err(e),
             },
         }
-        .map_err(|e| GitErrorPayload::internal(format!("{display}: {e}")))?;
-        if let Some(t) = stdin_thread {
-            let _ = t.join();
+        .map_err(|e| GitRunError::Failed(format!("{display}: {e}")))?;
+        // Git has exited, so the feeder is normally done: git read the
+        // bytes, or its exit closed the pipe under the write. Whatever git
+        // left running can still hold the read end without reading it, so
+        // the feeder is waited on for the grace and no longer.
+        if let Some(fed) = stdin_fed {
+            let _ = fed.recv_timeout(STREAM_DRAIN_GRACE);
         }
+        Ok(GitRawOutput {
+            exit_code: out.status.code(),
+            stdout: out.stdout,
+            stderr: out.stderr,
+        })
+    }
 
-        let exit_code = out.status.code().unwrap_or(-1);
-        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-
-        if self.success_exit_codes.contains(&exit_code) {
-            Ok(GitOutput {
-                exit_code,
-                stdout,
-                stderr,
-            })
-        } else {
-            Err(error::payload(display, out.status.code(), &stderr, &stdout))
+    /// Run and keep at most `cap` bytes of stdout. Past the cap git is killed
+    /// rather than drained: a 50 MB patch should cost `cap` bytes of reading.
+    /// stderr is discarded, and stdin and the timeout are not used.
+    pub fn stdout_capped(self, cap: usize) -> Result<CappedStdout, GitRunError> {
+        use std::io::Read;
+        let display = self.display();
+        let mut child = self
+            .command()
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .stdin(Stdio::null())
+            .spawn()
+            .map_err(|e| spawn_error(&display, self.cwd.as_deref(), &e))?;
+        let mut bytes = Vec::new();
+        let Some(mut stdout) = child.stdout.take() else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(GitRunError::Failed(format!("{display}: no stdout pipe")));
+        };
+        // One byte past the cap tells "exactly cap" from "more than cap".
+        let read = (&mut stdout).take(cap as u64 + 1).read_to_end(&mut bytes);
+        drop(stdout);
+        // Reaped on every path: a read error must not leave a zombie behind.
+        if read.is_err() || bytes.len() > cap {
+            let _ = child.kill();
+            let _ = child.wait();
+            read.map_err(|e| GitRunError::Failed(format!("{display}: {e}")))?;
+            return Ok(CappedStdout {
+                bytes,
+                truncated: true,
+                success: true,
+            });
         }
+        let status = child
+            .wait()
+            .map_err(|e| GitRunError::Failed(format!("{display}: {e}")))?;
+        Ok(CappedStdout {
+            bytes,
+            truncated: false,
+            success: status.success(),
+        })
     }
 
     /// Streaming run: stdout/stderr are read line by line and forwarded to
@@ -261,7 +437,9 @@ impl GitCommand {
             Stdio::null()
         });
 
-        let mut child = cmd.spawn().map_err(|e| spawn_error(&display, &e))?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| spawn_error(&display, self.cwd.as_deref(), &e))?;
 
         let stdin_thread = self.stdin.and_then(|bytes| {
             child.stdin.take().map(|mut pipe| {
@@ -360,8 +538,36 @@ impl GitCommand {
     }
 }
 
-/// How long [`GitCommand::run_streaming`] keeps reading after git exits.
+/// Clone the tip of `url`'s default branch into `dest`: one commit, no tags,
+/// and no LFS downloads. For a copy that is read and never worked in (a
+/// skill pack, a reference repository). The run's own answer is returned so
+/// each caller words its failure.
+pub fn shallow_clone(url: &str, dest: &std::path::Path) -> Result<GitRawOutput, GitRunError> {
+    // `--` so neither the URL nor the path can ever parse as a flag.
+    GitCommand::without_repo(&["clone", "--depth", "1", "--no-tags", "--", url])
+        .arg(dest)
+        .env("GIT_LFS_SKIP_SMUDGE", "1")
+        .output()
+}
+
+/// How long a run keeps reading git's pipes after git itself has exited
+/// ([`GitCommand::run_streaming`], and any run with a timeout), and how long
+/// [`GitCommand::output`] then waits for its stdin feeder.
 const STREAM_DRAIN_GRACE: Duration = Duration::from_millis(500);
+
+/// Write `bytes` to git's stdin on a thread of its own, and close the pipe.
+/// The receiver hears once when that is over, written or refused. The thread
+/// is never joined: a write blocked on a pipe nobody reads cannot be
+/// interrupted, and ends by itself when the last holder closes the read end.
+fn feed_stdin(mut pipe: std::process::ChildStdin, bytes: Vec<u8>) -> std::sync::mpsc::Receiver<()> {
+    let (done, fed) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = pipe.write_all(&bytes);
+        drop(pipe);
+        let _ = done.send(());
+    });
+    fed
+}
 
 /// One raw line as text: the trailing `\n` / `\r\n` dropped, as
 /// [`BufRead::lines`] does, but bytes that are not UTF-8 (a Windows console
@@ -375,33 +581,63 @@ fn decode_line(raw: &[u8]) -> String {
 
 /// `wait_with_output` with a deadline: `Ok(None)` once `limit` passes, after
 /// killing the child. Pipes drain on their own threads so a chatty child
-/// can't block on a full pipe while we poll. On expiry those threads are
-/// left to finish by themselves rather than joined — a helper git spawned
-/// (`ssh`, `git-remote-https`) can hold the pipes open briefly after git
-/// itself dies, and it exits once it sees its parent gone.
+/// can't block on a full pipe while we poll.
+///
+/// Those threads are never joined without a limit. A process git started can
+/// hold a pipe open after git is gone: a helper (`ssh`, `git-remote-https`)
+/// briefly, a hook that left something in the background for as long as that
+/// lives. So once git has exited the pipes get [`STREAM_DRAIN_GRACE`] to
+/// reach their end, and whatever was read by then is the output.
 fn wait_with_deadline(
     mut child: Child,
     limit: Duration,
 ) -> std::io::Result<Option<std::process::Output>> {
     use std::io::Read;
-    fn drain(pipe: Option<impl Read + Send + 'static>) -> std::thread::JoinHandle<Vec<u8>> {
+    use std::sync::{mpsc, Arc, Mutex};
+    type Drained = (Arc<Mutex<Vec<u8>>>, mpsc::Receiver<()>);
+    fn drain(pipe: Option<impl Read + Send + 'static>) -> Drained {
+        let read = Arc::new(Mutex::new(Vec::new()));
+        let (done, ended) = mpsc::channel();
+        let into = read.clone();
         std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            if let Some(mut p) = pipe {
-                let _ = p.read_to_end(&mut buf);
+            if let Some(mut pipe) = pipe {
+                let mut chunk = [0u8; 8192];
+                loop {
+                    match pipe.read(&mut chunk) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            let mut buf = into
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            buf.extend_from_slice(&chunk[..n]);
+                        }
+                    }
+                }
             }
-            buf
-        })
+            let _ = done.send(());
+        });
+        (read, ended)
     }
-    let out = drain(child.stdout.take());
-    let err = drain(child.stderr.take());
+    fn taken(read: &Arc<Mutex<Vec<u8>>>) -> Vec<u8> {
+        std::mem::take(
+            &mut *read
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+    }
+    let (out, out_ended) = drain(child.stdout.take());
+    let (err, err_ended) = drain(child.stderr.take());
     let deadline = Instant::now() + limit;
     loop {
         if let Some(status) = child.try_wait()? {
+            let grace = Instant::now() + STREAM_DRAIN_GRACE;
+            for ended in [&out_ended, &err_ended] {
+                let _ = ended.recv_timeout(grace.saturating_duration_since(Instant::now()));
+            }
             return Ok(Some(std::process::Output {
                 status,
-                stdout: out.join().unwrap_or_default(),
-                stderr: err.join().unwrap_or_default(),
+                stdout: taken(&out),
+                stderr: taken(&err),
             }));
         }
         if Instant::now() >= deadline {
@@ -426,11 +662,20 @@ fn timed_out(display: &str, limit: Duration) -> GitErrorPayload {
     }
 }
 
-fn spawn_error(display: &str, e: &std::io::Error) -> GitErrorPayload {
-    if e.kind() == std::io::ErrorKind::NotFound {
-        GitErrorPayload::internal("git was not found on this system. Install git and try again.")
-    } else {
-        GitErrorPayload::internal(format!("failed to start {display}: {e}"))
+/// A spawn that failed. `NotFound` is "git is not installed" unless the
+/// working directory is the thing that is missing: a deleted worktree or
+/// project gives the same error kind, and "install git" would be the wrong
+/// thing to tell its owner.
+fn spawn_error(display: &str, cwd: Option<&std::path::Path>, e: &std::io::Error) -> GitRunError {
+    if e.kind() != std::io::ErrorKind::NotFound {
+        return GitRunError::Failed(format!("failed to start {display}: {e}"));
+    }
+    match cwd {
+        Some(dir) if !dir.is_dir() => GitRunError::Failed(format!(
+            "{display}: the folder {} does not exist",
+            dir.display()
+        )),
+        _ => GitRunError::NotInstalled,
     }
 }
 
@@ -609,6 +854,87 @@ mod tests {
             started.elapsed()
         );
         assert!(sink.0.lock().unwrap().iter().any(|(_, l)| l == "hook-ran"));
+    }
+
+    /// A timed run whose git exits while something it started still holds
+    /// the pipes (a hook that left a process in the background) answers with
+    /// what was read, not when that process exits.
+    #[cfg(unix)]
+    #[test]
+    fn a_timed_run_returns_when_git_exits_despite_lingering_grandchild() {
+        let repo = temp_repo();
+        let started = Instant::now();
+        let out = GitCommand::new(
+            repo.path(),
+            &[
+                "-c",
+                "alias.linger=!echo ran; (sleep 20; echo late) &",
+                "linger",
+            ],
+        )
+        .timeout(Duration::from_secs(30))
+        .output()
+        .unwrap();
+        assert!(out.success());
+        assert!(String::from_utf8_lossy(&out.stdout).contains("ran"));
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "took {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// The stdin feeder is not waited on without a limit. A process git
+    /// left behind can hold the read end of stdin and never read it, so a
+    /// body larger than the pipe never finishes being written: git is done,
+    /// and the run must be too. The program here exits without reading,
+    /// leaving a child that holds that read end as descriptor 3 (a
+    /// background job's own stdin is `/dev/null`).
+    #[cfg(unix)]
+    #[test]
+    fn a_run_returns_when_git_exits_though_its_stdin_was_never_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("fake-git");
+        std::fs::write(
+            &script,
+            "exec 3<&0\nsleep 20 >/dev/null 2>&1 &\necho ran\nexit 0\n",
+        )
+        .unwrap();
+        for limit in [None, Some(Duration::from_secs(60))] {
+            let mut cmd = GitCommand::new(dir.path(), &[])
+                .program("/bin/sh")
+                .arg(&script)
+                // Far more than a pipe holds, so the write cannot complete.
+                .stdin(vec![b'x'; 4 * 1024 * 1024]);
+            if let Some(limit) = limit {
+                cmd = cmd.timeout(limit);
+            }
+            let started = Instant::now();
+            let out = cmd.output().unwrap();
+            assert!(out.success());
+            assert_eq!(out.stdout, b"ran\n");
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "timeout {limit:?}: took {:?}",
+                started.elapsed()
+            );
+        }
+    }
+
+    /// A folder that is gone is not "git is not installed": on Unix both are
+    /// a `NotFound` from the spawn. (Windows reports a missing folder with
+    /// its own error kind, which never read as git missing.)
+    #[cfg(unix)]
+    #[test]
+    fn a_missing_folder_is_not_reported_as_git_missing() {
+        let gone = tempfile::tempdir().unwrap().path().join("deleted-worktree");
+        let err = GitCommand::new(&gone, &["status"]).output().unwrap_err();
+        match err {
+            GitRunError::Failed(message) => {
+                assert!(message.contains("does not exist"), "{message}")
+            }
+            other => panic!("expected a failure naming the folder, got {other:?}"),
+        }
     }
 
     /// Stage all on a big change set: well past Windows' 32,767-character

@@ -12,7 +12,7 @@ import { CommsDraftTabView } from "./views/comms-draft-tab-view";
  * rename or a `sent` stamp reaches an already-open editor.
  */
 export function CommsDraftTab({ convId, draftId }: { convId: string; draftId: string }) {
-  const conversations = useCommsStore.use.conversations();
+  const conversations = useCommsStore((s) => s.conversations);
   const drafts = useCommsStore((s) => s.drafts[convId]);
 
   const conv = useMemo(

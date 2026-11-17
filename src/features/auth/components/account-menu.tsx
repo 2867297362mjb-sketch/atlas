@@ -1,4 +1,5 @@
 import type { ReactElement, ReactNode } from "react";
+import { ariaKeyShortcut } from "@/features/keybindings/lib/combo";
 import { toast } from "sonner";
 import { KbdCombo } from "@tryatlas/design";
 
@@ -51,9 +52,9 @@ export function AccountMenu({
   extra?: ReactNode;
   children: ReactElement;
 }) {
-  const { signOut, beginSignIn } = useAuthStore.use.actions();
-  const settings = useSettingsStore.use.settings();
-  const { updateSettings } = useSettingsStore.use.actions();
+  const { signOut, beginSignIn } = useAuthStore((s) => s.actions);
+  const settings = useSettingsStore((s) => s.settings);
+  const { updateSettings } = useSettingsStore((s) => s.actions);
   const settingsKeys = useActionShortcut("app.settings")?.label;
   const signedIn = account.status === "signed-in";
   const user = signedIn ? account.user : null;
@@ -78,6 +79,7 @@ export function AccountMenu({
       signedIn={signedIn}
       side={side}
       settingsShortcut={settingsKeys ? <KbdCombo combo={settingsKeys} /> : undefined}
+      settingsShortcutAria={settingsKeys ? ariaKeyShortcut(settingsKeys) : undefined}
       themeMode={settings.themeMode}
       themeModes={THEME_MODES}
       onThemeModeChange={(themeMode) => void updateSettings({ themeMode })}

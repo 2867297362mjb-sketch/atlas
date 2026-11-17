@@ -22,7 +22,16 @@ const mockBackend: Plugin = {
 };
 
 export default defineConfig(() => ({
-  plugins: [react(), tailwindcss(), mockBackend],
+  // `compiler: true` runs the React Compiler (`oxc-transform-react`, the Rust
+  // port) over every component: it memoizes JSX and derived values so a store
+  // write re-renders only what read the changed value. It recognises a hook by
+  // its NAME (`useX(...)`), which is why store reads are `useXStore((s) => s.x)`
+  // and never a generated `useXStore.use.x()`: the compiler took that for a
+  // plain call, cached it after the first render, and broke hook order
+  // (`react-compiler-contract.test.ts`). A component it cannot compile is
+  // skipped and runs as before (a fatal diagnostic fails the build instead);
+  // `reportDiagnostics: true` lists the skipped ones.
+  plugins: [react({ compiler: true }), tailwindcss(), mockBackend],
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "./src"),

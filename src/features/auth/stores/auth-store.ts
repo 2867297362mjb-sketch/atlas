@@ -10,7 +10,6 @@
 // than restart.
 
 import { create } from "zustand";
-import { createSelectors } from "@/lib/create-selectors";
 import { auth, type AuthSnapshot } from "../lib/auth-api";
 import {
   identify as identifyTelemetry,
@@ -143,4 +142,4 @@ const useAuthStoreBase = create<AuthStoreState>()((set, get) => ({
   },
 }));
 
-export const useAuthStore = createSelectors(useAuthStoreBase);
+export const useAuthStore = useAuthStoreBase;

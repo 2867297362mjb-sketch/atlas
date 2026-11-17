@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
@@ -84,32 +84,30 @@ fn load_from_disk(project_root: &Path) -> Vec<RecentFile> {
     serde_json::from_str(&raw).unwrap_or_default()
 }
 
-/// Atomic write — `recent-files.json.tmp` + rename so a crash
-/// mid-write doesn't leave a torn JSON file. Best-effort: any error
-/// is logged and swallowed (the in-memory list is still correct;
-/// next push will retry the write).
-fn save_to_disk(project_root: &Path, items: &[RecentFile]) {
-    let path = store_path(project_root);
-    if let Some(dir) = path.parent() {
-        if let Err(e) = std::fs::create_dir_all(dir) {
-            tracing::warn!(target: "atlas::recent_files", "mkdir failed: {e}");
-            return;
-        }
-    }
-    let tmp = path.with_extension("json.tmp");
-    match serde_json::to_string_pretty(items) {
-        Ok(raw) => {
-            if let Err(e) = std::fs::write(&tmp, raw) {
-                tracing::warn!(target: "atlas::recent_files", "write tmp failed: {e}");
-                return;
-            }
-            if let Err(e) = std::fs::rename(&tmp, &path) {
-                tracing::warn!(target: "atlas::recent_files", "rename failed: {e}");
-            }
-        }
-        Err(e) => {
-            tracing::warn!(target: "atlas::recent_files", "serialize failed: {e}");
-        }
+/// Replaced whole, so a crash mid-write doesn't leave a torn JSON file.
+fn save_to_disk(project_root: &Path, items: &[RecentFile]) -> Result<(), String> {
+    let raw = serde_json::to_string_pretty(items).map_err(|e| format!("serialize failed: {e}"))?;
+    atlas_fs::replace_file(store_path(project_root), raw).map_err(|e| format!("write failed: {e}"))
+}
+
+/// Saves run on the blocking pool, so pushes in quick succession (the burst
+/// at startup in #372) can save at the same time. Each lands a whole file,
+/// but unserialized an older list can be the last one written.
+static SAVE_LOCK: Mutex<()> = Mutex::new(());
+
+/// Write the project's current list. The list is read under the save lock,
+/// so whichever save runs last writes the newest state.
+fn save_latest(project_root: &Path, items: &RwLock<Vec<RecentFile>>) -> Result<(), String> {
+    let _guard = SAVE_LOCK.lock();
+    let snapshot = items.read().clone();
+    save_to_disk(project_root, &snapshot)
+}
+
+/// Best-effort: any error is logged and swallowed (the in-memory list is
+/// still correct; the next save will retry the write).
+fn persist(project_root: &Path, items: &RwLock<Vec<RecentFile>>) {
+    if let Err(e) = save_latest(project_root, items) {
+        tracing::warn!(target: "atlas::recent_files", "{e}");
     }
 }
 
@@ -210,9 +208,9 @@ pub async fn recent_files_push(
         w.clone()
     };
 
-    let updated_for_disk = updated.clone();
+    let items_for_disk = items_lock;
     let root_for_disk = root.clone();
-    tokio::task::spawn_blocking(move || save_to_disk(&root_for_disk, &updated_for_disk));
+    tokio::task::spawn_blocking(move || persist(&root_for_disk, &items_for_disk));
 
     emit_changed(&app, &workspace_id, &root, &updated);
     Ok(updated)
@@ -254,9 +252,9 @@ pub async fn recent_files_rename(
         w.clone()
     };
 
-    let updated_for_disk = updated.clone();
+    let items_for_disk = items_lock;
     let root_for_disk = root.clone();
-    tokio::task::spawn_blocking(move || save_to_disk(&root_for_disk, &updated_for_disk));
+    tokio::task::spawn_blocking(move || persist(&root_for_disk, &items_for_disk));
     emit_changed(&app, &workspace_id, &root, &updated);
     Ok(updated)
 }
@@ -271,8 +269,119 @@ pub async fn recent_files_clear(
         return Ok(());
     };
     items_lock.write().clear();
+    let items_for_disk = items_lock;
     let root_for_disk = root.clone();
-    tokio::task::spawn_blocking(move || save_to_disk(&root_for_disk, &[]));
+    tokio::task::spawn_blocking(move || persist(&root_for_disk, &items_for_disk));
     emit_changed(&app, &workspace_id, &root, &[]);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(n: usize) -> RecentFile {
+        RecentFile {
+            abs_path: format!("/p/file-{n}.rs"),
+            rel: format!("file-{n}.rs"),
+            touched_at: n as i64,
+        }
+    }
+
+    #[test]
+    fn overlapping_saves_all_succeed_and_the_newest_list_wins() {
+        // https://github.com/pacifio/atlas/issues/372: a burst of pushes saved
+        // concurrently through the shared `.tmp` path, so some renames failed
+        // with ENOENT.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let items = Arc::new(RwLock::new(Vec::new()));
+
+        let handles: Vec<_> = (0..16)
+            .map(|t| {
+                let root = root.clone();
+                let items = items.clone();
+                std::thread::spawn(move || {
+                    for i in 0..25 {
+                        items.write().insert(0, entry(t * 100 + i));
+                        save_latest(&root, &items).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let on_disk = load_from_disk(&root);
+        let in_memory = items.read().clone();
+        assert_eq!(on_disk.len(), in_memory.len());
+        assert!(on_disk
+            .iter()
+            .zip(&in_memory)
+            .all(|(a, b)| a.abs_path == b.abs_path));
+        assert!(!store_path(&root).with_extension("json.tmp").exists());
+    }
+
+    /// A restart: the list a project had is the list it opens with. The row
+    /// is taken apart with no `..`, so a field added to `RecentFile` does not
+    /// compile until it is compared here.
+    #[test]
+    fn the_list_survives_a_restart_field_for_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let saved = vec![
+            RecentFile {
+                abs_path: "/p/src/main.rs".into(),
+                rel: "src/main.rs".into(),
+                touched_at: 1_762_000_000_123,
+            },
+            RecentFile {
+                abs_path: "/p/README.md".into(),
+                rel: "README.md".into(),
+                touched_at: 1_761_000_000_456,
+            },
+        ];
+
+        save_to_disk(dir.path(), &saved).unwrap();
+        let loaded = load_from_disk(dir.path());
+
+        assert_eq!(loaded.len(), saved.len());
+        for (got, want) in loaded.into_iter().zip(saved) {
+            let RecentFile {
+                abs_path,
+                rel,
+                touched_at,
+            } = got;
+            assert_eq!(abs_path, want.abs_path);
+            assert_eq!(rel, want.rel);
+            assert_eq!(touched_at, want.touched_at);
+        }
+    }
+
+    /// What the file tolerates today: no file is an empty list, a key this
+    /// build does not know is ignored, and one row missing a field empties
+    /// the whole list (no field has a default).
+    #[test]
+    fn a_missing_file_an_unknown_key_and_a_short_row_load_as_they_do_today() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(load_from_disk(dir.path()).is_empty());
+
+        let path = store_path(dir.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            r#"[{ "absPath": "/p/a.rs", "rel": "a.rs", "touchedAt": 5, "pinned": true }]"#,
+        )
+        .unwrap();
+        let loaded = load_from_disk(dir.path());
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].abs_path, "/p/a.rs");
+
+        std::fs::write(
+            &path,
+            r#"[{ "absPath": "/p/a.rs", "rel": "a.rs", "touchedAt": 5 }, { "absPath": "/p/b.rs" }]"#,
+        )
+        .unwrap();
+        assert!(load_from_disk(dir.path()).is_empty());
+    }
 }

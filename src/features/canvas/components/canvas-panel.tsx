@@ -56,8 +56,8 @@ const nodeTypes = {
 };
 
 export function CanvasPanel() {
-  const fullscreen = useCanvasStore.use.fullscreen();
-  const { setFullscreen } = useCanvasStore.use.actions();
+  const fullscreen = useCanvasStore((s) => s.fullscreen);
+  const { setFullscreen } = useCanvasStore((s) => s.actions);
 
   // The same canvas surface is rendered inside a Dialog when fullscreen is on,
   // otherwise inline. We toss away the inline tree while fullscreen so we
@@ -96,19 +96,19 @@ function CanvasSurface({
   fullscreen: boolean;
   onToggleFullscreen: () => void;
 }) {
-  const project = useAppStore.use.currentProject();
+  const project = useAppStore((s) => s.currentProject);
   const projectPath = project?.path ?? null;
 
-  const storeProjectPath = useCanvasStore.use.projectPath();
-  const nodes = useCanvasStore.use.nodes();
-  const edges = useCanvasStore.use.edges();
-  const tree = useCanvasStore.use.tree();
-  const activePageId = useCanvasStore.use.activePageId();
-  const selectedIds = useCanvasStore.use.selectedIds();
-  const loaded = useCanvasStore.use.loaded();
-  const activeTool = useCanvasStore.use.activeTool();
-  const canUndo = useCanvasStore.use.canUndo();
-  const canRedo = useCanvasStore.use.canRedo();
+  const storeProjectPath = useCanvasStore((s) => s.projectPath);
+  const nodes = useCanvasStore((s) => s.nodes);
+  const edges = useCanvasStore((s) => s.edges);
+  const tree = useCanvasStore((s) => s.tree);
+  const activePageId = useCanvasStore((s) => s.activePageId);
+  const selectedIds = useCanvasStore((s) => s.selectedIds);
+  const loaded = useCanvasStore((s) => s.loaded);
+  const activeTool = useCanvasStore((s) => s.activeTool);
+  const canUndo = useCanvasStore((s) => s.canUndo);
+  const canRedo = useCanvasStore((s) => s.canRedo);
   const {
     loadProject,
     addNote,
@@ -126,7 +126,7 @@ function CanvasSurface({
     beginInteraction,
     undo,
     redo,
-  } = useCanvasStore.use.actions();
+  } = useCanvasStore((s) => s.actions);
 
   // A create-tool is armed → the click overlay is active.
   const armed = activeTool === "note" || activeTool === "text" || activeTool.startsWith("shape:");

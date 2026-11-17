@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { memoryRepoMirrorDir } from "@/features/memory/lib/shared-memory-api";
 import { toast } from "sonner";
 import { useAppStore } from "@/features/app/stores/app-store";
 import { useSettingsStore } from "../../stores/settings-store";
@@ -13,14 +13,14 @@ import { EmbeddingModelSection } from "./embedding-model-section";
 import { Button } from "@tryatlas/design";
 
 export function MemoryPage() {
-  const settings = useSettingsStore.use.settings();
+  const settings = useSettingsStore((s) => s.settings);
   // The memory mirror lives outside the project; this shows the open
   // project's copy in the file manager.
-  const projectPath = useAppStore.use.currentProject()?.path ?? null;
+  const projectPath = useAppStore((s) => s.currentProject)?.path ?? null;
   const openMemoryMirror = async () => {
     if (!projectPath) return;
     try {
-      const dir = await invoke<string | null>("memory_repo_mirror_dir", { projectPath });
+      const dir = await memoryRepoMirrorDir(projectPath);
       if (!dir) {
         toast("This project's memory mirror hasn't been written yet");
         return;

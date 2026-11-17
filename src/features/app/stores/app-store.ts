@@ -1,75 +1,47 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
-import { createSelectors } from "@/lib/create-selectors";
 import { useLayoutStore } from "@/features/layout/stores/layout-store";
 import { logEvent } from "@/features/log/lib/log";
-import { useProjectStore, type Project } from "@/features/projects/stores/project-store";
+import { useProjectStore } from "@/features/projects/stores/project-store";
 import { useOrgStore } from "@/features/organisations/stores/org-store";
-import {
-  fromOrganisationWire,
-  toOrganisationWire,
-  type OrganisationWire,
-} from "@/features/organisations/types";
+import { fromOrganisationWire, toOrganisationWire } from "@/features/organisations/types";
 import { registerFlush } from "@/features/projects/lib/flush-registry";
 import { persistHashOf } from "@/features/projects/lib/project-snapshot";
 import { useSettingsStore } from "@/features/settings/stores/settings-store";
-import type { ConfigStatus } from "@/features/settings/lib/atlas-config-api";
 import type { AppSettings } from "@/features/settings/lib/app-settings";
+import type { AppStatePatch } from "@/bindings/app-state/AppStatePatch";
+import type { BootstrapPayload } from "@/bindings/app-state/BootstrapPayload";
+import type { ProjectRef as ProjectRefWire } from "@/bindings/app-state/ProjectRef";
+import type { RecentProject } from "@/bindings/app-state/RecentProject";
+import { dropNulls } from "@/lib/drop-nulls";
 
 /** Just enough to name the open project: `Project` itself belongs to the
  *  projects feature, and this is only the {name, path} pair the app store
- *  and the persisted recents list carry. */
-interface ProjectRef {
-  name: string;
-  path: string;
-}
-
-interface RecentProject {
-  name: string;
-  path: string;
-  lastOpened: string;
-  /** The org this was opened under. `null` on entries written before recents
-   *  were scoped — `recentsForOrg` attributes those by path. */
-  orgId?: string | null;
-}
+ *  carries. */
+type ProjectRef = ProjectRefWire;
 
 /**
- * Wire shape returned by the Rust `bootstrap_app_state` command. Mirrors
- * `src-tauri/src/state/app_state.rs:AppState` field-for-field.
+ * What the Rust `bootstrap_app_state` command answers: generated from
+ * `src-tauri/src/commands/app_state.rs:BootstrapPayload` (`bun run
+ * bindings:gen`), so a field Rust adds, renames or retypes is a `tsc` error in
+ * `hydrate` below.
  *
- * `currentProject` is a legacy v1 field — Rust migrates it into `workspaces`
- * on load, so it arrives `null` here in practice. The multi-project fields
- * are the source of truth.
+ * `currentProject` is a legacy v1 field: Rust migrates it into `workspaces`
+ * on load, so it arrives `null`. `telemetryAnonId` is Rust's own and is never
+ * read or sent back (`AppStatePatch` has no such key).
  *
  * `workspaces` / `activeWorkspaceId` are STORAGE KEYS, not concepts: they are
  * what `state.json` has held since v2, so renaming them would need a data
  * migration and break every existing install. The app calls these projects.
+ * Each organisation's `activeWorkspaceId` is the same freeze one level down
+ * (`OrganisationWire`).
+ *
+ * `settings`, `configGeneration` and `configStatus` come from `config.toml`,
+ * not `state.json` (issue #64): folded into this response for one round
+ * trip, handed straight to the settings store, and written back through
+ * `update_atlas_settings`, never `save_app_state`.
  */
-export interface AppStateWire {
-  currentProject: ProjectRef | null;
-  recentProjects: RecentProject[];
-  workspaces?: Project[];
-  activeWorkspaceId?: string | null;
-  /** The Organisation layer above projects (v3). `OrganisationWire`, not
-   *  `Organisation`: the per-org active project is a frozen storage key too
-   *  (`activeWorkspaceId`), so it is translated on the way in. */
-  organisations?: OrganisationWire[];
-  activeOrganisationId?: string | null;
-  /** Sourced from `config.toml`, not `state.json` (issue #64) — folded into
-   *  this same bootstrap response for one round trip, but written back
-   *  through `update_atlas_settings`, never `save_app_state`. Handed straight
-   *  to the settings store; optional only because the bootstrap-failure
-   *  fallback path constructs a payload by hand without it. */
-  settings?: AppSettings;
-  /** Optimistic-concurrency counter for `update_atlas_settings` — see
-   *  `atlas-config-api.ts`. */
-  configGeneration?: number;
-  /** Whether `config.toml` actually loaded. Anything other than `ok` means
-   *  `settings` above are Atlas's defaults, not the user's. Optional only
-   *  because the bootstrap-failure fallback path builds a payload by hand. */
-  configStatus?: ConfigStatus;
-  version: number;
-}
+export type AppStateWire = BootstrapPayload;
 
 interface AppState {
   currentProject: ProjectRef | null;
@@ -87,24 +59,11 @@ interface AppState {
     setActiveProject: (project: ProjectRef | null) => void;
     removeRecent: (path: string) => void;
     clearRecents: () => void;
-    /** One-shot hydration from Rust. Called once on app boot. */
-    hydrate: (payload: AppStateWire, opts?: { skipActiveSwitch?: boolean }) => void;
+    /** One-shot hydration from Rust. Called once on app boot. `Partial`
+     *  because a boot that could not load hydrates from nothing, and every
+     *  list then comes up empty. */
+    hydrate: (payload: Partial<AppStateWire>, opts?: { skipActiveSwitch?: boolean }) => void;
   };
-}
-
-/** The `AppStatePatch` shape `save_app_state` actually accepts — settings are
- *  no longer part of it (issue #64: they persist through `config.toml` /
- *  `update_atlas_settings` instead, see the settings store). */
-interface AppStatePatchWire {
-  currentProject: null;
-  recentProjects: RecentProject[];
-  /** Storage keys — see `AppStateWire`. The values are projects. */
-  workspaces: Project[];
-  activeWorkspaceId: string | null;
-  /** Storage keys again, one level down: each org's last-active project rides
-   *  as `activeWorkspaceId`. See `OrganisationWire`. */
-  organisations: OrganisationWire[];
-  activeOrganisationId: string | null;
 }
 
 // Debounced persistence: the Rust `save_app_state` command takes the
@@ -113,13 +72,17 @@ interface AppStatePatchWire {
 // contribute to it, so the save reads from both stores at flush time.
 // Coalesced to ~500ms.
 /** Build the `AppStatePatch` payload from every contributing store. Shared by
- *  the debounced + immediate save paths so they never drift. */
-function buildAppStatePayload(): AppStatePatchWire {
+ *  the debounced + immediate save paths so they never drift.
+ *
+ *  The return type is generated from the Rust struct `save_app_state`
+ *  deserializes, which has no `deny_unknown_fields`: a key it does not know
+ *  is dropped in silence and its field saved as empty. Here that key is a
+ *  `tsc` error. Settings are not part of it (issue #64). */
+function buildAppStatePayload(): AppStatePatch {
   const app = useAppStore.getState();
   const ws = useProjectStore.getState();
   const org = useOrgStore.getState();
   return {
-    currentProject: null,
     recentProjects: app.recentProjects,
     workspaces: ws.projects,
     activeWorkspaceId: ws.activeProjectId,
@@ -302,131 +265,129 @@ export async function loadProjectStores(path: string): Promise<void> {
   }
 }
 
-export const useAppStore = createSelectors(
-  create<AppState>()((set) => ({
-    currentProject: null,
-    recentProjects: [],
-    hydrated: false,
-    actions: {
-      openProject: async (path: string) => {
-        // The project store is now the single entry point for "open a
-        // project": it dedupes by path (focus-existing) and drives the
-        // flush/restore switch. Everything that used to call openProject
-        // keeps working unchanged.
-        await useProjectStore.getState().actions.addProject(path);
-      },
-
-      setActiveProject: (project: ProjectRef | null) => {
-        if (!project) {
-          set({ currentProject: null });
-          return;
-        }
-        const { name, path } = project;
-        // Tag the entry with the org it was opened under. Read lazily, like
-        // `requireActiveOrgId` does, to avoid an import-time cycle with the
-        // org store.
-        const orgId =
-          useOrgStore.getState().activeOrganisationId ??
-          useOrgStore.getState().organisations[0]?.id ??
-          null;
-        set((s) => ({
-          currentProject: { name, path },
-          recentProjects: [
-            { name, path, lastOpened: new Date().toISOString(), orgId },
-            ...s.recentProjects.filter((r) => r.path !== path),
-          ].slice(0, 20),
-        }));
-
-        // Idempotent + setting-gated. Safe to fire on every switch.
-        maybeEnsureAtlasGitignore(path, useSettingsStore.getState().settings);
-        // Grant the asset protocol access to this project's tree so the media
-        // viewer can serve its files. Scope only widens across projects.
-        invoke("asset_allow_dir", { path }).catch(() => {});
-
-        logEvent({
-          source: "project",
-          kind: "open",
-          summary: name,
-          projectPath: path,
-          projectName: name,
-          payload: { path },
-        });
-        logEvent({
-          source: "atlas",
-          kind: "project-open",
-          summary: `Opened project: ${name}`,
-          status: "success",
-          projectPath: path,
-          projectName: name,
-          payload: { path },
-        });
-      },
-
-      removeRecent: (path: string) => {
-        set((s) => ({
-          recentProjects: s.recentProjects.filter((r) => r.path !== path),
-        }));
-        scheduleAppStateSave();
-      },
-      clearRecents: () => {
-        set({ recentProjects: [] });
-        scheduleAppStateSave();
-      },
-      hydrate: (payload: AppStateWire, opts?: { skipActiveSwitch?: boolean }) => {
-        // Settings ride along in the bootstrap response but belong to the
-        // settings feature — hand that slice over first so the theme/UI-scale
-        // side effects land before anything renders.
-        useSettingsStore.getState().actions.hydrate({
-          settings: payload.settings,
-          configGeneration: payload.configGeneration,
-          configStatus: payload.configStatus,
-        });
-
-        set({
-          currentProject: null,
-          recentProjects: payload.recentProjects ?? [],
-          hydrated: true,
-        });
-
-        // Hand the Organisation layer to the org store FIRST — the project
-        // sidebar filters by the active org, and new projects tag themselves
-        // with it. (Rust `migrate()` guarantees a default "Personal" org + an
-        // `activeOrganisationId` on any pre-v3 state, so this is always set.)
-        useOrgStore.getState().actions.hydrate({
-          organisations: (payload.organisations ?? []).map(fromOrganisationWire),
-          activeOrganisationId: payload.activeOrganisationId ?? null,
-        });
-
-        // Hand the multi-project fields to the project store. We hydrate
-        // with `activeProjectId: null` and then `switchTo` the persisted id
-        // below, so the switch is a genuine null→id transition that actually
-        // runs the loaders (a same-id switch is a no-op by design).
-        const projects = payload.workspaces ?? [];
-        const activeProjectId = payload.activeWorkspaceId ?? null;
-        useProjectStore.getState().actions.hydrate({ projects, activeProjectId: null });
-
-        // Restore the active project, if any. `switchTo` sets
-        // `currentProject` (which drives the App-level Rust lifecycle effects)
-        // and loads the downstream stores.
-        //
-        // `skipActiveSwitch` is set when a `atlas <path>` CLI launch is about to
-        // open its own project: `switchTo` no-ops while another switch is in
-        // flight (the `switching` guard), so auto-switching here would swallow
-        // the CLI switch and strand the user on the persisted project. The
-        // caller switches to the CLI project instead.
-        //
-        // Only a project of the active org: state saved before `closeProject`
-        // was org-scoped can pair one org with another org's project, which
-        // that org's switcher never shows.
-        const orgId = useOrgStore.getState().activeOrganisationId;
-        const active =
-          activeProjectId &&
-          projects.find((w) => w.id === activeProjectId && orgId != null && w.orgId === orgId);
-        if (active && !opts?.skipActiveSwitch) {
-          maybeEnsureAtlasGitignore(active.path, useSettingsStore.getState().settings);
-          void useProjectStore.getState().actions.switchTo(active.id);
-        }
-      },
+export const useAppStore = create<AppState>()((set) => ({
+  currentProject: null,
+  recentProjects: [],
+  hydrated: false,
+  actions: {
+    openProject: async (path: string) => {
+      // The project store is now the single entry point for "open a
+      // project": it dedupes by path (focus-existing) and drives the
+      // flush/restore switch. Everything that used to call openProject
+      // keeps working unchanged.
+      await useProjectStore.getState().actions.addProject(path);
     },
-  })),
-);
+
+    setActiveProject: (project: ProjectRef | null) => {
+      if (!project) {
+        set({ currentProject: null });
+        return;
+      }
+      const { name, path } = project;
+      // Tag the entry with the org it was opened under. Read lazily, like
+      // `requireActiveOrgId` does, to avoid an import-time cycle with the
+      // org store.
+      const orgId =
+        useOrgStore.getState().activeOrganisationId ??
+        useOrgStore.getState().organisations[0]?.id ??
+        null;
+      set((s) => ({
+        currentProject: { name, path },
+        recentProjects: [
+          { name, path, lastOpened: new Date().toISOString(), orgId },
+          ...s.recentProjects.filter((r) => r.path !== path),
+        ].slice(0, 20),
+      }));
+
+      // Idempotent + setting-gated. Safe to fire on every switch.
+      maybeEnsureAtlasGitignore(path, useSettingsStore.getState().settings);
+      // Grant the asset protocol access to this project's tree so the media
+      // viewer can serve its files. Scope only widens across projects.
+      invoke("asset_allow_dir", { path }).catch(() => {});
+
+      logEvent({
+        source: "project",
+        kind: "open",
+        summary: name,
+        projectPath: path,
+        projectName: name,
+        payload: { path },
+      });
+      logEvent({
+        source: "atlas",
+        kind: "project-open",
+        summary: `Opened project: ${name}`,
+        status: "success",
+        projectPath: path,
+        projectName: name,
+        payload: { path },
+      });
+    },
+
+    removeRecent: (path: string) => {
+      set((s) => ({
+        recentProjects: s.recentProjects.filter((r) => r.path !== path),
+      }));
+      scheduleAppStateSave();
+    },
+    clearRecents: () => {
+      set({ recentProjects: [] });
+      scheduleAppStateSave();
+    },
+    hydrate: (payload: Partial<AppStateWire>, opts?: { skipActiveSwitch?: boolean }) => {
+      // Settings ride along in the bootstrap response but belong to the
+      // settings feature — hand that slice over first so the theme/UI-scale
+      // side effects land before anything renders.
+      useSettingsStore.getState().actions.hydrate({
+        settings: payload.settings,
+        configGeneration: payload.configGeneration,
+        configStatus: payload.configStatus,
+      });
+
+      set({
+        currentProject: null,
+        recentProjects: payload.recentProjects ?? [],
+        hydrated: true,
+      });
+
+      // Hand the Organisation layer to the org store FIRST — the project
+      // sidebar filters by the active org, and new projects tag themselves
+      // with it. (Rust `migrate()` guarantees a default "Personal" org + an
+      // `activeOrganisationId` on any pre-v3 state, so this is always set.)
+      useOrgStore.getState().actions.hydrate({
+        organisations: (payload.organisations ?? []).map(fromOrganisationWire),
+        activeOrganisationId: payload.activeOrganisationId ?? null,
+      });
+
+      // Hand the multi-project fields to the project store. We hydrate
+      // with `activeProjectId: null` and then `switchTo` the persisted id
+      // below, so the switch is a genuine null→id transition that actually
+      // runs the loaders (a same-id switch is a no-op by design).
+      const projects = (payload.workspaces ?? []).map(dropNulls);
+      const activeProjectId = payload.activeWorkspaceId ?? null;
+      useProjectStore.getState().actions.hydrate({ projects, activeProjectId: null });
+
+      // Restore the active project, if any. `switchTo` sets
+      // `currentProject` (which drives the App-level Rust lifecycle effects)
+      // and loads the downstream stores.
+      //
+      // `skipActiveSwitch` is set when a `atlas <path>` CLI launch is about to
+      // open its own project: `switchTo` no-ops while another switch is in
+      // flight (the `switching` guard), so auto-switching here would swallow
+      // the CLI switch and strand the user on the persisted project. The
+      // caller switches to the CLI project instead.
+      //
+      // Only a project of the active org: state saved before `closeProject`
+      // was org-scoped can pair one org with another org's project, which
+      // that org's switcher never shows.
+      const orgId = useOrgStore.getState().activeOrganisationId;
+      const active =
+        activeProjectId &&
+        projects.find((w) => w.id === activeProjectId && orgId != null && w.orgId === orgId);
+      if (active && !opts?.skipActiveSwitch) {
+        maybeEnsureAtlasGitignore(active.path, useSettingsStore.getState().settings);
+        void useProjectStore.getState().actions.switchTo(active.id);
+      }
+    },
+  },
+}));

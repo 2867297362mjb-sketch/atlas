@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::auth::{
@@ -88,19 +88,19 @@ fn broadcast(app: &AppHandle, snapshot: AuthSnapshot) {
 ///
 /// [`sync_identity`] only ever runs on an auth transition, but that setting
 /// gates it from the settings side and can flip with no transition at all —
-/// so `commands::atlas_config::notify_settings_changed` calls this on every
+/// so `settings_effects::apply` calls this on every
 /// committed settings change. The flag is passed in rather than read here
 /// because that caller already holds the freshly committed snapshot, and
 /// reaching back into the config mutex from a path that may be running under
 /// it is how a deadlock gets written.
-pub fn resync_telemetry_identity(app: &AppHandle, link_to_account: bool) {
+pub fn resync_telemetry_identity<R: Runtime>(app: &AppHandle<R>, link_to_account: bool) {
     if let Some(state) = app.try_state::<AuthState>() {
         let snapshot = state.core().snapshot();
         sync_identity(app, &snapshot, link_to_account);
     }
 }
 
-fn sync_identity(app: &AppHandle, snapshot: &AuthSnapshot, link_to_account: bool) {
+fn sync_identity<R: Runtime>(app: &AppHandle<R>, snapshot: &AuthSnapshot, link_to_account: bool) {
     let tel = telemetry(app);
     match snapshot {
         AuthSnapshot::SignedIn {
@@ -137,7 +137,7 @@ fn sync_identity(app: &AppHandle, snapshot: &AuthSnapshot, link_to_account: bool
 
 /// The managed telemetry client. Every capture through it is a no-op unless the
 /// user has opted in, so nothing here needs its own consent check.
-fn telemetry(app: &AppHandle) -> Arc<TelemetryClient> {
+fn telemetry<R: Runtime>(app: &AppHandle<R>) -> Arc<TelemetryClient> {
     Arc::clone(&app.state::<Arc<TelemetryClient>>())
 }
 

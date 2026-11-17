@@ -47,20 +47,12 @@ impl DocStore {
         serde_json::from_slice(&bytes).map_err(|e| anyhow!("parse docstore: {e}"))
     }
 
-    /// Atomically persist to JSON at `path` (temp + rename), so a reader never
-    /// observes a partial file — same discipline as the manifest write.
+    /// Atomically persist to JSON at `path`, so a reader never observes a
+    /// partial file — same discipline as the manifest write.
     pub fn save(&self, path: &Path) -> Result<()> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
         let json =
             serde_json::to_vec_pretty(self).map_err(|e| anyhow!("serialize docstore: {e}"))?;
-        let mut tmp = path.as_os_str().to_owned();
-        tmp.push(".tmp");
-        let tmp = std::path::PathBuf::from(tmp);
-        std::fs::write(&tmp, &json).map_err(|e| anyhow!("write tmp: {e}"))?;
-        std::fs::rename(&tmp, path).map_err(|e| anyhow!("rename: {e}"))?;
-        Ok(())
+        atlas_fs::replace_file(path, json).map_err(|e| anyhow!("write docstore: {e}"))
     }
 
     /// Insert/replace the display text for `id`.

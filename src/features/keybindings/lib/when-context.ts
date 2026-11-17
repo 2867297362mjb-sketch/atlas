@@ -10,7 +10,7 @@
  * surface focus from the tab.
  */
 
-import type { TabType } from "@/lib/constants";
+import type { TabType } from "@/lib/tab-registry";
 import { deepActiveElement, shadowHost } from "@/lib/deep-active-element";
 import { isLinux, isMac, isWindows } from "@/lib/platform";
 import { useLayoutStore } from "@/features/layout/stores/layout-store";

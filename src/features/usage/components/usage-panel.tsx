@@ -36,7 +36,7 @@ export function UsagePanel() {
     setMetric,
     setTable,
     setSearch,
-  } = useUsageStore.use.actions();
+  } = useUsageStore((s) => s.actions);
   // Re-fetch when the org's project set changes (this also covers an org switch).
   const projectSig = useProjectStore((s) => s.projects.map((p) => p.path).join("|"));
   useEffect(() => {

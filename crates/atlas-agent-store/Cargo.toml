@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+# `replace_file`: the crash-safe write of the registry cache, icons and the wanted spec.
+atlas-fs = { path = "../atlas-fs" }
 atlas-process = { path = "../atlas-process" }
 # The seam this crate implements. `agent-client-protocol` arrives through it at
 # the exact `=2.0.0` pin the other ACP crates use;

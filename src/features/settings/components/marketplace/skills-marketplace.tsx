@@ -15,7 +15,6 @@ import { toast } from "sonner";
 import { copyText } from "@/lib/clipboard";
 import { packs as packsApi } from "@/features/packs/lib/packs-api";
 import { skills as skillsApi } from "@/features/skills/lib/skills-api";
-import { SKILLS_CHANGED_EVENT } from "@/features/skills/lib/skills-events";
 import {
   detailFromPreview,
   githubUrlFor,
@@ -25,6 +24,7 @@ import {
 import { installTrend } from "@/features/packs/lib/install-trends";
 import type { Pack, PackSearchHit, Scope } from "@/features/packs/lib/types";
 import { SkillDetailDialogView, SkillsMarketplaceView } from "./views/skills-marketplace-view";
+import { onWindowEvent } from "@/lib/window-events";
 
 const POPULAR_SEEDS = ["agent", "react", "design", "review", "database", "python"];
 const POPULAR_LS_KEY = "atlas:skills:popular:v1";
@@ -138,8 +138,7 @@ export function SkillsMarketplace({
   // that completed while this component was unmounted).
   useEffect(() => {
     const onChanged = () => void refreshInstalled();
-    window.addEventListener(SKILLS_CHANGED_EVENT, onChanged);
-    return () => window.removeEventListener(SKILLS_CHANGED_EVENT, onChanged);
+    return onWindowEvent("atlas:skills-changed", onChanged);
   }, [refreshInstalled]);
 
   // Default "Popular" view — only fetched once (then cached). Merge a few broad

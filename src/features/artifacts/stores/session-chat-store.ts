@@ -17,7 +17,6 @@
 
 import { create } from "zustand";
 
-import { createSelectors } from "@/lib/create-selectors";
 import { createStreamDeltaBuffer } from "@/lib/stream-delta-buffer";
 import {
   modelchat as providerChat,
@@ -460,4 +459,4 @@ function onEvent(
   }
 }
 
-export const useSessionChatStore = createSelectors(useSessionChatStoreBase);
+export const useSessionChatStore = useSessionChatStoreBase;

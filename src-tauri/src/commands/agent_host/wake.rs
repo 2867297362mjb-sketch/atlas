@@ -220,9 +220,7 @@ impl AgentHost {
             let Some(wake) = PendingWake::merged(held) else {
                 return;
             };
-            let bound = lock(&this.sessions)
-                .get(&session_id)
-                .map(|record| record.agent.clone());
+            let bound = this.sessions.info(&session_id).map(|info| info.agent);
             let result = match bound {
                 Some(agent) => {
                     let key = SessionKey {
@@ -298,140 +296,32 @@ mod tests {
     /// is not open, and Stop racing a wake.
     mod host {
         use std::path::PathBuf;
-        use std::sync::atomic::{AtomicUsize, Ordering};
 
         use agent_client_protocol::schema::v1 as acp;
-        use atlas_acp_thread::{AcpThread, AcpThreadHandle, AgentConnection};
-        use atlas_agent_servers::{AgentServer, AgentServerDelegate, ConnectOptions};
+        use atlas_acp_thread::test_support::{FakeConnection, FakeHandle};
         use atlas_thread_metadata::{PathList, ThreadMetadata};
-        use futures::future::BoxFuture;
-        use futures::FutureExt;
-        use tokio::sync::Notify;
 
-        use super::super::super::test_support::fresh_host_with_native;
+        use super::super::super::test_support::{fresh_host_with_native, ScriptedServer};
         use super::super::super::ATLAS_AGENT_ID;
         use super::*;
-
-        /// Every turn waits here until released; a cancel releases it.
-        #[derive(Default)]
-        struct Gate {
-            open: Notify,
-            prompts: AtomicUsize,
-        }
-
-        struct GatedNative {
-            session_id: &'static str,
-            gate: Arc<Gate>,
-        }
-
-        impl GatedNative {
-            fn thread(self: &Arc<Self>, work_dirs: Vec<PathBuf>) -> AcpThreadHandle {
-                Arc::new(std::sync::Mutex::new(AcpThread::new(
-                    acp::SessionId::new(self.session_id),
-                    self.clone() as Arc<dyn AgentConnection>,
-                    work_dirs,
-                    None,
-                    atlas_acp_thread::event_channel().0,
-                )))
-            }
-        }
-
-        impl AgentConnection for GatedNative {
-            fn agent_id(&self) -> atlas_acp_thread::AgentId {
-                atlas_acp_thread::AgentId::new(ATLAS_AGENT_ID)
-            }
-
-            fn telemetry_id(&self) -> Arc<str> {
-                ATLAS_AGENT_ID.into()
-            }
-
-            fn new_session(
-                self: Arc<Self>,
-                work_dirs: Vec<PathBuf>,
-            ) -> BoxFuture<'static, anyhow::Result<AcpThreadHandle>> {
-                let thread = self.thread(work_dirs);
-                async move { Ok(thread) }.boxed()
-            }
-
-            fn supports_load_session(&self) -> bool {
-                true
-            }
-
-            fn load_session(
-                self: Arc<Self>,
-                _session_id: acp::SessionId,
-                work_dirs: Vec<PathBuf>,
-                _title: Option<Arc<str>>,
-            ) -> BoxFuture<'static, anyhow::Result<AcpThreadHandle>> {
-                let thread = self.thread(work_dirs);
-                async move { Ok(thread) }.boxed()
-            }
-
-            fn auth_methods(&self) -> &[acp::AuthMethod] {
-                &[]
-            }
-
-            fn authenticate(
-                &self,
-                _method: acp::AuthMethodId,
-            ) -> BoxFuture<'static, anyhow::Result<()>> {
-                async { Ok(()) }.boxed()
-            }
-
-            fn prompt(
-                &self,
-                _params: acp::PromptRequest,
-            ) -> BoxFuture<'static, anyhow::Result<acp::PromptResponse>> {
-                let gate = self.gate.clone();
-                gate.prompts.fetch_add(1, Ordering::SeqCst);
-                async move {
-                    gate.open.notified().await;
-                    Ok(acp::PromptResponse::new(acp::StopReason::EndTurn))
-                }
-                .boxed()
-            }
-
-            fn cancel(&self, _session_id: &acp::SessionId) {
-                self.gate.open.notify_one();
-            }
-
-            fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
-                self
-            }
-        }
-
-        impl AgentServer for GatedNative {
-            fn agent_id(&self) -> atlas_acp_thread::AgentId {
-                atlas_acp_thread::AgentId::new(ATLAS_AGENT_ID)
-            }
-
-            fn connect(
-                &self,
-                _delegate: AgentServerDelegate,
-                _options: ConnectOptions,
-            ) -> BoxFuture<'static, anyhow::Result<Arc<dyn AgentConnection>>> {
-                let connection = Arc::new(GatedNative {
-                    session_id: self.session_id,
-                    gate: self.gate.clone(),
-                });
-                async move { Ok(connection as Arc<dyn AgentConnection>) }.boxed()
-            }
-
-            fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
-                self
-            }
-        }
 
         type Delivered = Arc<Mutex<Vec<(String, String)>>>;
 
         /// A host over a gated native agent, recording each wake it delivers
         /// as `(session id, text)`.
-        fn gated_host(session_id: &'static str) -> (Arc<AgentHost>, Arc<Gate>, Delivered, PathBuf) {
-            let gate = Arc::new(Gate::default());
-            let (host, dir) = fresh_host_with_native(Arc::new(GatedNative {
-                session_id,
-                gate: gate.clone(),
-            }));
+        ///
+        /// Every turn waits until the returned handle releases it; a cancel
+        /// releases it too. A stored session reopens under the agent's one
+        /// session id.
+        fn gated_host(session_id: &str) -> (Arc<AgentHost>, FakeHandle, Delivered, PathBuf) {
+            let gate = FakeConnection::builder()
+                .agent(ATLAS_AGENT_ID)
+                .session_id(session_id)
+                .supports_load()
+                .loads_rebind()
+                .hold_prompts()
+                .handle();
+            let (host, dir) = fresh_host_with_native(ScriptedServer::detached(gate.clone()));
             let delivered: Delivered = Arc::default();
             let record = delivered.clone();
             host.set_wake_delivery(Arc::new(move |key: &SessionKey, wake: &PendingWake| {
@@ -468,13 +358,7 @@ mod tests {
             let key = open_session(&host, &dir).await;
             host.submit(&key, Prompt::default(), Origin::Local, SubmitPolicy::Now)
                 .expect("send");
-            assert!(
-                until(
-                    || gate.prompts.load(Ordering::SeqCst) == 1,
-                    Duration::from_secs(5)
-                )
-                .await
-            );
+            assert!(until(|| gate.prompts_started() == 1, Duration::from_secs(5)).await);
 
             let outcome = host.offer_wake(&key, wake("checks failed")).expect("offer");
             assert_eq!(
@@ -485,7 +369,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(300)).await;
             assert!(lock(&delivered).is_empty());
 
-            gate.open.notify_one();
+            gate.release_prompt();
             // Not the instant the turn ends: the grace lets a queued message
             // of the user's go first.
             tokio::time::sleep(WAKE_GRACE / 2).await;
@@ -520,7 +404,7 @@ mod tests {
                 vec![("s-closed".to_string(), "new comments".to_string())]
             );
             assert!(
-                lock(&host.sessions).contains_key("s-closed"),
+                host.sessions.contains("s-closed"),
                 "the session is open now"
             );
             let _ = std::fs::remove_dir_all(&dir);
@@ -532,13 +416,7 @@ mod tests {
             let key = open_session(&host, &dir).await;
             host.submit(&key, Prompt::default(), Origin::Local, SubmitPolicy::Now)
                 .expect("send");
-            assert!(
-                until(
-                    || gate.prompts.load(Ordering::SeqCst) == 1,
-                    Duration::from_secs(5)
-                )
-                .await
-            );
+            assert!(until(|| gate.prompts_started() == 1, Duration::from_secs(5)).await);
             assert_eq!(
                 host.offer_wake(&key, wake("checks passed")).expect("offer"),
                 WakeOutcome::Held

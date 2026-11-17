@@ -31,8 +31,7 @@ import {
   type DerivedVar,
   type ThemeKey,
 } from "@tryatlas/design/theme";
-
-export const THEME_APPLIED_EVENT = "atlas:theme-applied";
+import { onWindowEvent } from "@/lib/window-events";
 
 /**
  * Last-resort values, taken from the registry's own per-appearance defaults so
@@ -92,7 +91,7 @@ const listeners = new Set<() => void>();
 const g = globalThis as unknown as { __atlasThemeAppliedBound?: boolean };
 if (typeof window !== "undefined" && !g.__atlasThemeAppliedBound) {
   g.__atlasThemeAppliedBound = true;
-  window.addEventListener(THEME_APPLIED_EVENT, () => {
+  onWindowEvent("atlas:theme-applied", () => {
     version += 1;
     // Iterating the Set directly is safe: a listener that unsubscribes during
     // the notification is simply skipped, which is the behaviour we want.

@@ -9,7 +9,7 @@
  * Session.
  *
  * Clicking a thread navigates to the node it hangs off. That reuses the
- * transcript's existing jump machinery (`JUMP_EVENT`) rather than reaching into
+ * transcript's existing jump machinery (`atlas:session-chat-jump`) rather than reaching into
  * it: a comment's `anchorId` *is* an entry's `rowId`, so the panel only has to
  * name the id.
  *
@@ -45,7 +45,6 @@ import type { EntryKind, SessionDetail as Detail } from "../types";
 import { avatarUser } from "./comment-thread";
 import { splitSelectionComment } from "../lib/selection-comment";
 import type { RowComments } from "./session-detail";
-import { JUMP_EVENT, type JumpDetail } from "./session-chat-message";
 import {
   Hint,
   IconButton,
@@ -55,10 +54,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@tryatlas/design";
+import { emitWindowEvent } from "@/lib/window-events";
 
 /** Navigate the transcript to a thread's anchor. */
 function jumpToAnchor(entryId: string): void {
-  window.dispatchEvent(new CustomEvent<JumpDetail>(JUMP_EVENT, { detail: { entryId } }));
+  emitWindowEvent("atlas:session-chat-jump", { entryId });
 }
 
 /** What the panel needs to know about a commentable row: its place in the

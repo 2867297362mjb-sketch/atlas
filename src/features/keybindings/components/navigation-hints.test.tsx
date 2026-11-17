@@ -85,11 +85,11 @@ function rebind(bindings: KeybindingProfile["bindings"], basedOn?: string) {
 
 /** Real dispatchers + the real layout store, with small controls instead of lazy app panels. */
 function Harness({ children }: { children?: ReactNode }) {
-  const tabs = useLayoutStore.use.tabs();
-  const groups = useLayoutStore.use.groupOrder();
-  const focused = useLayoutStore.use.focusedGroupId();
-  const active = useLayoutStore.use.activeByGroup();
-  const actions = useLayoutStore.use.actions();
+  const tabs = useLayoutStore((s) => s.tabs);
+  const groups = useLayoutStore((s) => s.groupOrder);
+  const focused = useLayoutStore((s) => s.focusedGroupId);
+  const active = useLayoutStore((s) => s.activeByGroup);
+  const actions = useLayoutStore((s) => s.actions);
   const navigationHint = useNavigationHint();
   const handlers: ActionHandlers = {
     ...Object.fromEntries(

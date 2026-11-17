@@ -146,6 +146,25 @@ opens) into the Logs panel.
 validation = "—"
 
 [[setting]]
+key = "logRetentionDays"
+type = "integer"
+min = 1
+max = 90
+default = 7
+status = "live"
+page = "privacy"
+section = "Diagnostics"
+title = "Keep log files for"
+summary = "How many days of Atlas's own log files to keep, for attaching to a bug report."
+doc = """
+How many days of Atlas's own log files to keep. A new file starts each day,
+and files past this count are deleted. Must be between 1 and 90. Takes effect
+the next time Atlas starts.
+"""
+validation = "1 ≤ n ≤ 90"
+applies = "next launch"
+
+[[setting]]
 key = "showHiddenFiles"
 type = "boolean"
 default = true
@@ -1099,6 +1118,22 @@ everything else.
 validation = "8 ≤ n ≤ 32"
 
 [[setting]]
+key = "terminalScreenReader"
+type = "boolean"
+default = false
+status = "live"
+page = "appearance"
+section = "Typography"
+title = "Terminal screen reader support"
+summary = "Keep an accessible copy of the terminal's screen, for screen readers and other assistive tools."
+doc = """
+Keep an accessible copy of the terminal's screen, so a screen reader or an
+assistive tool can read its lines and hear new output. Off by default: the copy
+costs work on every write.
+"""
+validation = "—"
+
+[[setting]]
 key = "diffIgnoreWhitespace"
 type = "boolean"
 default = false
@@ -1405,3 +1440,26 @@ are not scanned. Off in released builds and on in development builds unless
 this key is set.
 """
 validation = "—"
+
+[[setting]]
+key = "modelPriceOverrides"
+type = "table"
+ts_type = "ModelPriceOverrides"
+ts_import = "@/features/settings/stores/model-pricing-store"
+ts_default = "{}"
+status = "live"
+page = "chat"
+section = "Cost estimates"
+title = "Model price overrides"
+summary = "Your own per-model prices for cost estimates, in USD per million tokens."
+doc = """
+Per-model input, output, cacheRead and cacheWrite prices in USD per million
+tokens. Replaces models.dev prices, including for models absent from its
+catalog. Names match exactly, then without a provider prefix, then without
+an eight-digit date suffix. All four rates are required; zero is allowed.
+Atlas Agent turns are billed against the account cap; an override changes
+only the estimate shown for them.
+Example: modelPriceOverrides = { "my-model" = { input = 1.0, output = 2.0,
+cacheRead = 0.1, cacheWrite = 0.2 } }. An empty table uses models.dev prices.
+"""
+validation = "nonempty model names without surrounding whitespace; four finite, nonnegative rates"

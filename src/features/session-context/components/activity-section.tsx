@@ -32,7 +32,7 @@ export function ActivitySection({
   presentation: DetailsPresentation;
 }) {
   const open = useSessionSidePanel(tabId);
-  const { toggle } = useSessionSidePanelStore.use.actions();
+  const { toggle } = useSessionSidePanelStore((s) => s.actions);
   const pick = (panel: SessionSidePanel) => {
     if (presentation === "popover") {
       const { popoverFor, actions } = useSessionDetailsStore.getState();

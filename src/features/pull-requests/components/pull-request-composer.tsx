@@ -139,7 +139,7 @@ export function PullRequestComposer({
   const confirm = useInlineConfirm(`${repoPath}:${detail.number}:composer`);
   // Line comments written in the Code tab, sent with the review.
   const pending = usePendingReviewComments(repoPath, detail.number);
-  const reviewActions = usePullRequestReviewStore.use.actions();
+  const reviewActions = usePullRequestReviewStore((s) => s.actions);
   const removePending = reviewActions.removeMany;
   // Checked against the diff before a review goes: a comment whose line has
   // left it makes GitHub refuse the whole review. Read from the Code tab's

@@ -17,6 +17,8 @@
 // The panel's turn scope is handed text instead of a repo path: the backend
 // diffs each before/after (`diff_texts_patch`). See `use-turn-review-files.ts`.
 
+import { emitWindowEvent } from "@/lib/window-events";
+
 /** Payload of the `atlas:open-turn-diff` event. */
 export interface TurnDiffRequest {
   /** The turn to show. `ChatPanel` resolves its edits from the message log. */
@@ -25,13 +27,9 @@ export interface TurnDiffRequest {
   file?: string;
 }
 
-export const OPEN_TURN_DIFF_EVENT = "atlas:open-turn-diff";
-
 export function openTurnDiff(turnId: string, file?: string): void {
   if (!turnId) return;
-  window.dispatchEvent(
-    new CustomEvent<TurnDiffRequest>(OPEN_TURN_DIFF_EVENT, { detail: { turnId, file } }),
-  );
+  emitWindowEvent("atlas:open-turn-diff", { turnId, file });
 }
 
 /** A Windows path: `C:\…`, `C:/…`, or a UNC `\\server\…`. */

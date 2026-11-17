@@ -6,11 +6,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => undefined) }));
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async () => () => {}),
-  emit: vi.fn(async () => {}),
-}));
+vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
+vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
 const git = vi.hoisted(() => ({ branch: "main", detached: false }));
 vi.mock("@/features/git/lib/git-remote-api", () => ({
   checkoutState: vi.fn(async () => ({ branch: git.branch, detached: git.detached, dirty: false })),

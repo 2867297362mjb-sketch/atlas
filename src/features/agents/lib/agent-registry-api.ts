@@ -2,6 +2,7 @@
 // (src-tauri/src/commands/registry.rs). Mirrors agents-api.ts's style.
 
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export interface AcpRegistryEntry {
   id: string;
@@ -61,3 +62,12 @@ export const acpRegistry = {
   metadata: (agentId: string) =>
     invoke<AcpRegistryEntry | null>("acp_registry_metadata", { agentId }),
 };
+
+/** Progress of an install in flight, one event per step. */
+export function onRegistryInstallProgress(
+  handler: (progress: RegistryInstallProgress) => void,
+): Promise<UnlistenFn> {
+  return listen<RegistryInstallProgress>("atlas:registry-install:progress", (event) =>
+    handler(event.payload),
+  );
+}

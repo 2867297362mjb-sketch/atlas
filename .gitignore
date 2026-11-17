@@ -11,6 +11,9 @@ dist/
 # Staging dir for scripts/build-frontend.mjs (content-aware sync into dist/).
 dist-next/
 target/
+# Playwright's output (`bun run test:e2e`).
+test-results/
+playwright-report/
 
 # IDE
 # Per-developer editor state stays out; the shared settings and extension
@@ -104,3 +107,9 @@ __pycache__/
 
 # Built by scripts/linux/build-bwrap.sh for the AppImage; never committed.
 src-tauri/binaries/
+
+# `bun run test:coverage` report
+/coverage/
+
+# Vitest's transformed-module cache (vitest.config.ts keeps it per checkout).
+/.vitest-cache/

@@ -32,6 +32,7 @@ import {
   resolveDrawerMaxHeight,
 } from "../lib/session-drawer";
 import { TerminalPanel } from "./terminal-panel";
+import { emitWindowEvent } from "@/lib/window-events";
 
 export interface SessionTerminalDrawerProps {
   /** The chat tab the drawer sits in. */
@@ -51,7 +52,7 @@ export default function SessionTerminalDrawerBody({ tabId, scope }: SessionTermi
   // terminals stop rendering, exactly as a hidden terminal tab's do.
   const tabVisible = useIsTabVisible(tabId);
   const preferred = useSessionDrawerStore((s) => drawerHeightFor(s, scope));
-  const { setHeight, setOpen, setFocusedTab } = useSessionDrawerStore.use.actions();
+  const { setHeight, setOpen, setFocusedTab } = useSessionDrawerStore((s) => s.actions);
 
   const rootRef = useRef<HTMLElement>(null);
   const [maxHeight, setMaxHeight] = useState(() =>
@@ -65,7 +66,7 @@ export default function SessionTerminalDrawerBody({ tabId, scope }: SessionTermi
     if (hasTree || useTerminalStore.getState().tabs[terminalTabId]) return;
     setOpen(scope, false);
     if (useSessionDrawerStore.getState().focusedTab === terminalTabId) setFocusedTab(null);
-    window.dispatchEvent(new CustomEvent("atlas:chat-focus", { detail: { tabId } }));
+    emitWindowEvent("atlas:chat-focus", { tabId });
   }, [hasTree, scope, setFocusedTab, setOpen, tabId, terminalTabId]);
 
   // The tallest it may be: never more than the column can give without

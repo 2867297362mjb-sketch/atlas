@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { BUILTIN_THEMES } from "@/dev/mock-backend/fixtures/builtin-themes";
 import { resolveTheme } from "@tryatlas/design/theme";
+import { walk } from "./support/walk";
+import { expectFloor } from "./support/floor";
 
 /**
  * Every CSS custom property `src/` reads must be one something defines.
@@ -28,13 +30,8 @@ const PACKAGE_STYLES = path.join(
 );
 const themes = BUILTIN_THEMES;
 
-function walk(directory: string): string[] {
-  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-    const target = path.join(directory, entry.name);
-    if (entry.isDirectory()) return walk(target);
-    return /\.(?:css|ts|tsx)$/.test(entry.name) ? [target] : [];
-  });
-}
+/** Stylesheets declare and read variables; so do inline styles in TypeScript. */
+const CARRIES_CSS = [".css", ".ts", ".tsx"];
 
 /** CSS engine variables are supplied by the popup engine at runtime, not Atlas. */
 const CSS_VAR_ALLOWLIST: Record<string, string> = {
@@ -65,14 +62,13 @@ const CSS_VAR_ALLOWLIST: Record<string, string> = {
 
 describe("CSS custom properties", () => {
   it("covers every CSS custom property referenced under src", () => {
-    const files = walk(SRC);
+    const files = walk(SRC, CARRIES_CSS);
     const text = files.map((file) => readFileSync(file, "utf8")).join("\n");
     const references = new Set(
       [...text.matchAll(/var\((--[A-Za-z0-9_-]+)/g)].map((match) => match[1]),
     );
-    const packageCss = walk(PACKAGE_STYLES)
-      .map((file) => readFileSync(file, "utf8"))
-      .join("\n");
+    const packageFiles = walk(PACKAGE_STYLES, CARRIES_CSS);
+    const packageCss = packageFiles.map((file) => readFileSync(file, "utf8")).join("\n");
     const declared = new Set(
       [...`${text}\n${packageCss}`.matchAll(/(--[A-Za-z0-9_-]+)\s*:/g)].map((match) => match[1]),
     );
@@ -80,6 +76,12 @@ describe("CSS custom properties", () => {
       ...Object.keys(resolveTheme(themes[0], "dark").cssVars),
       ...Object.keys(themes[0].dark!.base).map((key) => `--${key}`),
     ]);
+
+    expectFloor("TypeScript and CSS files under src/", files.length, 1800);
+    expectFloor("stylesheets in @tryatlas/design's src/styles", packageFiles.length, 8);
+    expectFloor("distinct var(--…) references under src/", references.size, 110);
+    expectFloor("custom properties declared under src/ and the package", declared.size, 350);
+    expectFloor("variables the resolved theme produces", produced.size, 110);
 
     const missing = [...references]
       .filter((variable) => !produced.has(variable) && !declared.has(variable))

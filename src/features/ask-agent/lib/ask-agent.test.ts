@@ -11,6 +11,7 @@ import { agentContextMention, type AgentContext } from "./agent-context";
 import { askKeyAction, type AskKey } from "./ask-box-keys";
 import { contextAt, useAskAgentContext } from "./focused-context";
 import { renderHook } from "@testing-library/react";
+import { onWindowEvent } from "@/lib/window-events";
 
 const open = [
   { tabId: "chat-b", title: "B" },
@@ -113,12 +114,7 @@ describe("askAgent", () => {
     data: {},
   });
   const ctx: AgentContext = { kind: "error", source: "git push", message: "rejected" };
-  const listeners: Array<[string, EventListener]> = [];
-  const listen = (name: string, fn: (e: CustomEvent) => void) => {
-    const l = fn as EventListener;
-    listeners.push([name, l]);
-    window.addEventListener(name, l);
-  };
+  const offs: Array<() => void> = [];
 
   beforeEach(() => {
     resetMentionRegistryForTests();
@@ -128,7 +124,7 @@ describe("askAgent", () => {
     useChatStore.getState().actions.setDraft("chat-a", "");
   });
   afterEach(() => {
-    for (const [name, l] of listeners.splice(0)) window.removeEventListener(name, l);
+    for (const off of offs.splice(0)) off();
   });
 
   it("calls a session with no title yet untitled, not new", () => {
@@ -140,10 +136,12 @@ describe("askAgent", () => {
 
   it("sends through the session's own send path, chips and all", async () => {
     let got: ChatSendDetail | null = null;
-    listen("atlas:chat-send", (e) => {
-      got = e.detail as ChatSendDetail;
-      e.preventDefault();
-    });
+    offs.push(
+      onWindowEvent("atlas:chat-send", (detail, e) => {
+        got = detail;
+        e.preventDefault();
+      }),
+    );
     const result = await askAgent({ context: [ctx], prompt: "Fix this:", send: true });
     expect(result).toMatchObject({ tabId: "chat-a", sent: true, created: false });
     const detail = got as unknown as ChatSendDetail;
@@ -155,10 +153,12 @@ describe("askAgent", () => {
   it("drafts into the mounted composer, appending, without navigating", async () => {
     const before = useLayoutStore.getState().activeTabId;
     let got: ChatInsertDetail | null = null;
-    listen("atlas:chat-insert", (e) => {
-      got = e.detail as ChatInsertDetail;
-      e.preventDefault();
-    });
+    offs.push(
+      onWindowEvent("atlas:chat-insert", (detail, e) => {
+        got = detail;
+        e.preventDefault();
+      }),
+    );
     const result = await askAgent({ context: [ctx], send: false });
     expect(result.sent).toBe(false);
     expect(got).toMatchObject({ tabId: "chat-a", append: true });
@@ -173,8 +173,8 @@ describe("askAgent", () => {
   });
 
   it("opens a new session in the background when asked", async () => {
-    const send = vi.fn((e: CustomEvent) => e.preventDefault());
-    listen("atlas:chat-send", send);
+    const send = vi.fn((_detail: ChatSendDetail, e: Event) => e.preventDefault());
+    offs.push(onWindowEvent("atlas:chat-send", send));
     const active = useLayoutStore.getState().activeTabId;
     const result = await askAgent({ context: [ctx], send: true, target: "new" });
     expect(result.created).toBe(true);
