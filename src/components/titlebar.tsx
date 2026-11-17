@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useNavigationHint } from "@/features/keybindings/lib/use-navigation-hint";
 import { useActionShortcut } from "@/features/keybindings/lib/use-action-shortcut";
 import { Popover } from "@base-ui/react/popover";
 import { useAppStore } from "@/features/app/stores/app-store";
@@ -607,6 +608,7 @@ export function DevBadge({ className }: { className?: string }) {
 /** Docks or hides the sidebar. While it is hidden, resting on the toggle
  *  peeks it (`sidebar-peek.ts`); a click then docks it. */
 function SidebarToggle({ flush = false, className }: { flush?: boolean; className?: string } = {}) {
+  const navigationHint = useNavigationHint();
   const hint = useActionShortcut("workspace.toggleSidebar")?.label;
   const sidebarOpen = useProjectStore((s) => s.sidebarOpen);
   const { toggleSidebar } = useProjectStore((s) => s.actions);
@@ -615,6 +617,7 @@ function SidebarToggle({ flush = false, className }: { flush?: boolean; classNam
   return (
     <HintItem label={hint ? `${label} (${hint})` : label} className={className}>
       <button
+        {...navigationHint(["workspace.toggleSidebar"])}
         onClick={() => {
           endPeek();
           toggleSidebar();
