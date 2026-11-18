@@ -31,7 +31,8 @@ vi.mock("@/features/agents/lib/agent-meta", () => ({
   catalogEntry: (id: string) => catalog[id] ?? null,
 }));
 
-const { isAuthError, canSignIn, errInfo, bindFailureAction } = await import("./agent-signin");
+const { isAuthError, isAtlasSignedOut, canSignIn, errInfo, bindFailureAction } =
+  await import("./agent-signin");
 
 beforeEach(() => {
   catalog = {};
@@ -134,6 +135,36 @@ describe("no-models token parity with Rust", () => {
     expect(
       bindFailureAction({ agentType: "atlas-agent", err: sentence![1], alreadyAttempted: false }),
     ).toBe("silent");
+  });
+});
+
+describe("the native agent while signed out of Atlas", () => {
+  // The reason the mint gives (`AuthFailure::NoCredential` in
+  // `src-tauri/src/commands/agents.rs`), read from the Rust so a reword fails
+  // here instead of bringing back an error toast for a signed-out user.
+  const rust = readFileSync("src-tauri/src/commands/agents.rs", "utf8");
+  const reason = rust.match(/AuthFailure::NoCredential => "([^"]+)"/)?.[1];
+  const sentence = `Atlas Agent can't load its model list (not authenticated: ${reason}). Check your connection and try again.`;
+
+  beforeEach(() => {
+    catalog = { "atlas-agent": { kind: "native", login: null } };
+  });
+
+  it("offers Atlas sign-in instead of reporting", () => {
+    expect(reason, "NoCredential reason not found in agents.rs").toBeTruthy();
+    for (const err of [sentence, { message: sentence, kind: "auth" }]) {
+      expect(bindFailureAction({ agentType: "atlas-agent", err, alreadyAttempted: false })).toBe(
+        "atlas-sign-in",
+      );
+    }
+    expect(isAtlasSignedOut(sentence)).toBe(true);
+  });
+
+  it("is the native agent's case only", () => {
+    catalog = { autohand: { kind: "external", login: null, installed: true } };
+    expect(
+      bindFailureAction({ agentType: "autohand", err: sentence, alreadyAttempted: false }),
+    ).not.toBe("atlas-sign-in");
   });
 });
 

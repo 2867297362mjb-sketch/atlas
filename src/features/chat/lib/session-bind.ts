@@ -28,6 +28,7 @@ import type { AgentInfo } from "@/types/acp";
 import { agentTypeFromPluginId, CLAUDE_PERMISSION_MODES, pluginIdForAgent } from "@/types/agent";
 import { sessionConfiguration, useChatStore } from "../stores/chat-store";
 import { bindFailureAction, errInfo, promptSignIn } from "./agent-signin";
+import { promptAtlasSignIn } from "./atlas-sign-in-prompt";
 import { agents, ensureAgent, resetAgent } from "./agents-api";
 import { KNOBS, type SessionConfiguration } from "./session-configuration";
 import { projectPathForTab } from "./tab-project";
@@ -84,6 +85,8 @@ export interface SessionBindDeps {
     signIn: typeof promptSignIn;
     /** The same offer as a banner, for a user who is looking elsewhere. */
     signInBanner: (tabId: string, agentType: string) => void;
+    /** Offer Atlas's own sign-in (`promptAtlasSignIn`). */
+    atlasSignIn: () => void;
   };
 }
 
@@ -520,6 +523,12 @@ export function createSessionBind(deps: SessionBindDeps): SessionBind {
               });
               // The dialog is up; if the user is away it is also a banner.
               deps.report.signInBanner(tabId, at);
+            } else if (action === "atlas-sign-in") {
+              // Signed out of Atlas: the native agent cannot fetch its model
+              // list without an Atlas token. Not an error — an automatic bind
+              // (opening a tab, focus) says nothing; a send that is now stuck
+              // in the queue gets the one thing that unblocks it.
+              if (waiting) deps.report.atlasSignIn();
             } else if (action === "silent") {
               // The composer is already showing why (`AiGrantBar`, and "No
               // models" in the picker). A toast would be a third copy of a
@@ -607,5 +616,6 @@ export const sessionBind = createSessionBind({
     error: (message) => void toast.error(message),
     signIn: (agentType, opts) => promptSignIn(agentType, opts),
     signInBanner: (tabId, agentType) => notifyAgentSignInRequired(tabId, agentType),
+    atlasSignIn: () => promptAtlasSignIn(),
   },
 });
