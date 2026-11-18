@@ -4,12 +4,15 @@
 // are in the DOM, and where the reader is left when that set changes.
 //
 // happy-dom lays nothing out, so the geometry is supplied: every row is
-// `ROW_H` tall, a row's `offsetTop` is its position among the mounted rows,
-// and the scroller clamps `scrollTop` the way a browser does. That is enough
-// for every rule here, because the hook only ever reads `scrollTop`,
-// `offsetTop` and the two heights. The ResizeObserver is stood in for the same
-// way: `settle()` is its report (on first observing, and whenever the mounted
-// rows change the content's height) followed by the frame it schedules.
+// `ROW_H` tall, a gap's spacer is as tall as its style says, an element's
+// `offsetTop` is the height of the siblings before it, and the scroller clamps
+// `scrollTop` the way a browser does. That is enough for every rule here,
+// because the hook only ever reads `scrollTop`, `offsetTop`, the two heights
+// and (to measure turns it swaps out) bounding boxes. The ResizeObserver is
+// stood in for the same way: `settle()` is its report (on first observing, and
+// whenever the mounted rows change the content's height) followed by the
+// frame it schedules. So is the IntersectionObserver: `intersect()` is its
+// report of which spacers are within 6000px of the viewport.
 //
 // The numbers are restated rather than imported: each is a decision about what
 // the reader waits through, and changing one should mean changing it twice.
@@ -19,6 +22,7 @@ import { useRef } from "react";
 import { act, cleanup, render } from "@testing-library/react";
 import { RowKind, TOP_BLUR_RAMP, type Row } from "@tryatlas/design/session";
 import { markScrollHot } from "@/lib/scroll-hot";
+import type { Segment } from "../lib/turn-rows";
 import {
   SCROLL_BOTTOM,
   useTranscriptWindow,
@@ -29,7 +33,16 @@ import {
 const WINDOW_INITIAL = 80;
 const WINDOW_CHUNK = 40;
 const IDLE_CHUNK = 120;
-const MAX_IDLE_FILL = 4000;
+/** How much transcript the idle fill keeps above the reader. */
+const IDLE_FILL_PX = 10_000;
+/** Turns further than this from the viewport are swapped out when idle. */
+const UNFILL_PX = 20_000;
+/** A spacer this near the viewport turns back into rows. */
+const REFILL_PX = 6000;
+/** Turns a refill mounts at a time. */
+const REFILL_TURNS = 8;
+/** How long after the last scroll before the window acts on where it is. */
+const QUIET_MS = 600;
 /** `use-transcript-scroll.ts`: how near the top a scroll grows the window. */
 const GROW_MARGIN = 2200;
 const ANCHOR_GAP = 24;
@@ -42,15 +55,48 @@ const VIEW_H = 600;
 
 const scrollTops = new WeakMap<Element, number>();
 const isScroller = (el: Element) => el.hasAttribute("data-scroller");
-const scrollHeightOf = (el: Element) => el.querySelectorAll("[data-row-id]").length * ROW_H;
-const GEOMETRY = ["offsetTop", "scrollHeight", "clientHeight", "scrollTop"] as const;
+/** A content child's height: a row's, a spacer's own, or nothing. */
+const heightOf = (el: Element) =>
+  el.hasAttribute("data-row-id")
+    ? ROW_H
+    : el.hasAttribute("data-gap")
+      ? parseFloat((el as HTMLElement).style.height) || 0
+      : 0;
+const scrollHeightOf = (el: Element) => {
+  const content = el.firstElementChild;
+  return content ? [...content.children].reduce((sum, child) => sum + heightOf(child), 0) : 0;
+};
+const offsetTopOf = (el: Element) => {
+  let top = 0;
+  for (let prev = el.previousElementSibling; prev; prev = prev.previousElementSibling) {
+    top += heightOf(prev);
+  }
+  return top;
+};
+const GEOMETRY = [
+  "offsetTop",
+  "scrollHeight",
+  "clientHeight",
+  "scrollTop",
+  "getBoundingClientRect",
+] as const;
 
 function installGeometry() {
   Object.defineProperty(HTMLElement.prototype, "offsetTop", {
     configurable: true,
     get(this: HTMLElement) {
-      const siblings = this.parentElement?.children;
-      return siblings ? Array.prototype.indexOf.call(siblings, this) * ROW_H : 0;
+      return this.parentElement ? offsetTopOf(this) : 0;
+    },
+  });
+  // The scroller sits at the top of the page; everything in it is where its
+  // offset puts it, less how far the scroller has scrolled.
+  Object.defineProperty(HTMLElement.prototype, "getBoundingClientRect", {
+    configurable: true,
+    value(this: HTMLElement) {
+      if (isScroller(this)) return DOMRect.fromRect({ x: 0, y: 0, width: 800, height: VIEW_H });
+      const scroller = this.closest("[data-scroller]");
+      const top = offsetTopOf(this) - (scroller ? (scrollTops.get(scroller) ?? 0) : 0);
+      return DOMRect.fromRect({ x: 0, y: top, width: 800, height: heightOf(this) });
     },
   });
   Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
@@ -87,6 +133,8 @@ function removeGeometry() {
 let frames: FrameRequestCallback[] = [];
 let idles: { cb: () => void; timeout: number | undefined }[] = [];
 let resizes: ResizeObserverCallback[] = [];
+/** The live IntersectionObserver, if the hook has one: what it watches. */
+let intersection: { cb: IntersectionObserverCallback; targets: Set<Element> } | null = null;
 let now = 0;
 // `scroll-hot.ts` keeps "the reader is mid-gesture until T" in module state,
 // so the clock only ever moves forward, across tests too.
@@ -110,11 +158,34 @@ const settle = () =>
 const rest = () => {
   now += 200;
 };
+/** Past the quiet period after a scroll, and every idle slice it asked for. */
+const quiet = async () => {
+  rest();
+  await act(() => vi.advanceTimersByTimeAsync(QUIET_MS));
+  while (idles.length > 0) await idleSlice();
+};
+/** The observer reports which spacers are within 6000px of the viewport, the
+ *  way it does when it starts watching them. One report; a refill's commit
+ *  re-observes, and `intersect()` again is the next report. */
+const intersect = () =>
+  act(() => {
+    if (!intersection) return;
+    const entries = [...intersection.targets].map((target) => {
+      const box = target.getBoundingClientRect();
+      return {
+        target,
+        boundingClientRect: box,
+        isIntersecting: box.bottom >= -REFILL_PX && box.top <= VIEW_H + REFILL_PX,
+      } as unknown as IntersectionObserverEntry;
+    });
+    intersection.cb(entries, {} as IntersectionObserver);
+  });
 
 beforeEach(() => {
   frames = [];
   idles = [];
   resizes = [];
+  intersection = null;
   now = clock += 100_000;
   installGeometry();
   vi.useFakeTimers();
@@ -143,6 +214,25 @@ beforeEach(() => {
   vi.stubGlobal("cancelIdleCallback", () => {
     idles = [];
   });
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class {
+      private readonly state: { cb: IntersectionObserverCallback; targets: Set<Element> };
+      constructor(cb: IntersectionObserverCallback) {
+        this.state = { cb, targets: new Set() };
+        intersection = this.state;
+      }
+      observe(target: Element) {
+        this.state.targets.add(target);
+      }
+      unobserve(target: Element) {
+        this.state.targets.delete(target);
+      }
+      disconnect() {
+        if (intersection === this.state) intersection = null;
+      }
+    },
+  );
 });
 afterEach(() => {
   cleanup();
@@ -169,6 +259,19 @@ function longAnswer(count: number, prefix = "a"): Row[] {
     row(`${prefix}${i}`, i === 0 ? RowKind.User : RowKind.Prose, "…"),
   );
 }
+/** The turns of `rows` as the projection groups them: each user row starts
+ *  one. Only what the window reads of a segment is filled in. */
+function turnsOf(rows: Row[]): Segment[] {
+  const out: Segment[] = [];
+  rows.forEach((r, i) => {
+    if (r.kind === RowKind.User || out.length === 0) {
+      out.push({ id: `t:${r.id}`, offset: i, rows: [r] } as unknown as Segment);
+    } else {
+      out[out.length - 1].rows.push(r);
+    }
+  });
+  return out;
+}
 
 // ── The transcript, as far as the window is concerned ───────────────────────
 
@@ -184,15 +287,31 @@ function Transcript(props: Props) {
   const contentRef = useRef<HTMLDivElement>(null);
   const latest = useTranscriptWindow({ ...props, scrollRef, contentRef });
   capture(latest);
+  const rowView = (r: Row) => (
+    <div key={r.id} data-row-id={r.id}>
+      <div />
+    </div>
+  );
+  const views: React.ReactElement[] = [];
+  if (!props.segments) {
+    views.push(...props.rows.slice(latest.safeStart).map(rowView));
+  } else {
+    // What `transcript.tsx` renders: rows by turn, a spacer for each gap.
+    for (let s = 0; s < props.segments.length; s++) {
+      const gap = latest.gapAt.get(s);
+      if (gap) {
+        views.push(<div key={gap.key} data-gap={gap.key} style={{ height: gap.height }} />);
+        s = gap.to - 1;
+        continue;
+      }
+      const segment = props.segments[s];
+      const from = Math.max(0, latest.safeStart - segment.offset);
+      views.push(...segment.rows.slice(from).map(rowView));
+    }
+  }
   return (
     <div ref={scrollRef} data-scroller="">
-      <div ref={contentRef}>
-        {props.rows.slice(latest.safeStart).map((r) => (
-          <div key={r.id} data-row-id={r.id}>
-            <div />
-          </div>
-        ))}
-      </div>
+      <div ref={contentRef}>{views}</div>
     </div>
   );
 }
@@ -300,16 +419,33 @@ describe("the window a session opens with", () => {
 });
 
 describe("filling the window while idle", () => {
-  it("grows 120 rows per idle slice until the whole thread is mounted, then stops asking", async () => {
-    await mount({ rows: thread(300) });
+  /** Put the reader `top` px down without a gesture of theirs. */
+  const at = (t: { scroller: HTMLElement }, top: number) => scrollTops.set(t.scroller, top);
+
+  it("grows while less than 10,000px sits above the reader, then stops: not the whole thread", async () => {
+    const t = await mount({ rows: thread(300) });
     expect(win.safeStart).toBe(220);
     expect(idles).toHaveLength(1);
     expect(idles[0]!.timeout).toBe(400);
 
+    // Landed at the bottom of 80 rows: 7,400px sit above the reader.
     await idleSlice();
     expect(win.safeStart).toBe(220 - IDLE_CHUNK);
+    expect(t.scroller.scrollTop).toBe(7_400 + IDLE_CHUNK * ROW_H);
+    // 19,400px now: the next slice asks for nothing.
     await idleSlice();
-    expect(win.safeStart).toBe(0);
+    expect(win.safeStart).toBe(220 - IDLE_CHUNK);
+    expect(idles).toHaveLength(0);
+  });
+
+  it("grows 120 rows per idle slice while less than 10,000px sits above the reader", async () => {
+    const t = await mount({ rows: thread(300) });
+    await t.scrollTo(3_040);
+    await quiet();
+    // One slice put 12000px above the reader, which is enough.
+    expect(win.safeStart).toBe(220 - IDLE_CHUNK);
+    expect(t.scroller.scrollTop).toBe(3_040 + IDLE_CHUNK * ROW_H);
+    expect(t.scroller.scrollTop).toBeGreaterThanOrEqual(IDLE_FILL_PX);
     expect(idles).toHaveLength(0);
   });
 
@@ -320,25 +456,25 @@ describe("filling the window while idle", () => {
     // r251 is the first row at or below the top edge: 60px below it.
     expect(t.offsetOf("r251")).toBe(60);
 
-    await idleSlice();
+    await quiet();
     expect(win.safeStart).toBe(100);
-    expect(t.scroller.scrollTop).toBe(3_040 + IDLE_CHUNK * ROW_H);
     expect(t.offsetOf("r251")).toBe(60);
 
-    await idleSlice();
+    // Up again, still short of the 2200px scroll grow: the next slice.
+    await t.scrollTo(3_040);
+    const anchor = "r131";
+    expect(t.offsetOf(anchor)).toBe(60);
+    await quiet();
     expect(win.safeStart).toBe(0);
-    expect(t.offsetOf("r251")).toBe(60);
+    expect(t.offsetOf(anchor)).toBe(60);
   });
 
-  it("is left to scrolling above 4000 rows", async () => {
-    await mount({ rows: thread(MAX_IDLE_FILL) });
+  it("fills a thread of any length, near the reader", async () => {
+    const t = await mount({ rows: thread(4_002) });
     expect(idles).toHaveLength(1);
-    cleanup();
-    idles = [];
-
-    await mount({ rows: thread(MAX_IDLE_FILL + 2) });
-    expect(idles).toHaveLength(0);
-    expect(win.safeStart).toBe(MAX_IDLE_FILL + 2 - WINDOW_INITIAL);
+    await t.scrollTo(3_000);
+    await quiet();
+    expect(win.safeStart).toBe(4_002 - WINDOW_INITIAL - IDLE_CHUNK);
   });
 
   it("does not run for a hidden tab, and resumes when it shows", async () => {
@@ -348,12 +484,14 @@ describe("filling the window while idle", () => {
 
     await t.update({ live: true });
     expect(idles).toHaveLength(1);
+    at(t, 3_000);
     await idleSlice();
     expect(win.safeStart).toBe(100);
   });
 
   it("backs off 180 ms while the reader is mid-fling", async () => {
-    await mount({ rows: thread(300) });
+    const t = await mount({ rows: thread(300) });
+    at(t, 3_000);
     markScrollHot();
     await idleSlice();
     expect(win.safeStart).toBe(220);
@@ -368,8 +506,8 @@ describe("filling the window while idle", () => {
 });
 
 describe("growing on scroll", () => {
-  // Long enough that the idle fill stays out of it.
-  const rows = thread(MAX_IDLE_FILL + 100);
+  // Long enough that the idle fill (never run here) has room either way.
+  const rows = thread(4_100);
   const START = rows.length - WINDOW_INITIAL;
 
   it("grows 40 rows once the reader is within 2200px of the top, not a pixel sooner", async () => {
@@ -498,10 +636,9 @@ describe("a streaming append", () => {
 });
 
 describe("switching sessions", () => {
-  it("resets a fully grown window to the new session's last 80 rows and its last user turn", async () => {
+  it("resets a grown window to the new session's last 80 rows and its last user turn", async () => {
     const t = await mount({ rows: thread(300) });
-    await idleSlice();
-    await idleSlice();
+    act(() => win.reveal(0));
     expect(win.safeStart).toBe(0);
 
     const next = [...thread(140, "q"), ...longAnswer(60, "b")];
@@ -543,7 +680,8 @@ describe("closing a transcript and coming back", () => {
     const rows = thread(300);
     const cacheKey = freshKey();
     const first = await mount({ rows, cacheKey });
-    await idleSlice();
+    await first.scrollTo(3_040);
+    await quiet();
     expect(win.safeStart).toBe(100);
     await first.scrollTo(9_000);
     first.unmount();
@@ -598,5 +736,133 @@ describe("holding the landed row while the content settles", () => {
     drift(t.scroller, 10);
     await settle();
     expect(t.offsetOf("a0")).toBe(ANCHOR_GAP - 10);
+  });
+});
+
+describe("swapping far turns for a spacer, and back", () => {
+  // 200 turns of a prompt and its answer: 400 rows, 40,000px.
+  const rows = thread(400);
+  const segments = turnsOf(rows);
+  /** Past the four seconds in which the landed row is held. */
+  const afterTheLandingSettles = () => {
+    now += STICKY_SETTLE_MS + 1;
+  };
+
+  /** The whole thread mounted, the landing settled. */
+  async function wholeThread(patch: Partial<Props> = {}) {
+    const t = await mount({ rows, segments, ...patch });
+    act(() => win.reveal(0));
+    await settle();
+    afterTheLandingSettles();
+    expect(t.mounted()).toHaveLength(400);
+    return t;
+  }
+
+  it("swaps the turns wholly 20,000px above the reader for one spacer of their height, and nothing moves", async () => {
+    const t = await wholeThread();
+    await t.scrollTo(30_000);
+    const before = t.offsetOf("r310");
+    await quiet();
+
+    // 10,000px is 20,000 above the reader. Turn 49 ends exactly there, so it
+    // is not wholly beyond it: turns 0–48 go.
+    expect(30_000 - UNFILL_PX).toBe(100 * ROW_H);
+    const gap = win.gapAt.get(0)!;
+    expect(gap.from).toBe(0);
+    expect(gap.to).toBe(49);
+    expect(gap.height).toBe(98 * ROW_H);
+    expect(t.mounted()).toHaveLength(400 - 98);
+    expect(t.scroller.scrollTop).toBe(30_000);
+    expect(t.offsetOf("r310")).toBe(before);
+  });
+
+  it("swaps nothing out of a window of 160 rows or fewer", async () => {
+    const t = await mount({ rows: thread(160), segments: turnsOf(thread(160)) });
+    act(() => win.reveal(0));
+    await settle();
+    afterTheLandingSettles();
+    await t.scrollTo(t.maxScroll());
+    await quiet();
+    expect(win.gapAt.size).toBe(0);
+  });
+
+  it("turns a spacer back into rows from its near end as the reader comes within 6,000px", async () => {
+    const t = await wholeThread();
+    await t.scrollTo(30_000);
+    await quiet();
+    expect(win.gapAt.get(0)!.to).toBe(49);
+
+    // The spacer ends at 9,800px; 16,000px puts it 6,200px above: not yet.
+    await t.scrollTo(16_000);
+    await intersect();
+    expect(win.gapAt.get(0)!.to).toBe(49);
+
+    await t.scrollTo(15_700);
+    const before = t.offsetOf("r160");
+    await intersect();
+    // Eight turns, the ones nearest the reader, are rows again.
+    expect(win.gapAt.get(0)!.to).toBe(49 - REFILL_TURNS);
+    expect(t.mounted()).toContain(`r${(49 - REFILL_TURNS) * 2}`);
+    expect(t.offsetOf("r160")).toBe(before);
+  });
+
+  it("turns back the turns at the viewport when a fling lands inside a spacer", async () => {
+    const t = await wholeThread();
+    await t.scrollTo(30_000);
+    await quiet();
+    // Straight into the middle of the spacer, before anything refilled.
+    scrollTops.set(t.scroller, 5_050);
+    await intersect();
+    // 5,050px into it is turn 25's: from two before it, eight turns.
+    expect(win.gapAt.get(0)!.to).toBe(23);
+    const after = [...win.gapAt.values()][1]!;
+    expect(after.from).toBe(33);
+    expect(t.mounted()).toContain("r50");
+  });
+
+  it("opens the gap a jump lands in, around its target", async () => {
+    const t = await wholeThread();
+    await t.scrollTo(30_000);
+    await quiet();
+    act(() => win.reveal(50));
+    expect(win.gapAt.get(0)!.to).toBe(23);
+    expect([...win.gapAt.values()][1]!.from).toBe(33);
+    expect(t.mounted()).toContain("r50");
+  });
+
+  it("never swaps the live turn out", async () => {
+    const t = await wholeThread({ turnInProgress: true });
+    await t.scrollTo(0);
+    await quiet();
+    const gaps = [...win.gapAt.values()];
+    expect(gaps).toHaveLength(1);
+    // Everything from 20,600px down, but the last turn.
+    expect(gaps[0]!.from).toBe(104);
+    expect(gaps[0]!.to).toBe(segments.length - 1);
+    expect(t.mounted()).toEqual(expect.arrayContaining(["r398", "r399"]));
+  });
+
+  it("keeps its gaps when the transcript closes and comes back", async () => {
+    const cacheKey = freshKey();
+    const first = await wholeThread({ cacheKey });
+    await first.scrollTo(30_000);
+    await quiet();
+    expect(win.gapAt.get(0)!.to).toBe(49);
+    first.unmount();
+
+    const again = await mount({ rows, segments, cacheKey });
+    expect(win.safeStart).toBe(0);
+    expect(win.gapAt.get(0)!.to).toBe(49);
+    expect(again.scroller.scrollTop).toBe(30_000);
+  });
+
+  it("drops its gaps when the thread shrinks under it", async () => {
+    const t = await wholeThread();
+    await t.scrollTo(30_000);
+    await quiet();
+    const fewer = thread(4, "n");
+    await t.update({ rows: fewer, segments: turnsOf(fewer) });
+    expect(win.gapAt.size).toBe(0);
+    expect(t.mounted()).toEqual(["n0", "n1", "n2", "n3"]);
   });
 });

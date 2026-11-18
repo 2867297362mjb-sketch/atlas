@@ -427,6 +427,7 @@ mod tests {
             arguments: args,
             result: None,
             raw_output: None,
+            raw_output_omitted_bytes: None,
             content_blocks: Vec::new(),
             parent_tool_call_id: None,
             started_at_ms: None,

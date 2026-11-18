@@ -22,6 +22,9 @@ import type { SnapshotLive } from "../stores/chat-store";
  */
 export function snapshotMessageToWire(m: SessionMessage) {
   return {
+    // Positional (`msg-{entry}`) and stable for the session, so a repaint of
+    // the same conversation keeps every unchanged row's key.
+    id: m.id,
     role: m.role === "system" ? ("system" as const) : m.role,
     content: m.content,
     timestamp: m.timestamp,

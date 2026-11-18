@@ -54,10 +54,12 @@ async function respawnAndRebind(tabId: string): Promise<boolean> {
     } else {
       key = (await agents.newSession(agent.agent_id, cwd)).key;
     }
-    // `session/load` replays the whole conversation, and each replayed
-    // message arrives as an append — onto a tab that is still showing it, so
-    // every earlier message came back a second time. Repaint from the
-    // reloaded thread, as opening a history row does (`resume-session.ts`).
+    // `session/load` replays the whole conversation into the thread. The
+    // stream does not announce that replay (`attach_settled` in Rust): it is
+    // history, and this repaint from the reloaded thread is how the tab takes
+    // it, as opening a history row does (`resume-session.ts`). Each replayed
+    // message used to arrive as an append as well, onto a tab still showing
+    // it, so every earlier message came back a second time.
     // An agent that resumed without replaying hands back an empty thread;
     // then what is on screen is the record, and stays.
     if (loaded) {

@@ -266,6 +266,7 @@ pub fn tool_call(call: &ThreadToolCall, thread: &atlas_acp_thread::AcpThread) ->
 pub fn tool_call_meta(call: &ThreadToolCall) -> ToolCall {
     let title = call.label.clone();
     let kind = tool_kind_token(call.kind).to_string();
+    let (raw_output, raw_output_omitted_bytes) = wire_raw_output(call);
     ToolCall {
         id: call.id.to_string(),
         tool_name: call
@@ -289,7 +290,8 @@ pub fn tool_call_meta(call: &ThreadToolCall) -> ToolCall {
             .iter()
             .map(|location| serde_json::to_value(location).unwrap_or(serde_json::Value::Null))
             .collect(),
-        raw_output: call.raw_output.clone(),
+        raw_output,
+        raw_output_omitted_bytes,
         content_blocks: content_blocks(&call.content),
         parent_tool_call_id: call
             .parent_tool_call_id
@@ -297,6 +299,111 @@ pub fn tool_call_meta(call: &ThreadToolCall) -> ToolCall {
             .map(std::string::ToString::to_string),
         started_at_ms: Some(call.started_at.timestamp_millis()),
         ended_at_ms: call.ended_at.map(|at| at.timestamp_millis()),
+    }
+}
+
+/// A tool call reduced to what names it: id, name, title, kind, status, its
+/// parent and its times. No input, result, output or blocks, which are what
+/// grow with a call's work.
+pub fn tool_call_outline(call: &ToolCall) -> ToolCall {
+    ToolCall {
+        id: call.id.clone(),
+        tool_name: call.tool_name.clone(),
+        title: call.title.clone(),
+        kind: call.kind.clone(),
+        status: call.status,
+        arguments: serde_json::Value::Null,
+        result: None,
+        locations: Vec::new(),
+        raw_output: None,
+        raw_output_omitted_bytes: None,
+        content_blocks: Vec::new(),
+        parent_tool_call_id: call.parent_tool_call_id.clone(),
+        started_at_ms: call.started_at_ms,
+        ended_at_ms: call.ended_at_ms,
+    }
+}
+
+/// Largest `rawOutput` the wire carries for a call whose `content` already
+/// says what happened, in bytes of JSON. A few kilobytes keeps every
+/// structured status and small result an agent sends, and nothing the size of
+/// a file read, a command's output or an image.
+pub const RAW_OUTPUT_WIRE_LIMIT: usize = 8 * 1024;
+
+/// Largest `rawOutput` the wire carries for a call nothing else describes: one
+/// that failed, or whose content has no text and no structured block (codex-acp
+/// puts an MCP tool's whole result in `rawOutput` alone). Still bounded,
+/// because an image-only result (a screenshot) is exactly that shape, and its
+/// base64 is what made a long session's reopen ship ~93 MB nobody read.
+pub const RAW_OUTPUT_SOLE_LIMIT: usize = 64 * 1024;
+
+/// The `rawOutput` to put on the wire, and the size of one left off.
+///
+/// See [`ToolCall::raw_output`] for the rule. Measured, not serialized: the
+/// walk sums string lengths, so a call that streams output pays a pass over
+/// its result per chunk rather than a deep clone of it, which is what carrying
+/// the field verbatim cost.
+pub fn wire_raw_output(call: &ThreadToolCall) -> (Option<serde_json::Value>, Option<u64>) {
+    let Some(raw) = call.raw_output.as_ref() else {
+        return (None, None);
+    };
+    let size = json_len(raw);
+    let limit = if raw_output_is_sole_account(call) {
+        RAW_OUTPUT_SOLE_LIMIT
+    } else {
+        RAW_OUTPUT_WIRE_LIMIT
+    };
+    if size <= limit {
+        (Some(raw.clone()), None)
+    } else {
+        (None, Some(size as u64))
+    }
+}
+
+/// Whether `rawOutput` is the only account of this call's outcome on the wire.
+fn raw_output_is_sole_account(call: &ThreadToolCall) -> bool {
+    let failed = matches!(
+        call.status,
+        ThreadToolCallStatus::Failed
+            | ThreadToolCallStatus::Rejected
+            | ThreadToolCallStatus::Canceled
+    );
+    failed
+        || call.content.iter().all(|block| match block {
+            ToolCallContent::ContentBlock(block) => block_str(block).is_empty(),
+            ToolCallContent::Diff(_) | ToolCallContent::Terminal(_) => false,
+        })
+}
+
+/// About how many bytes `value` serializes to as JSON. Exact for strings
+/// without escapes; numbers count as their typical width. Good enough to
+/// compare against a limit and to tell a reader how much was left off.
+pub fn json_len(value: &serde_json::Value) -> usize {
+    match value {
+        serde_json::Value::Null => 4,
+        serde_json::Value::Bool(true) => 4,
+        serde_json::Value::Bool(false) => 5,
+        serde_json::Value::Number(number) => {
+            if number.is_f64() {
+                12
+            } else {
+                // Digits, plus a sign; an i64 needs at most 20.
+                number
+                    .as_u64()
+                    .map_or(20, |n| n.checked_ilog10().map_or(1, |d| d as usize + 1))
+            }
+        }
+        serde_json::Value::String(text) => text.len() + 2,
+        serde_json::Value::Array(items) => {
+            2 + items.len().saturating_sub(1) + items.iter().map(json_len).sum::<usize>()
+        }
+        serde_json::Value::Object(fields) => {
+            2 + fields.len().saturating_sub(1)
+                + fields
+                    .iter()
+                    .map(|(key, value)| key.len() + 3 + json_len(value))
+                    .sum::<usize>()
+        }
     }
 }
 

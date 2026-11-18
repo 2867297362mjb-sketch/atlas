@@ -296,6 +296,7 @@ mod tests {
                     serde_json::json!({ "path": "src/bar.rs" }),
                 ],
                 raw_output: None,
+                raw_output_omitted_bytes: None,
                 content_blocks: vec![],
                 parent_tool_call_id: None,
                 started_at_ms: None,
@@ -392,6 +393,7 @@ mod tests {
                     .map(|p| serde_json::json!({ "path": p }))
                     .collect(),
                 raw_output: None,
+                raw_output_omitted_bytes: None,
                 content_blocks: vec![],
                 parent_tool_call_id: None,
                 started_at_ms: None,

@@ -30,7 +30,8 @@ export interface TranscriptJumpsInput {
   projection: Projection;
   rows: Row[];
   scrollRef: RefObject<HTMLDivElement | null>;
-  setStartIndex: Dispatch<SetStateAction<number>>;
+  /** Mount row `index` and the turns around it (`useTranscriptWindow`). */
+  reveal: (index: number) => void;
   setExpandedTurns: Dispatch<SetStateAction<ReadonlySet<string>>>;
   pendingAnchorRef: RefObject<string | null>;
   pendingHighlightRef: RefObject<string[] | null>;
@@ -44,7 +45,7 @@ export function useTranscriptJumps({
   projection,
   rows,
   scrollRef,
-  setStartIndex,
+  reveal,
   setExpandedTurns,
   pendingAnchorRef,
   pendingHighlightRef,
@@ -66,8 +67,8 @@ export function useTranscriptJumps({
   // A jump has two ways of arriving before it can be honoured, and both used
   // to be silently dropped:
   //
-  //  * The target row is ALREADY in the window. `setStartIndex` with an
-  //    unchanged value schedules no render, so the anchor layout effect never
+  //  * The target row is ALREADY in the window. A `reveal` that changes
+  //    nothing schedules no render, so the anchor layout effect never
   //    ran and nothing moved. `jumpTick` exists purely to force that render.
   //  * The caller dispatched in the same tick as a change to the message
   //    list, so the projection
@@ -88,13 +89,13 @@ export function useTranscriptJumps({
     const target = rowsRef.current.findIndex((r) => r.id === rowId);
     if (target < 0) return;
     pendingJumpRef.current = null;
-    // Widen the window first if the target is above it, then anchor once the
-    // row exists. Same settle-over-renders shape the timeline uses for
-    // jump-to-Checkpoint.
-    setStartIndex((i) => (target < i ? Math.max(0, target - 10) : i));
+    // Widen the window first if the target is above it (or open the gap it
+    // was swapped into), then anchor once the row exists. Same
+    // settle-over-renders shape the timeline uses for jump-to-Checkpoint.
+    reveal(target);
     pendingAnchorRef.current = rowId;
     setJumpTick((n) => n + 1);
-  }, []);
+  }, [reveal]);
 
   const scrollToMessage = useCallback(
     (messageIndex: number) => {

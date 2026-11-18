@@ -219,9 +219,58 @@ impl DeltaProjector {
     /// round, and because ending a task on a dead channel is right regardless.
     pub fn attach(self: &Arc<Self>, agent_id: AgentId, thread: AcpThreadHandle) {
         let session_id = lock_thread(&thread).session_id().clone();
-        let Some(mut events) = self.register(agent_id, thread) else {
+        let Some(events) = self.register(agent_id, thread) else {
             return;
         };
+        self.drain(session_id, events);
+    }
+
+    /// [`Self::attach`], for a thread that already holds a conversation the
+    /// stream must not repeat: the history an agent's `session/load` just
+    /// replayed into it.
+    ///
+    /// Every reader of a reopened session takes that history from a snapshot,
+    /// whole and with an exact `as_of_seq`. Announcing it entry by entry as
+    /// well delivered the same conversation twice: thousands of deltas, each a
+    /// window event carrying a full tool call, ahead of the snapshot that
+    /// replaced them all, and on a bound tab they painted a half-loaded
+    /// transcript first. So the mirror is caught up to the thread silently,
+    /// under the locks a snapshot takes, before the drain starts. The backlog
+    /// the drain then works through finds no entry it has not seen, and only
+    /// what happens from here on is announced.
+    ///
+    /// For a new session the thread is empty and this is [`Self::attach`].
+    pub fn attach_settled(self: &Arc<Self>, agent_id: AgentId, thread: AcpThreadHandle) {
+        let session_id = lock_thread(&thread).session_id().clone();
+        let Some(events) = self.register(agent_id, thread) else {
+            return;
+        };
+        self.adopt(&session_id);
+        self.drain(session_id, events);
+    }
+
+    /// Mirror everything the thread holds now without announcing any of it,
+    /// and without numbering it: the next delta is still the session's next
+    /// `seq`.
+    pub fn adopt(&self, session_id: &acp::SessionId) {
+        let Some(slot) = self.session(session_id) else {
+            return;
+        };
+        let _emit = lock(&slot.emit);
+        let mut projection = lock(&slot.projection);
+        drop(projection.catch_up());
+        // A replayed elicitation or permission prompt is history too: nothing
+        // will answer it, so it gets no route.
+        projection.new_permissions.clear();
+        projection.new_elicitations.clear();
+        projection.adopted = projection.entries.len();
+    }
+
+    fn drain(
+        self: &Arc<Self>,
+        session_id: acp::SessionId,
+        mut events: EventStream<AcpThreadEvent>,
+    ) {
         let this = self.clone();
         tokio::spawn(async move {
             while let Some(event) = events.recv().await {
@@ -585,7 +634,7 @@ impl DeltaProjector {
             let snapshot = ProjectedSnapshot {
                 as_of_seq: projection.seq,
                 messages: if with_messages {
-                    projection.announced_messages(model)
+                    projection.announced_messages(model, false)
                 } else {
                     Vec::new()
                 },
@@ -607,6 +656,21 @@ impl DeltaProjector {
             self.emitter.emit(envelope);
         }
         Some(snapshot)
+    }
+
+    /// The conversation as the stream has announced it, each tool call
+    /// reduced to its id, name, title, kind and status: no input, no result,
+    /// no output. What a reader of the conversation's shape needs (the memory
+    /// extractor's turn-finished pass counts calls and spots external ones)
+    /// without copying every command's output each turn, which on a long
+    /// session was tens of megabytes per finished turn.
+    ///
+    /// Reads the mirror as it stands, without catching it up: nothing is
+    /// announced on its account. `None` when the session has no projection.
+    pub fn outline(&self, session_id: &acp::SessionId) -> Option<Vec<Message>> {
+        let slot = self.session(session_id)?;
+        let projection = lock(&slot.projection);
+        Some(projection.announced_messages(None, true))
     }
 
     /// The newest announced elicitation of this session that is still waiting.
@@ -854,6 +918,11 @@ struct SessionProjection {
     /// The mode as last announced, so an agent's echo of a change the host
     /// already announced is not said twice.
     mode: Option<String>,
+    /// How many leading entries were mirrored silently by
+    /// [`DeltaProjector::adopt`]: a replayed history, finished before it was
+    /// mirrored. The drain's backlog repeats an event for each of them, and
+    /// none can change a subagent the adoption did not already derive.
+    adopted: usize,
 }
 
 impl SessionProjection {
@@ -878,6 +947,7 @@ impl SessionProjection {
             seq: 0,
             pending_users: VecDeque::new(),
             mode: None,
+            adopted: 0,
         }
     }
 
@@ -924,7 +994,11 @@ impl SessionProjection {
     /// call as its last announced snapshot, a user message up to the chunks
     /// seen. Entries the mirror has not reached are left out; they arrive as
     /// deltas.
-    fn announced_messages(&self, model: Option<&str>) -> Vec<Message> {
+    ///
+    /// `outline` reduces each tool call to what names it
+    /// ([`project::tool_call_outline`]), for a reader of the conversation's
+    /// shape rather than its content.
+    fn announced_messages(&self, model: Option<&str>, outline: bool) -> Vec<Message> {
         let thread = lock_thread(&self.thread);
         let entries = thread.entries();
         let mut out = Vec::new();
@@ -988,9 +1062,14 @@ impl SessionProjection {
                     }
                 }
                 (Projected::ToolCall { snapshot, .. }, Some(AgentThreadEntry::ToolCall(_))) => {
+                    let call = if outline {
+                        project::tool_call_outline(snapshot)
+                    } else {
+                        (**snapshot).clone()
+                    };
                     out.push(project::tool_message(
                         format!("msg-{ix}"),
-                        (**snapshot).clone(),
+                        call,
                         model.map(str::to_string),
                         at,
                     ));
@@ -1091,8 +1170,15 @@ impl SessionProjection {
             // New entries can also appear without an event of their own when a
             // later event refers to one, so both paths go through `sync`.
             AcpThreadEvent::NewEntry => {
+                let known = self.entries.len();
                 let mut deltas = self.sync_entries();
-                deltas.extend(self.sync_subagents());
+                // Deriving subagents walks the whole thread. A `NewEntry` whose
+                // entry an earlier event (or a snapshot's catch-up) already
+                // mirrored was synced then; walking again for each one made
+                // draining a replayed history quadratic in its length.
+                if self.entries.len() != known {
+                    deltas.extend(self.sync_subagents());
+                }
                 deltas
             }
             AcpThreadEvent::EntryUpdated(ix) => {
@@ -1102,15 +1188,17 @@ impl SessionProjection {
                 if lock_thread(&self.thread).entry_time_approximate(ix) {
                     mark_time_approximate(&mut updated);
                 }
-                deltas.extend(updated);
                 // Subagents are derived from tool calls alone, and deriving
                 // them walks the whole thread. This arm runs once per streamed
                 // chunk, so a text or thought chunk skips the walk: it cannot
                 // have changed one. An entry that arrived with this event may
-                // be a tool call, so that still syncs.
-                if self.entries.len() != known
-                    || matches!(self.entries.get(ix), Some(Projected::ToolCall { .. }))
-                {
+                // be a tool call, so that still syncs. So does an update to a
+                // tool call, unless it is an adopted one this event left as it
+                // was: the backlog of a replay names every call again.
+                let tool_call = matches!(self.entries.get(ix), Some(Projected::ToolCall { .. }));
+                let settled = ix < self.adopted && updated.is_empty();
+                deltas.extend(updated);
+                if self.entries.len() != known || (tool_call && !settled) {
                     deltas.extend(self.sync_subagents());
                 }
                 deltas
@@ -1135,6 +1223,9 @@ impl SessionProjection {
                     })
                     .collect();
                 self.entries.drain(start..end);
+                // Indices past the rewind name new entries from here on, not
+                // the adopted history.
+                self.adopted = self.adopted.min(start);
 
                 // A tool call that goes away takes its permission prompt with
                 // it. Left in `open_permissions` the route outlives the call,
@@ -1880,6 +1971,7 @@ fn tool_call_meta_eq(previous: &ToolCall, current: &ToolCall) -> bool {
         && previous.arguments == current.arguments
         && previous.locations == current.locations
         && previous.raw_output == current.raw_output
+        && previous.raw_output_omitted_bytes == current.raw_output_omitted_bytes
         && previous.content_blocks == current.content_blocks
         && previous.started_at_ms == current.started_at_ms
         && previous.ended_at_ms == current.ended_at_ms

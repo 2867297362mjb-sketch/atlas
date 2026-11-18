@@ -1388,9 +1388,10 @@ impl AgentHost {
     /// row reopened after the close that covered this one) may already own
     /// both, and undoing by id would take them from it.
     ///
-    /// The projector comes last. Attaching drains the events buffered while
-    /// the open was still in flight (the replay `session/load` produces
-    /// lands there); they wait in the thread's channel until then.
+    /// The projector comes last. Attaching mirrors the history the thread
+    /// already holds without announcing it (`attach_settled`), then drains
+    /// the events buffered while the open was still in flight (the replay
+    /// `session/load` produces lands there), which find nothing new.
     async fn bind(
         &self,
         ticket: BindTicket,
@@ -1439,7 +1440,12 @@ impl AgentHost {
         // After `record_connected`, which is what binds the session to its
         // row: the branch has somewhere to land by the time git answers.
         self.refresh_branch(&session_id, &cwd.to_string_lossy());
-        self.projector.attach(agent_id, thread.clone());
+        // Settled: whatever the thread holds by now is the history a
+        // `session/load` replayed, which every reader takes from a snapshot.
+        // Announced entry by entry as well, it reached the window twice (a
+        // delta per replayed entry, then the snapshot), and a tab already
+        // bound to the session painted it half-loaded first.
+        self.projector.attach_settled(agent_id, thread.clone());
 
         // An end on another thread can take the session between the registry
         // binding it and the lines above. Its follow-ups ran against a
@@ -1576,6 +1582,18 @@ impl AgentHost {
 
     pub fn snapshot(&self, key: &SessionKey) -> Result<SessionSnapshot> {
         self.build_snapshot(key, true)
+    }
+
+    /// The conversation's messages with each tool call reduced to what names
+    /// it (`DeltaProjector::outline`): for a reader of its shape, not its
+    /// content. Falls back to the full snapshot's messages for a session the
+    /// projector never attached.
+    pub fn conversation_outline(&self, key: &SessionKey) -> Result<Vec<Message>> {
+        let session_id = acp::SessionId::new(key.session_id.as_str());
+        match self.projector.outline(&session_id) {
+            Some(messages) => Ok(messages),
+            None => self.snapshot(key).map(|snapshot| snapshot.messages),
+        }
     }
 
     /// The window's key for a live session, from its id alone — what a

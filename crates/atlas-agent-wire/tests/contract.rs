@@ -359,6 +359,9 @@ fn sample_tool_call() -> ToolCall {
         result: Some("fn main() {}".into()),
         locations: vec![serde_json::json!({ "path": "src/main.rs" })],
         raw_output: Some(serde_json::json!({ "ok": true })),
+        // Set beside `raw_output`, which the projection never does (it is the
+        // size of one it left off), so the golden pins both keys.
+        raw_output_omitted_bytes: Some(1_048_576),
         content_blocks: vec![ToolContentBlock::Diff {
             path: "src/main.rs".into(),
             old_text: Some("old".into()),
@@ -402,6 +405,7 @@ fn golden() -> BTreeMap<&'static str, serde_json::Value> {
         "result": "fn main() {}",
         "locations": [{ "path": "src/main.rs" }],
         "raw_output": { "ok": true },
+        "raw_output_omitted_bytes": 1_048_576,
         "content_blocks": [
             { "type": "diff", "path": "src/main.rs", "oldText": "old", "newText": "new" }
         ],
@@ -818,11 +822,13 @@ fn optional_fields_are_omitted_rather_than_null() {
 
     let mut tool_call = sample_tool_call();
     tool_call.raw_output = None;
+    tool_call.raw_output_omitted_bytes = None;
     tool_call.content_blocks = Vec::new();
     tool_call.started_at_ms = None;
     tool_call.ended_at_ms = None;
     let value = serde_json::to_value(&tool_call).unwrap();
     assert!(value.get("raw_output").is_none());
+    assert!(value.get("raw_output_omitted_bytes").is_none());
     assert!(value.get("content_blocks").is_none());
     assert!(value.get("started_at_ms").is_none());
     assert!(value.get("ended_at_ms").is_none());

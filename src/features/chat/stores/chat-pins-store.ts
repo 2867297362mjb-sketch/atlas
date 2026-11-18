@@ -49,9 +49,12 @@ export interface ChatPin {
 /**
  * Where a pin's message sits in `messages` now, or -1.
  *
- * The id is tried first but cannot be relied on: `replaceMessages` re-mints
- * every id as `msg-<now>-<i>` on each history load, resume and snapshot
- * backfill, so a pin can point at an id no message carries. The fallback is
+ * The id is tried first but cannot be relied on. A painted transcript keeps
+ * the snapshot's ids, which are positional (`msg-<entry>`): stable from one
+ * reopen to the next, but a pin placed on a live message carries the live
+ * id, which no reopened message has, and a rewind can put another message
+ * at a position. So an id match must also be on the pin's side of the
+ * exchange, and failing that the fallback is
  * the text the bubble SHOWS — `userMessageText`, the same derivation the pin
  * recorded — compared for equality. Not the wire content: a prompt arrives
  * with memory blocks injected AHEAD of it and a directive after, so neither
@@ -68,8 +71,8 @@ export function resolvePinIndex(messages: ReadonlyArray<ChatMessage>, pin: ChatP
   let byText = -1;
   for (let i = 0; i < messages.length; i++) {
     const m = messages[i];
-    if (m.id === pin.messageId) return i;
     if (m.role !== role) continue;
+    if (m.id === pin.messageId) return i;
     if (byStamp >= 0) continue;
     if ((role === "user" ? userMessageText(m) : assistantMessageText(m)) !== pin.text) continue;
     if (m.timestamp === pin.timestamp) byStamp = i;

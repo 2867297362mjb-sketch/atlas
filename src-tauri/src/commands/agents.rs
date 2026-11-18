@@ -101,7 +101,7 @@ impl TauriDeltaSink {
     pub fn new(app: AppHandle, sleep: Arc<crate::sleep_watch::SleepWatch>) -> Self {
         let pipeline = OutboundPipeline::new()
             // Broadcast first so the UI updates before any heavier work.
-            .with(Arc::new(BroadcastMiddleware { app: app.clone() }))
+            .with(Arc::new(BroadcastMiddleware::new(app.clone())))
             .with(Arc::new(AnalyticsMiddleware { app: app.clone() }))
             .with(Arc::new(KeepAwakeMiddleware { app: app.clone() }))
             // Session capture is a stage here rather than a subscriber to a
@@ -220,16 +220,85 @@ impl DeltaSink for TauriDeltaSink {
     }
 }
 
-/// Fan every delta to the single `atlas:agents` window event channel.
+/// Fan every delta to the single `atlas:agents` window event channel, at
+/// most one event a frame.
+///
+/// Each Tauri event is a script the webview evaluates, and a streaming turn
+/// produces a delta per token and per output chunk: hundreds a second, each
+/// one main-thread work in the window, on the thread the transcript scrolls
+/// on. The window applies them a frame at a time anyway
+/// (`agent-delta-batch.ts`). So a delta goes out on its own only when the
+/// channel has been quiet for a frame; one that follows sooner waits for the
+/// frame's end and goes with the others as one array. Order is kept: every
+/// send happens under one lock, and a batch is everything pending.
 struct BroadcastMiddleware {
     app: AppHandle,
+    batch: Arc<parking_lot::Mutex<BroadcastBatch>>,
+}
+
+/// How long the channel holds deltas after one has gone out.
+const BROADCAST_FRAME: Duration = Duration::from_millis(16);
+
+#[derive(Default)]
+struct BroadcastBatch {
+    pending: Vec<SessionDeltaEnvelope>,
+    /// A flush is scheduled.
+    armed: bool,
+    /// When the last event went out.
+    last: Option<std::time::Instant>,
+}
+
+impl BroadcastMiddleware {
+    fn new(app: AppHandle) -> Self {
+        Self {
+            app,
+            batch: Arc::new(parking_lot::Mutex::new(BroadcastBatch::default())),
+        }
+    }
+
+    fn send<T: Serialize + ?Sized>(app: &AppHandle, payload: &T) {
+        if let Err(e) = app.emit("atlas:agents", payload) {
+            tracing::error!(target: "atlas_agents::emit", "failed to emit atlas:agents event: {e}");
+        }
+    }
+
+    /// Send everything pending, as one event.
+    fn flush(app: &AppHandle, batch: &parking_lot::Mutex<BroadcastBatch>) {
+        let mut state = batch.lock();
+        state.armed = false;
+        let pending = std::mem::take(&mut state.pending);
+        match pending.as_slice() {
+            [] => return,
+            [one] => Self::send(app, one),
+            many => Self::send(app, many),
+        }
+        state.last = Some(std::time::Instant::now());
+    }
 }
 
 impl OutboundMiddleware<SessionDeltaEnvelope> for BroadcastMiddleware {
     fn on_event(&self, envelope: &SessionDeltaEnvelope) {
-        if let Err(e) = self.app.emit("atlas:agents", envelope) {
-            tracing::error!(target: "atlas_agents::emit", "failed to emit atlas:agents event: {e}");
+        let mut state = self.batch.lock();
+        let quiet = state
+            .last
+            .is_none_or(|last| last.elapsed() >= BROADCAST_FRAME);
+        if !state.armed && state.pending.is_empty() && quiet {
+            Self::send(&self.app, envelope);
+            state.last = Some(std::time::Instant::now());
+            return;
         }
+        state.pending.push(envelope.clone());
+        if state.armed {
+            return;
+        }
+        state.armed = true;
+        let wait = BROADCAST_FRAME
+            .saturating_sub(state.last.map_or(Duration::ZERO, |last| last.elapsed()));
+        let (app, batch) = (self.app.clone(), self.batch.clone());
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(wait).await;
+            Self::flush(&app, &batch);
+        });
     }
 }
 
@@ -634,7 +703,11 @@ impl OutboundMiddleware<SessionDeltaEnvelope> for MemoryIngestMiddleware {
                         agent_id,
                         session_id: session_id.clone(),
                     };
-                    let Ok(snapshot) = app.state::<Arc<AgentHost>>().snapshot(&key) else {
+                    // The outline, not the snapshot: the turns need each
+                    // message's text and its calls' names, and a full snapshot
+                    // copied every call's output, every turn.
+                    let Ok(messages) = app.state::<Arc<AgentHost>>().conversation_outline(&key)
+                    else {
                         return;
                     };
                     let job = super::memory_indexer::Job::ExtractSession {
@@ -643,7 +716,7 @@ impl OutboundMiddleware<SessionDeltaEnvelope> for MemoryIngestMiddleware {
                             agent: meta.agent,
                             session_id,
                         },
-                        turns: super::memory_extract::transcript_turns(&snapshot.messages),
+                        turns: super::memory_extract::transcript_turns(&messages),
                     };
                     if let Err(e) = app.state::<Arc<MemoryRegistry>>().enqueue(job) {
                         tracing::debug!(target: "atlas::shared_memory", "turn extraction not queued: {e}");

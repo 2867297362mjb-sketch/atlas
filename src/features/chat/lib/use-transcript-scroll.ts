@@ -63,6 +63,7 @@ export interface TranscriptScroll {
 export function useTranscriptScroll({
   scrollRef,
   contentRef,
+  shieldRef,
   canGrow,
   onGrow,
   onBeforeGrow,
@@ -72,6 +73,9 @@ export function useTranscriptScroll({
   scrollRef: RefObject<HTMLElement | null>;
   /** The scrolled content, watched for size changes. */
   contentRef: RefObject<HTMLElement | null>;
+  /** The hover shield: an element inside the content, shown for the life of
+   *  a fling (see `suspendHover`). Without one, hover is not suspended. */
+  shieldRef?: RefObject<HTMLElement | null>;
   /** Whether there is any history left to reveal above. */
   canGrow: boolean;
   onGrow: () => void;
@@ -93,7 +97,7 @@ export function useTranscriptScroll({
 
   const frame = useRef<number | null>(null);
   const dirty = useRef(true);
-  /** Non-null while `data-scroll-hot` is set on the content. */
+  /** Non-null while the hover shield is up. */
   const hoverResume = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Cached geometry. Valid until the content resizes. */
   const metrics = useRef({ scrollHeight: 0, clientHeight: 0 });
@@ -133,13 +137,19 @@ export function useTranscriptScroll({
   // long markdown bubble. Several rows a second, mid-fling, is exactly the
   // work the tile deadline cannot absorb. It also stops a fling that ends with
   // the pointer over a bubble from landing a click on a control the reader
-  // never meant to reach. `pointer-events: none` on the content makes the
-  // scroller itself the hit target, so wheel and momentum events keep flowing
-  // while nothing underneath can be hovered.
+  // never meant to reach.
   //
-  // One attribute write per fling, not per frame: the property inherits, so
-  // toggling it recalculates inherited style once down the subtree — a cost
-  // paid at the first frame and the release, and never again while scrolling.
+  // A SHIELD does it: one transparent element at the top of the content,
+  // sticky over the viewport, shown for the gesture. It is the hit target, so
+  // nothing under it is hovered or clicked; and it is inside the scroller, so
+  // wheel and momentum events still scroll it. Showing and hiding it restyles
+  // that one element.
+  //
+  // This used to be `pointer-events: none` on the content. That property
+  // inherits, and changing an inherited property makes WebKit recompute style
+  // for every element below it — the whole mounted transcript, twice a
+  // fling, at the first frame and at the release.
+  //
   // Released by a timer that keeps re-arming while the scroll-hot clock is
   // still running, so a fling with gaps between events does not flicker.
   //
@@ -149,19 +159,19 @@ export function useTranscriptScroll({
   // timer does the polling, so nothing is scheduled per scroll event.
   const suspendHover = useCallback(() => {
     if (hoverResume.current !== null) return;
-    const content = contentRef.current;
-    if (!content) return;
-    content.setAttribute("data-scroll-hot", "");
+    const shield = shieldRef?.current;
+    if (!shield) return;
+    shield.hidden = false;
     const release = () => {
       if (isScrollHot()) {
         hoverResume.current = setTimeout(release, HOVER_RESUME_MS);
         return;
       }
       hoverResume.current = null;
-      contentRef.current?.removeAttribute("data-scroll-hot");
+      if (shieldRef?.current) shieldRef.current.hidden = true;
     };
     hoverResume.current = setTimeout(release, HOVER_RESUME_MS);
-  }, [contentRef]);
+  }, [shieldRef]);
 
   const sample = useCallback(() => {
     frame.current = null;
