@@ -1729,6 +1729,7 @@ mod tests {
                 result: None,
                 locations: vec![],
                 raw_output: None,
+                raw_output_omitted_bytes: None,
                 content_blocks: vec![],
                 parent_tool_call_id: None,
                 started_at_ms: None,

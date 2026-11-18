@@ -77,9 +77,23 @@ pub struct ToolCall {
     /// so the frontend was reading `undefined` from every tool call. `result`
     /// is the human-readable flattening; this is what a tool actually returned,
     /// which is what a caller inspecting a failed structured call needs.
+    ///
+    /// Carried only while it is small, or larger but the sole account of what
+    /// happened (the call failed, or its content has no text and no structured
+    /// block). Past that it is left off and [`Self::raw_output_omitted_bytes`]
+    /// says how big it was: an agent like claude-agent-acp sends every tool
+    /// result twice, once as `content` and once as `rawOutput`, so a session of
+    /// screenshots shipped each image's base64 to the window a second time — 93
+    /// of a 97 MB reopen, for a field nothing in the window reads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional, type = "unknown")]
     pub raw_output: Option<serde_json::Value>,
+    /// Set exactly when the agent sent a `rawOutput` that [`Self::raw_output`]
+    /// does not carry because of its size: roughly how many bytes of JSON it
+    /// was. Absent when there was none, or when it travels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub raw_output_omitted_bytes: Option<u64>,
     /// Content blocks that need STRUCTURE, not a flattened string (P1.4).
     ///
     /// `result` keeps carrying everything text-shaped, exactly as before — this

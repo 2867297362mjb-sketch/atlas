@@ -1343,16 +1343,56 @@
   box-shadow: var(--inset-highlight);
 }
 
-/* Set by use-transcript-scroll on the content element for the life of a
-   fling. Hover during a scroll is pure waste — each row that passes under a
-   resting pointer invalidates its whole subtree (`group-hover` compiles to
+/* The transcript's hover shield, shown by use-transcript-scroll for the life
+   of a fling. Hover during a scroll is pure waste — each row that passes under
+   a resting pointer invalidates its whole subtree (`group-hover` compiles to
    `:where(.group):hover *`, and the user row's action bar uses it), several
-   times a second, in the frames the tile deadline can least afford. With the
-   content inert the scroller is the hit target, so wheel and momentum keep
-   flowing; nothing below can be hovered or clicked until the gesture goes
-   quiet (~200ms). */
-[data-scroll-hot] {
-  pointer-events: none;
+   times a second, in the frames the tile deadline can least afford. The shield
+   is the hit target instead, so nothing below can be hovered or clicked until
+   the gesture goes quiet (~200ms); it sits inside the scroller, so wheel and
+   momentum keep scrolling it.
+
+   Zero height and sticky at the top of the content, so it never moves a row;
+   its box is the viewport-tall `::before`, clipped by the scroller like
+   everything else in it. It replaced `pointer-events: none` on the content:
+   that property inherits, so toggling it restyled every mounted row, twice a
+   fling. Showing this restyles one element. */
+.atlas-scroll-shield {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  height: 0;
+}
+.atlas-scroll-shield[hidden] {
+  display: none;
+}
+.atlas-scroll-shield::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 100vh;
+}
+
+/* A run of turns the transcript window swapped out (use-transcript-window):
+   an empty block exactly as tall as they measured. */
+.atlas-row-gap {
+  contain: strict;
+}
+
+/* WebKitGTK: the transcript's top edge is a tint, not a blur. GradualBlur
+   stacks five live `backdrop-filter` layers over the scroller, which the
+   compositor re-samples on every frame the content moves, and a long
+   transcript moves on every frame of a fling (WebKitGTK 2.54.0–2.54.1 made
+   backdrop filters far worse still). The tint layer GradualBlur draws under
+   the blur stays, so the header keeps its backing. The variant belongs in
+   `@tryatlas/design` (ADR-0027); until it has one, this reaches the layers by
+   their place: the edge treatment after the transcript's scroller, whose
+   layers carry their filter inline. */
+html.platform-linux .transcript-scroller ~ [aria-hidden] > [style*="backdrop-filter"] {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
 /* Toast descriptions — sonner ships a light-theme colour we never overrode.

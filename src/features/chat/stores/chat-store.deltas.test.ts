@@ -1207,3 +1207,68 @@ describe("applyAgentBatch: a tool call seen twice in one frame", () => {
     expect(calls()[0]).toMatchObject({ status: "completed", result: "ok" });
   });
 });
+
+describe("a tab loading its transcript holds deltas until the paint", () => {
+  // A resume binds the tab before the agent has replayed the session, so the
+  // stream can reach it while it still shows the skeleton. Applied then, a
+  // half-built transcript spent the transcript window's one-time settle and
+  // was replaced wholesale by the paint a moment later.
+  const at = (seq: number, delta: AgentDelta): AgentDelta => ({ ...delta, seq });
+  const appended = (seq: number, id: string, content: string) =>
+    at(seq, d("message_appended", { message: wireMessage({ id, content }) }));
+
+  function loadingTab() {
+    boundTab("claude-code", "");
+    useChatStore.getState().actions.setTranscriptLoading(TAB, true);
+  }
+
+  it("applies nothing while loading", () => {
+    loadingTab();
+    apply(appended(1, "a", "replayed"));
+    expect(messages()).toHaveLength(0);
+  });
+
+  it("applies only what the painting snapshot had not seen, in order", () => {
+    loadingTab();
+    const { actions } = useChatStore.getState();
+    actions.applyAgentBatch({
+      texts: [],
+      thoughts: [],
+      deltas: [appended(1, "a", "in the snapshot"), appended(2, "b", "after it")],
+    });
+    actions.replaceMessages(
+      TAB,
+      [
+        { id: "msg-0", role: "user", content: "fix the bug" },
+        { id: "msg-1", role: "assistant", content: "in the snapshot" },
+      ],
+      1,
+    );
+    actions.setTranscriptLoading(TAB, false);
+    expect(messages().map((m) => m.content)).toEqual([
+      "fix the bug",
+      "in the snapshot",
+      "after it",
+    ]);
+    // The snapshot's ids are kept, so a repaint keys the same rows the same.
+    expect(messages()[0].id).toBe("msg-0");
+  });
+
+  it("applies directly once loaded", () => {
+    loadingTab();
+    useChatStore.getState().actions.setTranscriptLoading(TAB, false);
+    apply(appended(1, "a", "live"));
+    expect(messages().map((m) => m.content)).toEqual(["live"]);
+  });
+
+  it("forgets what it held for a load that ended without a paint", () => {
+    loadingTab();
+    apply(appended(1, "a", "orphan"));
+    const { actions } = useChatStore.getState();
+    // A new load into the same tab starts over.
+    actions.setTranscriptLoading(TAB, true);
+    actions.replaceMessages(TAB, [], 0);
+    actions.setTranscriptLoading(TAB, false);
+    expect(messages()).toHaveLength(0);
+  });
+});

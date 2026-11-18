@@ -156,7 +156,7 @@ export async function openAgentSession({
       cwd,
       ensure: () => ensureAgent(pluginId),
       cb: {
-        paint: (msgs) => replaceMessages(targetTabId, msgs),
+        paint: (msgs, asOfSeq) => replaceMessages(targetTabId, msgs, asOfSeq),
         onPainted: () => setTranscriptLoading(targetTabId, false),
         isStale: () => false,
       },

@@ -52,9 +52,15 @@ function useCopiedFlash() {
 
 // ── Panel ──────────────────────────────────────────────────────────────────
 
-/** Every tool call in the thread, flat — the panel addresses them by id. */
-function useToolCalls(messages: ChatMessage[]) {
+const NO_TOOL_CALLS = new Map<string, ToolCallDisplay>();
+
+/** Every tool call in the thread, flat — the panel addresses them by id.
+ *  Only while the panel is open: it is mounted for every chat, and `messages`
+ *  is a new array on every streaming frame, so building this regardless walked
+ *  every tool call of a long session per frame for a panel nobody had open. */
+function useToolCalls(messages: ChatMessage[] | null) {
   return useMemo(() => {
+    if (!messages) return NO_TOOL_CALLS;
     const byId = new Map<string, ToolCallDisplay>();
     for (const m of messages) {
       for (const tc of m.toolCalls) byId.set(tc.id, tc);
@@ -67,7 +73,7 @@ export function DetailPanel({ tabId, messages }: { tabId: string; messages: Chat
   const target = useDetailPanelStore((s) => s.targets[tabId] ?? null);
   const width = useDetailPanelStore((s) => s.width);
   const { close, setWidth } = useDetailPanelStore((s) => s.actions);
-  const byId = useToolCalls(messages);
+  const byId = useToolCalls(target ? messages : null);
   // The session column's window bar floats over this pane (z-titlebar); start
   // below it, or the bar covers this panel's header and eats its clicks.
   const topInset = usePaneTopInset();

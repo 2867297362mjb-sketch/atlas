@@ -161,7 +161,7 @@ export async function openThread(
       cwd,
       sessionId: thread.sessionId || null,
       cb: {
-        paint: (msgs) => replaceMessages(targetTabId, msgs),
+        paint: (msgs, asOfSeq) => replaceMessages(targetTabId, msgs, asOfSeq),
         onPainted: () => setTranscriptLoading(targetTabId, false),
         isStale,
       },

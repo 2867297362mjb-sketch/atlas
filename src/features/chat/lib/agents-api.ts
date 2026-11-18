@@ -292,8 +292,17 @@ export const listenAuthRunProgress = (
 export const listenAuthEnvUpdated = (handler: () => void): Promise<UnlistenFn> =>
   listen("atlas:byok-env-updated", () => handler());
 
+/** One event, or a frame's worth of deltas as an array: Rust sends a delta on
+ *  its own when the channel has been quiet for a frame, and batches the rest
+ *  (`BroadcastMiddleware` in `agents.rs`). Handed on one at a time, in order. */
 export const listenAgents = (handler: (env: AgentStreamEvent) => void): Promise<UnlistenFn> =>
-  listen<AgentStreamEvent>("atlas:agents", (e) => handler(e.payload));
+  listen<AgentStreamEvent | AgentStreamEvent[]>("atlas:agents", (e) => {
+    if (Array.isArray(e.payload)) {
+      for (const env of e.payload) handler(env);
+    } else {
+      handler(e.payload);
+    }
+  });
 
 /** Fires whenever how-an-agent-launches changes: discovery finished, the
  *  manifest refreshed, an install/uninstall, a settings toggle, or a

@@ -457,7 +457,7 @@ export function projectRows(
 
     const old = prevSegments.get(m.id);
     let seg: Segment;
-    if (old && segmentHolds(old, messages, i, end, opts, final, turnInProgress)) {
+    if (old && segmentHolds(old, messages, i, end, opts, final, turnInProgress, childCalls)) {
       seg = old.offset === rows.length && old.start === i ? old : shiftSegment(old, rows.length, i);
     } else {
       seg = projectSegment(messages, i, end, opts, childCalls, rows.length);
@@ -494,6 +494,10 @@ export interface Segment {
   /** Cleared when the session rebinds to a new agent session, with the
    *  messages untouched: a turn projected with children is stale without. */
   subagents: Record<string, Subagent> | undefined;
+  /** For each child this turn launched, the calls it showed under it: the
+   *  child's own calls can arrive in any later message, so they are the part
+   *  of a delegating turn's input that is not in its own slice. */
+  children: ReadonlyMap<string, readonly ToolCallDisplay[]> | undefined;
   /** Where its rows and first message sat when its `turns` were stamped. */
   offset: number;
   start: number;
@@ -510,10 +514,8 @@ function segmentHolds(
   opts: ProjectOptions,
   final: boolean,
   turnInProgress: boolean,
+  childCalls: ReadonlyMap<string, readonly ToolCallDisplay[]>,
 ): boolean {
-  // A delegating session re-projects every turn: a child's calls can land in
-  // messages outside its launching turn, so the slice is not the whole input.
-  if (opts.subagents || s.subagents !== opts.subagents) return false;
   if (s.final !== final) return false;
   if (final && (s.streaming !== opts.streaming || s.turnInProgress !== turnInProgress)) {
     return false;
@@ -523,6 +525,43 @@ function segmentHolds(
   if (s.messages.length !== end - start) return false;
   for (let k = 0; k < s.messages.length; k++) {
     if (s.messages[k] !== messages[start + k]) return false;
+  }
+  return delegationHolds(s, opts.subagents, childCalls);
+}
+
+const NO_CALLS: readonly ToolCallDisplay[] = [];
+
+/**
+ * Whether what a turn read of the session's children is still what it read.
+ *
+ * A delegating session used to re-project EVERY turn on every frame, because
+ * a child's calls can land in messages outside its launching turn, so a turn's
+ * own slice is not its whole input. That cost 8–41 ms a frame on a long
+ * session. What a turn actually reads of the children is narrower, and cheap
+ * to check against: for each of its calls, whether its parent is a known child
+ * (a child's call is hidden from its own turn), whether it launched a child
+ * and which (the child's row), and the child's own calls (the row's markers).
+ * Those are the same objects as last time unless one of them changed.
+ */
+function delegationHolds(
+  s: Segment,
+  now: Record<string, Subagent> | undefined,
+  childCalls: ReadonlyMap<string, readonly ToolCallDisplay[]>,
+): boolean {
+  const then = s.subagents;
+  if (!then && !now) return true;
+  for (const m of s.messages) {
+    for (const tc of m.toolCalls) {
+      const parent = tc.parentToolCallId;
+      if (parent && !then?.[parent] !== !now?.[parent]) return false;
+      const child = now?.[tc.id];
+      if (then?.[tc.id] !== child) return false;
+      if (!child) continue;
+      const shown = s.children?.get(tc.id) ?? NO_CALLS;
+      const current = childCalls.get(tc.id) ?? NO_CALLS;
+      if (shown.length !== current.length) return false;
+      for (let k = 0; k < shown.length; k++) if (shown[k] !== current[k]) return false;
+    }
   }
   return true;
 }
@@ -586,6 +625,7 @@ function projectSegment(
 ): Segment {
   const rows: Row[] = [];
   const turns: Turn[] = [];
+  const children = new Map<string, readonly ToolCallDisplay[]>();
   const lastIdx = messages.length - 1;
   let i = start;
   const m = messages[i];
@@ -740,7 +780,9 @@ function projectSegment(
           // They go at the END of the turn, together, which is also where
           // Claude Desktop puts them: one block, last thing before the footer.
           const id = `sa:${tc.id}`;
-          const own = (childCalls.get(tc.id) ?? []).map((c) => markerFor(c, turnId, false));
+          const calls = childCalls.get(tc.id) ?? NO_CALLS;
+          children.set(tc.id, calls);
+          const own = calls.map((c) => markerFor(c, turnId, false));
           delegated.push({
             kind: RowKind.Subagent,
             id,
@@ -884,6 +926,7 @@ function projectSegment(
     expanded: opts.expanded,
     expandedTurns: opts.expandedTurns,
     subagents: opts.subagents,
+    children: children.size > 0 ? children : undefined,
     offset,
     start,
     rows,

@@ -2,7 +2,9 @@ import { create } from "zustand";
 import { agents } from "../lib/agents-api";
 import type { InjectedPrompt } from "../lib/injected-prompt";
 import { isDraft, original } from "immer";
-import { immer } from "zustand/middleware/immer";
+// Without auto-freeze: a long session's `messages` is frozen whole per update
+// otherwise, which costs JavaScriptCore milliseconds a batch (see the file).
+import { immerUnfrozen as immer } from "@/lib/immer-unfrozen";
 import type {
   ChatSession,
   ChatMessage,
@@ -388,6 +390,10 @@ interface ChatActions {
     replaceMessages: (
       sessionId: string,
       messages: Array<{
+        /** The snapshot's own id. Kept, so painting the same conversation
+         *  again (a rebind's repaint) keys every unchanged row the same and
+         *  React keeps it mounted. Absent only for a path that has none. */
+        id?: string;
         role: MessageRole;
         content: string;
         timestamp?: string;
@@ -420,6 +426,10 @@ interface ChatActions {
           endedAt?: number;
         }>;
       }>,
+      /** The painting snapshot's `as_of_seq`. A delta held while the
+       *  transcript loaded (see `setTranscriptLoading`) at or below it is
+       *  already in these messages, and is dropped instead of applied. */
+      asOfSeq?: number,
     ) => void;
     /** Restore live (non-transcript) session state from a `session/load`
      *  snapshot: the backend's current status and the current turn's live plan.
@@ -603,6 +613,36 @@ function mirrorQueue(s: ChatState, tabId: string, queue: QueuedPrompt[]): void {
   }
   s.queues[tabId] = nextTexts;
   s.queueIds[tabId] = [...queue.map((q) => q.id), ...local.map(() => null)];
+}
+
+/**
+ * Deltas for a tab whose transcript is still loading, by tab id, in arrival
+ * order. A resume binds the tab before the agent has replayed the session
+ * (`open-thread.ts`), so anything announced in that window used to land on a
+ * tab still showing its skeleton: a half-built transcript that spent the
+ * window's one-time settle (`use-transcript-window.ts`) before the real paint
+ * arrived, and was then replaced wholesale by it. They wait here instead, and
+ * `setTranscriptLoading(tab, false)` applies the ones the painting snapshot
+ * had not seen. Module state, not store state: nothing renders from it.
+ */
+const heldForPaint = new Map<string, AgentDelta[]>();
+/** The `as_of_seq` of the snapshot that painted a loading tab (see
+ *  `replaceMessages`), until its held deltas are released. */
+const paintedThrough = new Map<string, number>();
+
+function forgetHeld(tabId: string): void {
+  heldForPaint.delete(tabId);
+  paintedThrough.delete(tabId);
+}
+
+/** Hold `env` if its tab is still loading its transcript. */
+function holdForPaint(s: ChatState, env: AgentDelta): boolean {
+  const tid = findTabByAcpSession(s.sessions, env.session_id);
+  if (!tid || !s.sessions[tid].transcriptLoading) return false;
+  const held = heldForPaint.get(tid);
+  if (held) held.push(env);
+  else heldForPaint.set(tid, [env]);
+  return true;
 }
 
 /** The chat tab running `acpSessionId`, or null. */
@@ -1152,11 +1192,29 @@ export const useChatStore = create<ChatState & ChatActions>()(
           const session = s.sessions[sessionId];
           if (session) session.title = title;
         }),
-      setTranscriptLoading: (sessionId, loading) =>
+      setTranscriptLoading: (sessionId, loading) => {
+        // Whatever was held belongs to the load this ends (or to one a new
+        // load supersedes, which starts over).
+        const held = heldForPaint.get(sessionId);
+        const floor = paintedThrough.get(sessionId);
+        heldForPaint.delete(sessionId);
+        paintedThrough.delete(sessionId);
+        const advertised: AdvertisedOptions[] = [];
         set((s) => {
           const session = s.sessions[sessionId];
-          if (session) session.transcriptLoading = loading;
-        }),
+          if (!session) return;
+          session.transcriptLoading = loading;
+          if (loading || !held) return;
+          // In arrival order, after the paint: only what the snapshot that
+          // painted had not seen yet.
+          const added = new Set<string>();
+          for (const env of held) {
+            if (floor !== undefined && env.seq <= floor) continue;
+            applyDeltaToDraft(s, env, added, advertised);
+          }
+        });
+        advertised.forEach(cacheAdvertisedOptions);
+      },
       setResumePending: (sessionId, pending) =>
         set((s) => {
           const session = s.sessions[sessionId];
@@ -1421,14 +1479,16 @@ export const useChatStore = create<ChatState & ChatActions>()(
         void sessionConfiguration.pick(sessionId, KNOBS.model, modelId),
       setNativeEffort: (sessionId, effort) =>
         void sessionConfiguration.pick(sessionId, KNOBS.effort, effort),
-      replaceMessages: (sessionId, messages) =>
+      replaceMessages: (sessionId, messages, asOfSeq) =>
         set((s) => {
           const session = s.sessions[sessionId];
           if (!session) return;
+          if (asOfSeq !== undefined) paintedThrough.set(sessionId, asOfSeq);
+          const minted = Date.now();
           session.messages = messages.map((m, i) => {
             const split = m.role === "user" ? splitAtlasContext(m.content) : null;
             return {
-              id: `msg-${Date.now()}-${i}`,
+              id: m.id ?? `msg-${minted}-${i}`,
               role: m.role,
               content: m.content,
               // Keep the agent's own id and outcome when the caller has
@@ -1542,6 +1602,7 @@ export const useChatStore = create<ChatState & ChatActions>()(
         }),
       removeSession: (sessionId) => {
         dropBackendSession(get().sessions[sessionId]);
+        forgetHeld(sessionId);
         set((s) => {
           // pendingPermissions is keyed by acpSessionId, not tab id — resolve
           // before the session entry goes away (a stale list would resurface
@@ -1559,7 +1620,10 @@ export const useChatStore = create<ChatState & ChatActions>()(
         });
       },
       removeSessions: (sessionIds) => {
-        for (const id of sessionIds) dropBackendSession(get().sessions[id]);
+        for (const id of sessionIds) {
+          dropBackendSession(get().sessions[id]);
+          forgetHeld(id);
+        }
         set((s) => {
           for (const id of sessionIds) {
             // Same acpSessionId-keying note as removeSession above.
@@ -1573,7 +1637,9 @@ export const useChatStore = create<ChatState & ChatActions>()(
           }
         });
       },
-      resetSessions: () =>
+      resetSessions: () => {
+        heldForPaint.clear();
+        paintedThrough.clear();
         set((s) => {
           s.sessions = {};
           s.queues = {};
@@ -1581,7 +1647,8 @@ export const useChatStore = create<ChatState & ChatActions>()(
           s.drafts = {};
           s.pendingPermissions = {};
           s.activeSessionId = null;
-        }),
+        });
+      },
       setDraft: (tabId, text) =>
         set((s) => {
           if (text.length === 0) delete s.drafts[tabId];
@@ -1704,6 +1771,7 @@ export const useChatStore = create<ChatState & ChatActions>()(
           }
           const addedToolCalls = new Set<string>();
           for (const env of deltas) {
+            if (holdForPaint(s, env)) continue;
             applyDeltaToDraft(s, env, addedToolCalls, advertised);
           }
         });
@@ -1788,6 +1856,7 @@ export const useChatStore = create<ChatState & ChatActions>()(
       applyAgentDelta: (env) => {
         const advertised: AdvertisedOptions[] = [];
         set((s) => {
+          if (holdForPaint(s, env)) return;
           applyDeltaToDraft(s, env, new Set(), advertised);
         });
         advertised.forEach(cacheAdvertisedOptions);
