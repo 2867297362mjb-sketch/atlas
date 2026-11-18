@@ -15,3 +15,5 @@ code, only corrected when they were wrong.
 - `org-tool-server-prefix.md` - the measured fixed-prefix cost of the organisation tool server.
 - `linux-release-plan.md` - what the Linux release is missing to be production grade, and a phased fix that leaves macOS untouched.
 - `deb-dependencies-cargo-deb.md` - whether cargo-deb's `$auto` (dpkg-shlibdeps) should replace the release deb's hand-written Depends.
+- `glibc-backward-compat.md` - how the Linux binary can run on an older glibc than its build host: what raises the floor, ten approaches judged, and the plan for the `ubuntu-22.04` runner's retirement.
+- `github-repo-architecture.md` - merge queue, rulesets, CODEOWNERS, the Tauri updater, channels and staged rollout (Zed, VS Code, Warp, Cursor), backports, action lockfiles, provenance, release-please, local hooks and Dependabot: what each source supports against what the repo does today.
