@@ -32,9 +32,9 @@ The two trackers split by **audience**: Linear (workspace `tryatlas`) is where t
 ## Finishing
 
 - Put the issue ID in the PR title or body (`ATL-123`).
-- Opening the PR → **In Review**. Merged into `main` → **Done**. A release is a later tag on `main`, not a separate merge.
+- Opening the PR (into `dev`, ADR-0030) → **In Review**. Merged into `dev` → **Done**. A release is a later promotion to `main` and a tag there, not part of the issue.
 - Until the GitHub integration is connected (ATL-940), move the status by hand.
-- A GitHub issue the PR fixes closes itself on merge through `Fixes #N` in the PR body.
+- A GitHub issue the PR fixes closes itself through `Fixes #N` in the PR body when the work reaches `main` at the promotion, not when it merges into `dev`.
 
 ## Filing an issue
 

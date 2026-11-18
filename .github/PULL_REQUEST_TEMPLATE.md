@@ -1,7 +1,11 @@
 <!--
+BASE BRANCH: `dev`. GitHub offers `main`, the default branch: switch the
+base to `dev` before you open this. Only a promotion from dev, a hotfix/*
+branch and the release PR go into `main` (ADR-0030).
+
 Thanks for the PR. Please read CONTRIBUTING.md if you haven't already.
 
-Target `main`. The PR is merged with a merge commit titled with the PR
+The PR is merged with a merge commit titled with the PR
 title: write it as a Conventional Commit, e.g.
 `fix(terminal): keep the close button clickable while dragging`.
 See CONTRIBUTING.md's "Branching model" section.
