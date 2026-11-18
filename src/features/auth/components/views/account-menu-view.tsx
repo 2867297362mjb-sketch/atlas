@@ -123,8 +123,11 @@ export function AccountMenuView<T extends string>({
         <DropdownMenuSub>
           <DropdownMenuSubTrigger>
             <Moon />
-            Theme
-            <span className="ml-auto text-muted-foreground">{themeLabel}</span>
+            {/* The label takes the free space, so the value chip sits beside
+                the trigger's chevron rather than mid-row: two `ml-auto`s
+                (the value's and the chevron's) split the gap between them. */}
+            <span className="flex-1">Theme</span>
+            <ValueChip>{themeLabel}</ValueChip>
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent>
             <DropdownMenuRadioGroup
@@ -146,8 +149,8 @@ export function AccountMenuView<T extends string>({
         <DropdownMenuSub>
           <DropdownMenuSubTrigger>
             <Type />
-            Interface size
-            <span className="ml-auto text-muted-foreground">{scaleLabel}</span>
+            <span className="flex-1">Interface size</span>
+            <ValueChip>{scaleLabel}</ValueChip>
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="w-58">{interfaceSizePanel}</DropdownMenuSubContent>
         </DropdownMenuSub>
@@ -166,6 +169,21 @@ export function AccountMenuView<T extends string>({
         )}
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+/** A submenu row's current value, as a chip beside its chevron.
+ *
+ *  Not `Badge`: its outline variant draws `--border`, which most dark themes
+ *  set within a shade of `--popover`, so the chip vanished into the menu. The
+ *  fill and edge here are the chip's own ink thinned (the recipe of `Kbd`'s
+ *  `inherit` variant), so they read on any theme's popover and on the
+ *  row's hover fill alike. */
+function ValueChip({ children }: { children: ReactNode }) {
+  return (
+    <span className="inline-flex shrink-0 items-center rounded border border-current/15 bg-current/10 px-1.5 py-px text-2xs font-medium whitespace-nowrap text-muted-foreground">
+      {children}
+    </span>
   );
 }
 
