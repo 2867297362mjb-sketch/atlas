@@ -340,7 +340,8 @@ automatic (`.github/workflows/release.yml`, release-please):
 Pre-1.0, a `feat` makes the next release a minor bump and only `fix`/`perf` a patch.
 Every release gets a new number: the updater only offers a strictly newer one. The
 version lives in four files and only the release PR (which runs `scripts/bump.sh`)
-changes them, hotfixes included. After a release, merge `main` back into `dev`.
+changes them, hotfixes included. After a release, merge the back-merge PR from `main`
+into `dev` that `back-merge.yml` opens; `pr-base.yml` moves a PR aimed at `main` to `dev`.
 `CONTRIBUTING.md` → "Branching model" and "Releasing" has the diagrams and the
 promotion and hotfix steps.
 

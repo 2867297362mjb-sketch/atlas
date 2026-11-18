@@ -150,7 +150,7 @@ Leave **Allow edits from maintainers** checked when you open the PR. It lets sma
 
 ## Branching model
 
-> **Every pull request targets `dev`.** `main` is the default branch, so GitHub, `gh pr create` and Linear all offer `main` as the base: set it to `dev` (`gh pr create --base dev`). Only a promotion from `dev`, a `hotfix/*` branch and the release PR go into `main`.
+> **Every pull request targets `dev`.** `main` is the default branch, so GitHub, `gh pr create` and Linear all offer `main` as the base: set it to `dev` (`gh pr create --base dev`). A PR opened against `main` is moved to `dev` by a bot (`.github/workflows/pr-base.yml`), which comments to say so. Only a promotion from `dev`, a `hotfix/*` branch and the release PR go into `main`.
 
 Atlas has two long-lived branches ([ADR-0030](docs/adr/0030-dev-is-the-integration-branch-main-takes-promotions.md)). **`dev`** is where work is integrated: every pull request lands there, and that is where it is tested together. **`main`** holds what has been released, and a promotion on its way to release. A release is not a branch: it is a **tag**, a fixed bookmark on one commit of `main`.
 
@@ -211,10 +211,10 @@ Two words this section leans on:
                         merge "chore: release X.Y.Z"
 ```
 
-1. When `dev` has been tested and you mean to release it, open a PR from `dev` into `main` titled `chore: promote dev to main`.
+1. When `dev` has been tested and you mean to release it, open a PR from `dev` into `main`: `gh pr create --base main --head dev --title "chore: promote dev to main"`.
 2. Merge it with a **merge commit**, never a squash: a squash gives `main` a commit `dev` lacks, and every later promotion conflicts.
 3. release-please updates the release PR (next section). Merging that releases.
-4. Merge `main` back into `dev` (a PR from `main`, `chore: merge main back into dev`), so `dev` carries the release's version and changelog.
+4. Merge `main` back into `dev`, so `dev` carries the release's version and changelog. A bot (`.github/workflows/back-merge.yml`) keeps that PR open, `chore: merge main back into dev`, whenever merging `main` would change `dev`; merge it with a merge commit.
 
 Promote only when you mean to release, so `main` never holds work waiting to ship.
 
@@ -270,7 +270,7 @@ Sometimes a shipped version needs a fix while `dev` holds work that isn't ready 
 
 1. Branch `hotfix/<short-slug>` from `main`, fix it, and open a PR into `main`, titled as usual (`fix: …`).
 2. Merge it with a merge commit. release-please updates the release PR with a patch bump; merge that to release `alpha-0.6.1`.
-3. Merge `main` back into `dev` (`chore: merge main back into dev`), so `dev` has the fix and the new version.
+3. Merge the bot's back-merge PR (`chore: merge main back into dev`), so `dev` has the fix and the new version.
 
 ### What lives where
 

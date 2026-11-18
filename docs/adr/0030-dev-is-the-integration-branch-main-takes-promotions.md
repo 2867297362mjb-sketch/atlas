@@ -1,6 +1,6 @@
 # ADR-0030: `dev` is the integration branch; `main` takes promotions and hotfixes
 
-**Status:** Proposed (2026-11-18). Would supersede the trunk-based model of PR #613
+**Status:** Accepted (2026-11-18). Supersedes the trunk-based model of PR #613
 (`c97a7344`, 2026-11-07). The merge-commit rule of `8ca3b186` stands, and now applies to
 promotions too.
 
@@ -17,7 +17,7 @@ merge commits and release-please reads every commit on `main`.
 
 That model has no stage between "merged" and "released". Several pull requests are first
 tested together after they are already on `main`, and `main` then holds work nobody has
-tried as a whole. The proposal is a stage where merged work is integrated and tested
+tried as a whole. The team wants a stage where merged work is integrated and tested
 (previews, QA) before it reaches `main`, so `main` holds only what was released or is
 about to be.
 
@@ -32,13 +32,16 @@ about to be.
   - a **hotfix**: `hotfix/<slug>` branched from `main`, merged into `main`, after which
     `main` is merged back into `dev`.
   - the **release PR**, as today.
-- **Releases are cut from `main`** by the existing release-please flow. After each
-  release, `main` is merged back into `dev`, so `dev` carries the new version and
-  changelog. Promote only when you mean to release, so `main` never holds work waiting.
-- **The rule is enforced in writing first, then by a bot.** Because `main` is the
-  default, GitHub, `gh pr create` and Linear all propose it as the base. The PR template,
-  `CONTRIBUTING.md`, `AGENTS.md` and `README.md` say `dev`; rollout step 2 adds a check
-  that retargets a pull request into `main` and fails it.
+- **Releases are cut from `main`** by the existing release-please flow. After a release
+  or a hotfix, `main` is merged back into `dev`, so `dev` carries the new version and
+  changelog: `back-merge.yml` keeps that PR open whenever merging `main` would change
+  `dev`. Promote only when you mean to release, so `main` never holds work waiting.
+- **The rule is written down and enforced by a bot.** Because `main` is the default,
+  GitHub, `gh pr create` and Linear all propose it as the base. The PR template,
+  `CONTRIBUTING.md`, `AGENTS.md` and `README.md` say `dev`, and `pr-base.yml` moves a pull
+  request aimed at `main` to `dev` and says why. It is not a required check: the release
+  PR is opened with `GITHUB_TOKEN`, whose events start no workflow, so it would never
+  report there and would block every release.
 
 ## Consequences
 
@@ -48,9 +51,10 @@ about to be.
 - Two long-lived branches to keep in step. A hotfix or a release commit not merged back
   leaves `dev` behind `main`, and the next promotion can conflict on it.
 - A fix reaches users at the next promotion, or as a hotfix.
-- Until step 2, a pull request into `dev` finds no warm Rust cache there: `ci.yml` runs on
-  pushes to `main` and `release/**` only, and its comment puts a cold app job at ~16
-  minutes against ~2.
+- A push to `dev` runs the full suite but writes no Rust caches, which keeps the
+  repository inside its 10 GB cache budget (`ci.yml`, "Cache budget"). A pull request
+  into `dev` restores from `main`, the default branch, so it rebuilds what changed since
+  the last promotion.
 - `bun run ci:local` plans against the branch's upstream; for a pull request, pass
   `--base origin/dev`.
 - `release/X.Y` branches and the cherry-pick hotfix steps retire: a hotfix now releases
@@ -58,20 +62,19 @@ about to be.
 
 ## Rollout
 
-1. **This change**: the ADR and the docs. When it merges, an admin creates `dev` from
-   `main` with a ruleset (pull request and `CI passed` required, merge commits only), and
-   open pull requests, all but the release PR, are retargeted to `dev`.
-2. **CI wiring**: a `pr-base.yml` check that retargets and fails a pull request into
-   `main` from anything but `dev`, `hotfix/*` or the release branch; `dev` in `ci.yml`'s
-   push branches and in the weekly full run; `ci-affected.mjs` treating a push to `dev`
-   like one to `main`; `ci:local` defaulting to `origin/dev`.
-3. **The version commit on `dev`**: release-please with `target-branch: dev` and no
-   GitHub release, and a job on `main` that tags the promotion's `dev`-side parent
+1. **Done with this ADR**: the docs; `pr-base.yml` and `back-merge.yml`; `ci.yml` and
+   `ci-affected.mjs` running the full suite on a push to `dev`; Dependabot's version
+   updates (Cargo, Actions) opened against `dev`. Then `dev` is created from `main` with
+   a ruleset (pull request and `CI passed` required, merge commits only), `main`'s
+   ruleset allows merge commits only, and open pull requests, all but the release PR,
+   move to `dev`.
+2. **Not done: the version commit on `dev`**: release-please with `target-branch: dev`
+   and no GitHub release, and a job on `main` that tags the promotion's `dev`-side parent
    (`HEAD^2`), so release-please on `dev` can find its last release in `dev`'s history.
    Prototype on a fork first: release-please stops on a merged release PR it has not
    tagged, and a tag on `main`'s own merge commit is not in `dev`'s history.
-4. **Preview builds from `dev`**: GitHub prereleases `alpha-X.Y.Z-dev.N`, never offered
-   by the updater.
+3. **Not done: preview builds from `dev`**: GitHub prereleases `alpha-X.Y.Z-dev.N`,
+   never offered by the updater.
 
 The research note `docs/research/github-repo-architecture.md` carries over with `dev` in
 place of `main` for its merge queue (§13.1), and its channels (§13.5) map onto the
