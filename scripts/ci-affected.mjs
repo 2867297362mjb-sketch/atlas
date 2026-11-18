@@ -229,10 +229,13 @@ export const NON_RUST = [
   ".github/dependabot.yml",
   ".coderabbit.yaml",
   ".github/workflows/release-linux.yml",
-  // Release automation and the PR-title check: neither runs in CI, and the
-  // version files a release PR changes are classified on their own.
+  // Release automation and the bots that check or move pull requests (title,
+  // base, back-merge): none runs in CI, and the version files a release PR
+  // changes are classified on their own.
   ".github/workflows/release.yml",
   ".github/workflows/pr-title.yml",
+  ".github/workflows/pr-base.yml",
+  ".github/workflows/back-merge.yml",
   "release-please-config.json",
   ".release-please-manifest.json",
   "*.md",
@@ -387,8 +390,11 @@ export function resolveRange(env, commitExists) {
     return { base: env.PR_BASE, head: "HEAD" };
   }
   if (event === "push") {
-    // Everything lands on main, so a push there gets the full suite, not a diff.
-    if (env.GITHUB_REF_NAME === "main") return { all: "push to main" };
+    // Every PR lands on dev and every promotion on main (ADR-0030), so a push to
+    // either gets the full suite, not a diff.
+    if (env.GITHUB_REF_NAME === "main" || env.GITHUB_REF_NAME === "dev") {
+      return { all: `push to ${env.GITHUB_REF_NAME}` };
+    }
     const before = env.BEFORE ?? "";
     if (!before || NULL_SHA.test(before)) return { all: "new branch, no previous head" };
     if (!commitExists(before)) return { all: "previous head is gone (force-push?)" };

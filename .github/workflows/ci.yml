@@ -4,6 +4,11 @@ on:
   push:
     branches:
       - main
+      # `dev` takes every pull request (ADR-0030), so a push there runs the
+      # full suite on what was just integrated. It reads caches and writes
+      # none (see "Cache budget"): a pull request into `dev` restores from
+      # `main`, the default branch, which GitHub always offers.
+      - dev
       # Hotfix branches (release/0.5, …). Not for the check itself — work
       # lands here via PRs that were already checked — but so the branch owns a
       # warm dependency cache. A pull request can restore caches from its base
@@ -58,7 +63,7 @@ env:
   # Cache budget: GitHub gives the repo 10 GB, and it sat at ~9.7 GB before
   # sccache. Going over is not an error, it is least-recently-used eviction,
   # i.e. the caches quietly thrash each other. So only `main` and the release
-  # branches write, from a push or a manual run (`cache-write` in the `changes`
+  # branches write, not `dev`, from a push or a manual run (`cache-write` in the `changes`
   # job decides, and each Rust job's SCCACHE_GHA_RW_MODE and rust-cache
   # `save-if` follow it). A manual run on any other branch reads but writes
   # nothing: its entries would be scoped to that branch, which no pull request
@@ -122,9 +127,10 @@ jobs:
         # RUSTUP_TOOLCHAIN overrides rust-toolchain.toml, which would otherwise
         # make rustup download the pinned toolchain just to read manifests.
         run: node scripts/ci-affected.mjs --github
-      # Which runs may write caches (see "Cache budget" above). A push already
-      # only reaches `main` and the release branches; a manual run can be on
-      # any branch, and expressions have no regex, hence a step.
+      # Which runs may write caches (see "Cache budget" above): a push or a
+      # manual run on `main` or a release branch. A push to `dev` reads only,
+      # and a manual run can be on any branch; expressions have no regex,
+      # hence a step.
       - name: Cache policy
         id: cache
         env:
@@ -132,9 +138,7 @@ jobs:
           REF: ${{ github.ref_name }}
         run: |
           write=false
-          if [ "$EVENT" = push ]; then
-            write=true
-          elif [ "$EVENT" = workflow_dispatch ] &&
+          if { [ "$EVENT" = push ] || [ "$EVENT" = workflow_dispatch ]; } &&
             { [ "$REF" = main ] || [[ "$REF" == release/* ]]; }; then
             write=true
           fi

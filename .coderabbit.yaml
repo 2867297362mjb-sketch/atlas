@@ -3,11 +3,12 @@
 # CodeRabbit reviews every pull request, from a fork or from this repo.
 #
 # Without this file CodeRabbit ran on its defaults, and its default only
-# auto-reviews PRs whose base is the repository's default branch. Most PRs
-# target `main` (CONTRIBUTING.md, "Branching model"), but a hotfix PR targets a
-# `release/X.Y` branch and a stacked PR targets its parent's branch, and those
-# got "Review skipped — auto reviews are disabled on base/target branches other
-# than the default branch" unless someone commented `@coderabbitai review`.
+# auto-reviews PRs whose base is the repository's default branch. Every PR
+# targets `dev` rather than the default branch, `main` (CONTRIBUTING.md,
+# "Branching model"; ADR-0030), and a stacked PR targets its parent's branch;
+# those would get "Review skipped — auto reviews are disabled on base/target
+# branches other than the default branch" unless someone commented
+# `@coderabbitai review`.
 #
 # Reference: https://docs.coderabbit.ai/reference/configuration
 
@@ -30,8 +31,8 @@ reviews:
     auto_incremental_review: true
     drafts: false
     # Patterns are unanchored regexes, matched in addition to the default
-    # branch. `.*` covers the `release/X.Y` hotfix branches and the
-    # branches PRs sometimes stack on, so no PR depends on its base matching a naming scheme to get reviewed.
+    # branch. `.*` covers `dev` and the branches PRs sometimes stack on, so
+    # no PR depends on its base matching a naming scheme to get reviewed.
     base_branches:
       - ".*"
 

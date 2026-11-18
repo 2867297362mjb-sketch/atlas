@@ -1,0 +1,47 @@
+name: PR base
+
+# Every pull request targets `dev` (ADR-0030; CONTRIBUTING.md, "Branching
+# model"). `main` is the default branch, so GitHub, `gh pr create` and Linear
+# all offer it as the base, and a PR aimed at `main` is almost always aimed
+# there by accident. This moves it to `dev` and says why. `main` takes only a
+# promotion from `dev`, a `hotfix/*` branch and release-please's release PR.
+# Dependabot's security updates land there too, like a hotfix: they always open
+# against the default branch, and the token a Dependabot PR hands this
+# workflow is read-only anyway.
+#
+# `pull_request_target`, so a fork's PR is moved too: the workflow runs from
+# the base branch with a token that can edit the PR, and it never checks out
+# or runs the PR's code. Moving the base fires another `edited` event, for a
+# PR whose base is now `dev`, which the `branches` filter skips.
+#
+# Not a required check: the release PR is opened with GITHUB_TOKEN, whose
+# events start no workflow, so a required check here would never report on it
+# and would block every release.
+
+on:
+  pull_request_target:
+    types: [opened, reopened, edited]
+    branches: [main]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  retarget:
+    name: Move the PR to dev
+    if: >-
+      github.event.pull_request.user.login != 'dependabot[bot]' &&
+      !(github.event.pull_request.head.repo.full_name == github.repository &&
+        (github.event.pull_request.head.ref == 'dev' ||
+         startsWith(github.event.pull_request.head.ref, 'hotfix/') ||
+         startsWith(github.event.pull_request.head.ref, 'release-please--')))
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Retarget to dev and say why
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr edit "$PR" --base dev
+          gh pr comment "$PR" --body "This pull request was opened against \`main\`, so it has been moved to \`dev\`: every pull request targets \`dev\` ([ADR-0030](https://github.com/$GH_REPO/blob/main/docs/adr/0030-dev-is-the-integration-branch-main-takes-promotions.md); CONTRIBUTING.md, \"Branching model\"). \`main\` takes only a promotion from \`dev\`, a \`hotfix/*\` branch and the release PR. If this fixes a released version and can't wait for the next promotion, open it from a \`hotfix/<slug>\` branch instead."

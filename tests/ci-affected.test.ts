@@ -271,6 +271,7 @@ describe("the CI diff range", () => {
   it("runs everything when there is no trustworthy range", () => {
     const cases = [
       { GITHUB_EVENT_NAME: "push", GITHUB_REF_NAME: "main", BEFORE: "a1" },
+      { GITHUB_EVENT_NAME: "push", GITHUB_REF_NAME: "dev", BEFORE: "a1" },
       { GITHUB_EVENT_NAME: "push", GITHUB_REF_NAME: "0.3.5", BEFORE: "0".repeat(40) },
       { GITHUB_EVENT_NAME: "schedule" },
       { GITHUB_EVENT_NAME: "workflow_dispatch" },

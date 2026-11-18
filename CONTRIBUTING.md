@@ -130,10 +130,10 @@ git fetch upstream
 ```
 
 ```bash
-# 3. Branch from main
-git checkout -b <you>/short-slug upstream/main
+# 3. Branch from dev
+git checkout -b <you>/short-slug upstream/dev
 
-# 4. Push to your fork, then open the PR against main
+# 4. Push to your fork, then open the PR against dev (GitHub offers main: change it)
 git push -u origin <you>/short-slug
 ```
 
@@ -143,14 +143,16 @@ To pick up changes made while you were working:
 
 ```bash
 git fetch upstream
-git rebase upstream/main
+git rebase upstream/dev
 ```
 
 Leave **Allow edits from maintainers** checked when you open the PR. It lets small fixes land without another round trip.
 
 ## Branching model
 
-Atlas is **trunk-based**. There is one shared branch, `main`, and every pull request targets it. A release is not a branch: it is a **tag**, a fixed bookmark on one commit of `main`.
+> **Every pull request targets `dev`.** `main` is the default branch, so GitHub, `gh pr create` and Linear all offer `main` as the base: set it to `dev` (`gh pr create --base dev`). A PR opened against `main` is moved to `dev` by a bot (`.github/workflows/pr-base.yml`), which comments to say so. Only a promotion from `dev`, a `hotfix/*` branch and the release PR go into `main`.
+
+Atlas has two long-lived branches ([ADR-0030](docs/adr/0030-dev-is-the-integration-branch-main-takes-promotions.md)). **`dev`** is where work is integrated: every pull request lands there, and that is where it is tested together. **`main`** holds what has been released, and a promotion on its way to release. A release is not a branch: it is a **tag**, a fixed bookmark on one commit of `main`.
 
 Two words this section leans on:
 
@@ -160,22 +162,22 @@ Two words this section leans on:
 ### The life of a pull request
 
 ```
-  1. branch off main          2. work, push, open a PR      3. merge (a merge commit)
-                                                              (branch is deleted)
-  main ──●──●                     you/fix-sidebar
-            └──► you/fix-sidebar   ●──●──●──●  ──► PR ──►  main ──●─────────■
-                                                                   \       /
-                                               your commits, kept   ●──●──●
-                                                                            ▲
-                                              a merge commit, titled with
-                                              the PR title: "fix(sidebar): …"
+  1. branch off dev           2. work, push, open a PR      3. merge (a merge commit)
+                                 against dev                  (branch is deleted)
+  dev ──●──●                      you/fix-sidebar
+           └──► you/fix-sidebar    ●──●──●──●  ──► PR ──►  dev ──●─────────■
+                                                                  \       /
+                                              your commits, kept   ●──●──●
+                                                                           ▲
+                                             a merge commit, titled with
+                                             the PR title: "fix(sidebar): …"
 ```
 
-1. Branch from `main`: `<you>/<short-slug>`, or the name Linear's **copy git branch name** gives you.
-2. Push and open a PR against `main`. Keep it to days, not weeks: a long-lived branch drifts away from everyone else's work.
-3. When CI passes and it's reviewed, it is **merged with a merge commit**: your commits land on `main` as they are, joined by one merge commit, and GitHub deletes the branch. PRs are not squashed.
+1. Branch from `dev`: `<you>/<short-slug>`, or the name Linear's **copy git branch name** gives you.
+2. Push and open a PR against `dev`. Keep it to days, not weeks: a long-lived branch drifts away from everyone else's work.
+3. When CI passes and it's reviewed, it is **merged with a merge commit**: your commits land on `dev` as they are, joined by one merge commit, and GitHub deletes the branch. PRs are not squashed.
 
-**The merge commit is titled with the PR title**, so the title follows [Conventional Commits](https://www.conventionalcommits.org/). Your branch's commits reach `main` too, and release-please reads every commit there: one written in Conventional form (`fix: …`) becomes a changelog entry of its own, next to the PR's. A check on every PR holds the title to this shape:
+**The merge commit is titled with the PR title**, so the title follows [Conventional Commits](https://www.conventionalcommits.org/). Your branch's commits travel with it, through `dev` to `main`, and release-please reads every commit on `main`: one written in Conventional form (`fix: …`) becomes a changelog entry of its own, next to the PR's. A check on every PR holds the title to this shape:
 
 ```
   type(scope): what changed, in the present tense
@@ -193,13 +195,32 @@ Two words this section leans on:
 | `revert: …`                                                 | Reverts                      | patch bump   |
 | `refactor`, `docs`, `style`, `test`, `build`, `ci`, `chore` | (not listed)                 | no bump      |
 
-**`main` must stay shippable.** Anything merged can go out in the next release. Unfinished work either waits on its branch or lands switched off behind a setting until it's ready.
+**`dev` must stay shippable.** Anything merged into it goes out with the next promotion. Unfinished work either waits on its branch or lands switched off behind a setting until it's ready.
 
-**Issues close themselves.** `main` is the default branch, so `Fixes #N` in the PR body closes the issue when the PR merges.
+**Issues close when the work reaches `main`.** `main` is the default branch, and GitHub acts on `Fixes #N` there: the merge commit carries the PR description, so the issue closes at the promotion, not when the PR merges into `dev`.
+
+### Promoting `dev` to `main`
+
+```
+  dev  ──●──●──●──●──●──────────────────────────●──●──►
+                     │                          ▲
+                     │ PR: chore: promote       │ PR: chore: merge main back into dev
+                     ▼ dev to main              │
+  main ──■───────────■──────────■───────────────┘
+                                ▲
+                        merge "chore: release X.Y.Z"
+```
+
+1. When `dev` has been tested and you mean to release it, open a PR from `dev` into `main`: `gh pr create --base main --head dev --title "chore: promote dev to main"`.
+2. Merge it with a **merge commit**, never a squash: a squash gives `main` a commit `dev` lacks, and every later promotion conflicts.
+3. release-please updates the release PR (next section). Merging that releases.
+4. Merge `main` back into `dev`, so `dev` carries the release's version and changelog. A bot (`.github/workflows/back-merge.yml`) keeps that PR open, `chore: merge main back into dev`, whenever merging `main` would change `dev`; merge it with a merge commit.
+
+Promote only when you mean to release, so `main` never holds work waiting to ship.
 
 ### How a release happens
 
-Nobody bumps versions or writes the changelog by hand. A bot, [release-please](https://github.com/googleapis/release-please), reads the PR titles that land on `main` and keeps one pull request open called **`chore: release X.Y.Z`**:
+Nobody bumps versions or writes the changelog by hand. A bot, [release-please](https://github.com/googleapis/release-please), reads the commits a promotion or a hotfix brings to `main` and keeps one pull request open called **`chore: release X.Y.Z`**:
 
 ```
   main ──■──────■──────■──────■──────────────────■───────────────────►
@@ -211,11 +232,11 @@ Nobody bumps versions or writes the changelog by hand. A bot, [release-please](h
      │ PR: chore: release 0.6.0                │─┘
      │  • version → 0.6.0 in all four files    │
      │  • CHANGELOG.md: Features / Fixes       │       tag alpha-0.6.0
-     │  updated on every merge to main         │ ───►  GitHub release
+     │  updated on every push to main          │ ───►  GitHub release
      └─────────────────────────────────────────┘       installers built and attached
 ```
 
-1. Every merge to `main` updates the release PR: the next version number (from the titles, see the table above) and the changelog.
+1. Every push to `main` (a promotion, a hotfix) updates the release PR: the next version number (from the titles, see the table above) and the changelog.
 2. When you want to ship, review the release PR and merge it. That is the whole decision.
 3. Merging it tags `alpha-X.Y.Z`, publishes the GitHub release with the changelog as its notes, and `.github/workflows/release.yml` builds the installers and attaches them.
 4. One step is still by hand: point the PostHog remote-config keys at the new installers (see **Releasing** below). That is what makes installed apps offer the update, so it happens only after someone has tried the build.
@@ -237,33 +258,30 @@ At 1.0 the first number starts meaning "breaking change", as in [semver](https:/
 
 ### Hotfixes
 
-Sometimes a shipped version needs a fix while `main` already holds work that isn't ready to ship. Then, and only then, a `release/X.Y` branch is made from that release's tag:
+Sometimes a shipped version needs a fix while `dev` holds work that isn't ready to ship. Then the fix goes straight to `main`, which holds only what was released:
 
 ```
-  main ──●──────●──────●──────●(fix)──────●──────►
-         │                     │
-    alpha-0.6.0                │ cherry-pick: copy just that one commit
-         │                     ▼
-         └──► release/0.6 ──────●──► tag alpha-0.6.1
+  main ──■ alpha-0.6.0 ─────────■(fix)──────■ release PR ──► tag alpha-0.6.1
+         │                      ▲           │
+         └──► hotfix/fix-crash ─┘           │ merge main back into dev
+                                            ▼
+  dev  ──●──●──●──●──●──●──●──●──●──●───────●──►
 ```
 
-1. Fix it on `main` first, as a normal PR.
-2. `git checkout -b release/0.6 alpha-0.6.0`, then `git cherry-pick <the fix's commit>`. A cherry-pick copies one commit onto another branch.
-3. `bun run bump 0.6.1`, commit, open a PR into `release/0.6` and merge it.
-4. Tag that commit `alpha-0.6.1` and push the tag. A tag pushed by a person starts `release-linux.yml`, which builds Linux and creates the GitHub release; build macOS and Windows by hand (see **Releasing**).
-5. Tell the release PR on `main` that 0.6.1 is taken: the next PR merged into `main` carries a line `Release-As: 0.6.2` (or `0.7.0`) in its description. The merge commit carries the description as its body (a repository setting), and release-please reads it. Without this it would propose 0.6.1 again, and the updater ignores a number it has already seen.
-
-The `release/X.Y` branch is never merged back. `main` already has the fix.
+1. Branch `hotfix/<short-slug>` from `main`, fix it, and open a PR into `main`, titled as usual (`fix: …`).
+2. Merge it with a merge commit. release-please updates the release PR with a patch bump; merge that to release `alpha-0.6.1`.
+3. Merge the bot's back-merge PR (`chore: merge main back into dev`), so `dev` has the fix and the new version.
 
 ### What lives where
 
-| Name                 | What it is                                         | Lives for              |
-| -------------------- | -------------------------------------------------- | ---------------------- |
-| `main`               | The trunk. Always builds, passes CI and could ship | forever                |
-| `<you>/<short-slug>` | One issue's worth of work                          | days; deleted on merge |
-| `release-please--…`  | The bot's release PR branch; don't push to it      | until the release      |
-| `release/X.Y`        | Hotfixes for a shipped version only                | as long as needed      |
-| `alpha-X.Y.Z` (tag)  | A release                                          | forever                |
+| Name                    | What it is                                                     | Lives for              |
+| ----------------------- | -------------------------------------------------------------- | ---------------------- |
+| `dev`                   | The integration branch: every PR lands here                    | forever                |
+| `main`                  | Default branch: what's released, plus a promotion on its way   | forever                |
+| `<you>/<short-slug>`    | One issue's worth of work, PR into `dev`                       | days; deleted on merge |
+| `hotfix/<short-slug>`   | A fix for what's released, PR into `main`                      | days; deleted on merge |
+| `release-please--…`     | The bot's release PR branch; don't push to it                  | until the release      |
+| `alpha-X.Y.Z` (tag)     | A release                                                      | forever                |
 
 ## Releasing
 
@@ -293,7 +311,7 @@ Then, by hand, after trying the build: set the PostHog remote-config payloads `v
 
 The version is written in four places: `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, and the app's entry in `Cargo.lock` (left stale, CI's `--locked` builds refuse to run). Everything else reads it from one of those: Rust through `CARGO_PKG_VERSION`, the About screen through `getVersion()`, the DMG scripts from `tauri.conf.json`.
 
-The release PR sets all four (release-please moves `package.json`, and the workflow runs `scripts/bump.sh` for the rest). Run the script yourself only for a hotfix:
+The release PR sets all four (release-please moves `package.json`, and the workflow runs `scripts/bump.sh` for the rest), hotfixes included. A normal release never needs the script by hand; when something else does:
 
 ```bash
 bun run bump 0.6.1    # set every version file to 0.6.1
@@ -466,7 +484,7 @@ every PR and are worth knowing about:
   that script's `EXTRA_INPUTS`, or an edit to that file would skip the crate's
   tests. This suite finds such reads and tells you when one is undeclared.
   To see what CI would run for your branch:
-  `node scripts/ci-affected.mjs --base origin/main`.
+  `node scripts/ci-affected.mjs --base origin/dev`.
 
 For a new IPC module, copy the pattern in
 `src/features/settings/lib/byok-api.test.ts`: mock `invoke` and assert the

@@ -50,7 +50,15 @@ updates:
   # `group-by: dependency-name` is what collapses the fan-out: one PR per
   # dependency spanning every crate that uses it, which also keeps shared pins
   # in lockstep instead of letting crates drift apart between merges.
+  #
+  # `target-branch: "dev"` (here and on github-actions): version updates are
+  # ordinary PRs, and every PR targets `dev` (ADR-0030). Security updates still
+  # open against `main`, the default branch, like a hotfix, and GitHub stops
+  # applying this entry's other options to them once `target-branch` is set.
+  # The bun entry above has no version updates to move, and its options exist
+  # for its security updates, so it keeps the default.
   - package-ecosystem: "cargo"
+    target-branch: "dev"
     directories:
       - "/src-tauri"
       - "/crates/*"
@@ -66,6 +74,7 @@ updates:
         update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "github-actions"
+    target-branch: "dev"
     directory: "/"
     schedule:
       interval: "monthly"
