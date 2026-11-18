@@ -163,6 +163,13 @@ impl ExternalAgentServer for LocalRegistryArchiveAgent {
         self.prefetch()
     }
 
+    fn running_behind(&self) -> bool {
+        running_behind_dirs()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(&self.installation_dir)
+    }
+
     fn update_pending(&self) -> BoxFuture<'static, bool> {
         let installation_dir = self.installation_dir.clone();
         let version = self.version.clone();
@@ -223,6 +230,35 @@ impl ExternalAgentServer for LocalRegistryArchiveAgent {
                     &settings_env,
                 );
 
+                // An update already downloading (the background prefetch, or
+                // an update restart's install) holds the install lock for the
+                // whole download, which for a large agent is minutes. Waiting
+                // on it left every chat of the agent, the old ones included,
+                // unable to open, with nothing on screen to say why. The
+                // copy that ran before the update is still on disk: start
+                // that, and leave the update to the idle restart that follows
+                // it ([`ExternalAgentServer::running_behind`]).
+                if let Some((previous_dir, cmd_path)) =
+                    previous_while_installing(&installation_dir, &version, target).await
+                {
+                    tracing::info!(
+                        dir = %previous_dir.display(),
+                        version = %version,
+                        "starting the installed copy while its update downloads"
+                    );
+                    set_running_behind(&installation_dir, true);
+                    // No GC: the directory being downloaded into is newer
+                    // than this one, and this one is in use.
+                    let mut args = target.args.clone();
+                    args.extend(settings_args);
+                    args.extend(extra_args);
+                    return Ok(AgentServerCommand {
+                        path: cmd_path,
+                        args,
+                        env: Some(env),
+                    });
+                }
+
                 let (version_dir, _) = ensure_archive(
                     &*http,
                     &installation_dir,
@@ -233,6 +269,7 @@ impl ExternalAgentServer for LocalRegistryArchiveAgent {
                 .await?;
 
                 let cmd_path = resolve_target_cmd(&node, &target.cmd, &version_dir).await?;
+                set_running_behind(&installation_dir, false);
 
                 // Detached: the previous version's directory is dead
                 // weight, not a correctness problem, and removing it should never
@@ -322,7 +359,19 @@ async fn ensure_archive(
         target.sha256.as_deref(),
     );
     let lock = install_lock(installation_dir);
-    let _guard = lock.lock().await;
+    let _guard = match lock.try_lock() {
+        Ok(guard) => guard,
+        Err(_busy) => {
+            // Someone else's install of this agent is running and there was
+            // no older copy to start instead. Say so while waiting on it: the
+            // install that holds the lock may be a background one with no
+            // status of its own, and a silent wait reads as a hang.
+            if let Some(tx) = loading_status {
+                tx.send(Some(format!("Installing {version}…"))).ok();
+            }
+            lock.lock().await
+        }
+    };
     if is_dir(&version_dir).await {
         return Ok((version_dir, false));
     }
@@ -361,6 +410,87 @@ fn install_lock(dir: &std::path::Path) -> Arc<tokio::sync::Mutex<()>> {
         .entry(dir.to_path_buf())
         .or_default()
         .clone()
+}
+
+/// When an install into `installation_dir` is running and `version` is not on
+/// disk yet, the newest earlier copy that can run `target.cmd`, with that
+/// command's path. `None` means wait for the install as usual: nothing is
+/// downloading, the version is already here, or no earlier copy can run.
+///
+/// Only a relative `cmd` falls back. `"node"` resolves to the managed Node
+/// whichever directory is asked, so it proves nothing about the copy. A `cmd`
+/// whose path names its version (`./coco-1.0.73…/cortex`) is not found in an
+/// older copy, and waits.
+async fn previous_while_installing(
+    installation_dir: &std::path::Path,
+    version: &str,
+    target: &RegistryTargetConfig,
+) -> Option<(PathBuf, PathBuf)> {
+    if target.cmd == "node" || install_lock(installation_dir).try_lock().is_ok() {
+        return None;
+    }
+    let current = versioned_archive_cache_dir(
+        installation_dir,
+        Some(version),
+        &target.archive,
+        target.sha256.as_deref(),
+    );
+    if is_dir(&current).await {
+        return None;
+    }
+    let relative = relative_target_cmd(&target.cmd).ok()?;
+
+    // Newest first: an older copy left behind by a GC that never ran is still
+    // runnable, but the most recent one is what the user was last on.
+    let mut candidates = Vec::new();
+    let mut entries = tokio::fs::read_dir(installation_dir).await.ok()?;
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let path = entry.path();
+        // Versioned directories only: a staging directory is a download in
+        // progress, never a finished copy.
+        if path == current || !entry.file_name().to_string_lossy().starts_with("v_") {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata().await else {
+            continue;
+        };
+        if metadata.is_dir() {
+            candidates.push((metadata.modified().ok(), path));
+        }
+    }
+    candidates.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
+
+    for (_, dir) in candidates {
+        let cmd_path = dir.join(relative);
+        let is_file = tokio::fs::metadata(&cmd_path)
+            .await
+            .is_ok_and(|metadata| metadata.is_file());
+        if is_file {
+            return Some((dir, cmd_path));
+        }
+    }
+    None
+}
+
+/// Installation directories whose agent was last started from an earlier copy
+/// because its update was still downloading. Process-wide and keyed by
+/// directory, like [`install_lock`], because the store rebuilds its server
+/// objects on every registry refresh and a flag on one would be lost.
+fn running_behind_dirs() -> &'static std::sync::Mutex<std::collections::HashSet<PathBuf>> {
+    static DIRS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<PathBuf>>> =
+        std::sync::LazyLock::new(Default::default);
+    &DIRS
+}
+
+fn set_running_behind(installation_dir: &std::path::Path, behind: bool) {
+    let mut dirs = running_behind_dirs()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if behind {
+        dirs.insert(installation_dir.to_path_buf());
+    } else {
+        dirs.remove(installation_dir);
+    }
 }
 
 async fn has_subdirectory(dir: &std::path::Path) -> bool {

@@ -1365,7 +1365,14 @@ pub fn install_manager(app: &AppHandle) {
                         .and_then(|entry| entry.version)
                         .map(|version| version.to_string())
                         .unwrap_or_default();
-                    emit_agent_update(&app, id.as_str(), &version, AgentUpdatePhase::Ready);
+                    // Started while this download ran, so on the copy before
+                    // it (rather than waiting minutes on the download): it
+                    // moves to the new one at its next idle moment.
+                    if running(&host, id) && host.store().running_behind(id) {
+                        updates.schedule(&app, &host, id.to_string(), version);
+                    } else {
+                        emit_agent_update(&app, id.as_str(), &version, AgentUpdatePhase::Ready);
+                    }
                 }
                 if !updated.is_empty() {
                     super::catalog::emit_catalog_changed(&app, "update");
@@ -3281,6 +3288,19 @@ impl PendingUpdates {
             emit_agent_update(&app, &plugin_id, &version, AgentUpdatePhase::Installing);
             let id = atlas_acp_thread::AgentId::new(plugin_id.as_str());
             match host.store().prefetch_update(&id).await {
+                // A message sent during the install reconnected the agent on
+                // the copy before it rather than wait: one more idle restart
+                // moves it across. The next pass finds the install done, so
+                // this happens at most once per update.
+                Ok(true)
+                    if host
+                        .manager()
+                        .entry(&atlas_agent_manager::Agent::Custom { id: id.clone() })
+                        .is_some()
+                        && host.store().running_behind(&id) =>
+                {
+                    this.schedule(&app, &host, plugin_id.clone(), version.clone());
+                }
                 Ok(_) => emit_agent_update(&app, &plugin_id, &version, AgentUpdatePhase::Ready),
                 Err(error) => {
                     let error = format!("{error:#}");

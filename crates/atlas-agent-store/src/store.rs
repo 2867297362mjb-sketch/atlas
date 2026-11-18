@@ -287,6 +287,13 @@ impl AgentServerStore {
         pending
     }
 
+    /// [`ExternalAgentServer::running_behind`] for one agent: started on an
+    /// earlier copy while its update downloaded. `false` when not installed.
+    pub fn running_behind(&self, id: &AgentId) -> bool {
+        self.agent_server(id)
+            .is_some_and(|server| server.running_behind())
+    }
+
     /// [`ExternalAgentServer::prefetch_update`] for one agent. `Ok(false)`
     /// when it is not installed or had nothing to update.
     pub async fn prefetch_update(&self, id: &AgentId) -> anyhow::Result<bool> {

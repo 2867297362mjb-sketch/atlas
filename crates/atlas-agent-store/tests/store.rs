@@ -495,6 +495,162 @@ async fn a_failed_install_clears_its_progress() {
     assert_eq!(*loading.borrow_and_update(), None);
 }
 
+// --------------------------------------- starting while an update downloads
+
+const UPDATE_URL: &str = "https://example.test/v2/agent";
+
+/// [`binary_agent`] at another archive URL and command: a registry bump.
+fn binary_agent_at(id: &str, version: &str, url: &str, cmd: &str) -> RegistryAgent {
+    let RegistryAgent::Binary(mut agent) = binary_agent(id, version, None) else {
+        unreachable!()
+    };
+    for target in agent.targets.values_mut() {
+        target.archive = url.to_string();
+        target.cmd = cmd.to_string();
+    }
+    RegistryAgent::Binary(agent)
+}
+
+/// v1.0.0 installed and resolved once, then the registry moved to v2.0.0,
+/// whose download takes `download` from here on.
+async fn installed_then_bumped(
+    update: RegistryAgent,
+    download: std::time::Duration,
+) -> (Fixture, AgentId, PathBuf) {
+    let http = FakeHttp::new().with(ARCHIVE_URL, 200, b"v1".to_vec()).with(
+        UPDATE_URL,
+        200,
+        b"v2".to_vec(),
+    );
+    let fixture = fixture_with_http(vec![binary_agent("some-cli", "1.0.0", None)], http.clone());
+    fixture
+        .store
+        .set_settings(settings(&[("some-cli", AgentServerSettings::registry())]))
+        .await;
+    let id = AgentId::new("some-cli");
+    let v1 = fixture
+        .store
+        .agent_server(&id)
+        .unwrap()
+        .get_command(vec![], HashMap::new())
+        .await
+        .unwrap()
+        .path;
+
+    http.slow(download);
+    fixture.registry.set_agents(vec![update]);
+    fixture.store.registry_updated();
+    (fixture, id, v1)
+}
+
+/// The reported stall: a background update held the install lock for the
+/// whole download, and every chat of the agent waited on it with nothing on
+/// screen. A start during the download runs the copy already installed, and
+/// says it is behind so the app can restart it onto the update when idle.
+#[tokio::test]
+async fn a_start_during_an_update_download_runs_the_installed_copy() {
+    let (fixture, id, v1) = installed_then_bumped(
+        binary_agent_at("some-cli", "2.0.0", UPDATE_URL, "./agent"),
+        std::time::Duration::from_secs(2),
+    )
+    .await;
+
+    let prefetch = tokio::spawn({
+        let server = fixture.store.agent_server(&id).unwrap();
+        async move { server.prefetch_update().await }
+    });
+    // Until the prefetch holds the install lock, a start would simply
+    // install v2 itself; wait for the download to be under way.
+    while fixture.http.request_count(UPDATE_URL) == 0 {
+        tokio::task::yield_now().await;
+    }
+
+    let server = fixture.store.agent_server(&id).unwrap();
+    let command = tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        server.get_command(vec![], HashMap::new()),
+    )
+    .await
+    .expect("the start waited on the update's download")
+    .unwrap();
+    assert_eq!(command.path, v1);
+    assert_eq!(std::fs::read(&command.path).unwrap(), b"v1");
+    assert_eq!(command.args, ["--acp"]);
+    assert!(fixture.store.running_behind(&id));
+
+    assert!(prefetch.await.unwrap().unwrap(), "the update installed");
+    // The earlier copy survives the start that used it: it was running.
+    assert!(v1.exists());
+
+    // The restart after the download lands on the update.
+    let command = fixture
+        .store
+        .agent_server(&id)
+        .unwrap()
+        .get_command(vec![], HashMap::new())
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read(&command.path).unwrap(), b"v2");
+    assert!(!fixture.store.running_behind(&id));
+    assert_eq!(fixture.http.request_count(UPDATE_URL), 1);
+}
+
+/// With no earlier copy that can run the new command, a start still waits for
+/// the download, but says so: the install it waits on may be a background
+/// one, which reports nothing of its own.
+#[tokio::test]
+async fn a_start_that_must_wait_on_an_update_says_it_is_installing() {
+    let (fixture, id, _) = installed_then_bumped(
+        // The update's command is a file v1 never had.
+        binary_agent_at(
+            "some-cli",
+            "2.0.0",
+            "https://example.test/v2/agent-next",
+            "./agent-next",
+        ),
+        std::time::Duration::from_millis(300),
+    )
+    .await;
+    fixture
+        .http
+        .with("https://example.test/v2/agent-next", 200, b"v2".to_vec());
+
+    let prefetch = tokio::spawn({
+        let server = fixture.store.agent_server(&id).unwrap();
+        async move { server.prefetch_update().await }
+    });
+    while fixture
+        .http
+        .request_count("https://example.test/v2/agent-next")
+        == 0
+    {
+        tokio::task::yield_now().await;
+    }
+
+    let mut loading = fixture.store.watch_loading_status(&id).unwrap();
+    loading.borrow_and_update();
+    let mut command = fixture
+        .store
+        .agent_server(&id)
+        .unwrap()
+        .get_command(vec![], HashMap::new());
+    tokio::select! {
+        biased;
+        changed = loading.changed() => changed.unwrap(),
+        _ = &mut command => panic!("the start finished without reporting the install"),
+    }
+    assert_eq!(
+        loading.borrow_and_update().as_deref(),
+        Some("Installing 2.0.0…")
+    );
+
+    let command = command.await.unwrap();
+    assert_eq!(std::fs::read(&command.path).unwrap(), b"v2");
+    assert!(!fixture.store.running_behind(&id));
+    assert_eq!(*loading.borrow_and_update(), None);
+    prefetch.await.unwrap().unwrap();
+}
+
 // ------------------------------------------------- version-bump notification
 
 #[tokio::test]
