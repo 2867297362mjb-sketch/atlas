@@ -162,6 +162,12 @@ pub fn run_main() -> ! {
         command,
     } = LandlockCommand::parse();
 
+    // First thing in the inner stage, before anything slow: the exec that
+    // started it may have cleared bubblewrap's `--die-with-parent`.
+    if apply_seccomp_then_exec {
+        die_with_bwrap();
+    }
+
     if command.is_empty() {
         panic!("No command specified to execute.");
     }
@@ -807,6 +813,29 @@ impl ForwardedSignalMask {
                 panic!("failed to restore bubblewrap forwarded signals: {err}");
             }
         }
+    }
+}
+
+/// Re-arms what bubblewrap's `--die-with-parent` arms: this process is killed
+/// when bubblewrap exits.
+///
+/// bwrap sets `PR_SET_PDEATHSIG(SIGKILL)` on its child and then, under
+/// `--as-pid-1`, execs this inner stage, and that exec can drop it. On Ubuntu
+/// with `kernel.apparmor_restrict_unprivileged_userns=1`, `/usr/bin/bwrap` runs
+/// under the `bwrap` profile (`/etc/apparmor.d/bwrap-userns-restrict`), its exec
+/// into the sandbox moves to `bwrap//&unpriv_bwrap`, and AppArmor clears the
+/// parent-death signal on a profile transition. A cancelled turn then
+/// SIGTERMed the outer helper and bwrap while the command ran on to completion.
+///
+/// This process is PID 1 of the sandbox's PID namespace, so its death takes
+/// every process in the sandbox with it. A bwrap that exits before this runs
+/// still leaves the sandbox up: that window is process start-up, and no
+/// `getppid()` check can close it, since the parent sits outside the namespace.
+fn die_with_bwrap() {
+    let res = unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) };
+    if res < 0 {
+        let err = std::io::Error::last_os_error();
+        panic!("failed to set the sandbox's parent-death signal: {err}");
     }
 }
 
