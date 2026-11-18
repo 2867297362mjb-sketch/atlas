@@ -1,0 +1,59 @@
+name: Back-merge
+
+# `dev` has to take back what reaches `main` without passing through it, a
+# release PR's version bump and changelog or a hotfix, or `dev` keeps the old
+# version and the next promotion can conflict (ADR-0030; CONTRIBUTING.md,
+# "Promoting dev to main"). After every push to `main`, this opens one PR from
+# `main` into `dev` when merging it would change `dev`, and leaves an open one
+# alone: its head is `main` itself, so it follows `main` as it moves. A
+# promotion that brings nothing new opens nothing.
+#
+# The PR needs no CI run of its own. Its head commit is `main`'s, and the push
+# run on `main` reports "CI passed" on that commit, which is the check the
+# `dev` ruleset requires. Merging it stays a person's call, with a merge commit
+# like every PR.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: back-merge
+  cancel-in-progress: false
+
+jobs:
+  open:
+    name: Open the back-merge PR
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Open a PR from main into dev when dev lacks something
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ! git ls-remote --exit-code --heads origin dev > /dev/null; then
+            echo "No dev branch yet."
+            exit 0
+          fi
+          git fetch --quiet origin dev
+          # The tree a merge of main into dev would leave. A conflict prints
+          # more than a tree and fails, which still needs the PR.
+          merged=$(git merge-tree --write-tree origin/dev origin/main) || merged=conflict
+          if [ "$merged" = "$(git rev-parse 'origin/dev^{tree}')" ]; then
+            echo "Merging main would not change dev."
+            exit 0
+          fi
+          open=$(gh pr list --base dev --head main --state open --json number --jq '.[0].number // empty')
+          if [ -n "$open" ]; then
+            echo "Back-merge PR #$open is open and follows main."
+            exit 0
+          fi
+          gh pr create --base dev --head main \
+            --title "chore: merge main back into dev" \
+            --body "Brings what reached \`main\` without passing through \`dev\` (a release's version and changelog, a hotfix) back into \`dev\` (ADR-0030; CONTRIBUTING.md, \"Promoting dev to main\"). Merge it with a merge commit. Opened by \`.github/workflows/back-merge.yml\`; it follows \`main\` until it is merged."
