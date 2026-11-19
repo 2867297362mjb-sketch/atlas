@@ -3,6 +3,9 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { DownloadProgress } from "@/lib/download-progress";
+
+export type { DownloadProgress };
 
 /** One kind today: `embedding`, shared memory's model. The code-search kind
  *  went with the code index; the field stays on the wire. */
@@ -30,15 +33,6 @@ export interface ModelEntry {
 export interface ModelStatus extends ModelEntry {
   downloaded: boolean;
   selected: boolean;
-}
-
-export interface DownloadProgress {
-  id: string;
-  file: string;
-  fileIndex: number;
-  fileCount: number;
-  received: number;
-  total: number;
 }
 
 export interface DownloadDone {

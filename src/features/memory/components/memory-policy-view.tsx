@@ -12,6 +12,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { downloadPercent } from "@/lib/download-progress";
 import { useAppStore } from "@/features/app/stores/app-store";
 import { sendToAgentChat } from "@/features/chat/lib/send-to-agent";
 import { memoryPolicy, type Policy } from "../lib/memory-policy-api";
@@ -164,13 +165,7 @@ export function MemoryPolicyView() {
   }
 
   if (phase === "downloading") {
-    const pct = progress
-      ? Math.round(
-          ((progress.file_index + (progress.total ? progress.received / progress.total : 0)) /
-            Math.max(1, progress.file_count)) *
-            100,
-        )
-      : 0;
+    const pct = progress ? downloadPercent(progress) : 0;
     return (
       <Notice icon={<Loader2 size={18} className="animate-spin" />} title="Downloading model…">
         <div className="flex w-[320px] max-w-full flex-col gap-2 pt-1">

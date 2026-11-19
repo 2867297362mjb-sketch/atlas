@@ -74,6 +74,11 @@ import { bracketBody } from "./support/source";
  * #17 pins the Tips record (`tips.rs` ↔ `tips-api.ts`): the state's fields,
  *    the cohort's spellings and the commands' argument names. A renamed
  *    `seen` would arrive as `undefined` and every tip would show again.
+ * #18 pins a model download's progress (`DownloadProgress` in `models.rs`)
+ *    to the one TS type both download screens read
+ *    (`src/lib/download-progress.ts`), and holds both API wrappers to that
+ *    type. The Memory tab kept its own snake_case copy, read `file_index` off
+ *    a camelCase payload, and showed `NaN%` for the whole download.
  *
  * The session-delta wire's own shapes (`crates/atlas-agent-wire`) are not
  * pinned here: their TypeScript is generated from the Rust types into
@@ -979,6 +984,38 @@ describe("tips: TipsState ↔ tips-api.ts, and the tips_* commands (#17)", () =>
     for (const name of ["tips_mark_seen", "tips_reset"]) {
       expect([...tsInvokeArgKeys(api, name)].sort()).toEqual(
         [...rustCommandArgKeys(rust, name)].sort(),
+      );
+    }
+  });
+});
+
+describe("model download progress: DownloadProgress ↔ download-progress.ts (#18)", () => {
+  const rust = read("src-tauri", "src", "commands", "models.rs");
+  const shared = read("src", "lib", "download-progress.ts");
+
+  it("carries the same fields, camelCased", () => {
+    const { attrs, body } = rustItem(rust, "struct", "DownloadProgress");
+    expect(attrs).toMatch(/rename_all\s*=\s*"camelCase"/);
+    const rustFields = rustStructFields(body).map(snakeToCamel).sort();
+    // Floor against a vacuous pass — this is the regression's own field.
+    expect(rustFields).toContain("fileIndex");
+    expect(tsInterfaceProps(shared, "DownloadProgress").sort()).toEqual(rustFields);
+  });
+
+  it("both download screens' API wrappers read that type, not a copy of their own", () => {
+    // The regression: the Memory tab declared its own `DownloadProgress` with
+    // `file_index` / `file_count`, keys the camelCase struct never sends.
+    for (const rel of [
+      ["src", "features", "memory", "lib", "memory-graph-api.ts"],
+      ["src", "features", "settings", "lib", "models-api.ts"],
+    ]) {
+      const api = read(...rel);
+      const name = rel.join("/");
+      expect(api, `${name} declares its own DownloadProgress`).not.toMatch(
+        /interface\s+DownloadProgress\b/,
+      );
+      expect(api, `${name} must take DownloadProgress from @/lib/download-progress`).toMatch(
+        /import type \{ DownloadProgress \} from "@\/lib\/download-progress"/,
       );
     }
   });

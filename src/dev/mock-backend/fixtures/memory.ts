@@ -114,9 +114,10 @@ function streamModelDownload(): void {
   MODEL_FILES.forEach(([file, total], fileIndex) => {
     for (let part = 1; part <= 4; part++) {
       steps.push({
+        id: MODEL_ID,
         file,
-        file_index: fileIndex,
-        file_count: MODEL_FILES.length,
+        fileIndex,
+        fileCount: MODEL_FILES.length,
         received: Math.round((total * part) / 4),
         total,
       });
