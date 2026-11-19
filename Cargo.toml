@@ -5,7 +5,7 @@
 # (`=1.4.0`), the ported stack pins 2.0 / `=1.5.0`, and no single cargo
 # resolution can hold two exact pins of the same crate. The old stack is gone
 # and every remaining consumer is on `=2.0.0`, so the collision is gone with it
-# (spec `docs/archive/atlas-agent-codex-port-spec.md`, decision D4 and its premise
+# (spec `docs/archive/atlas-agent-codex-port-spec.md (deleted; last in git at 9459428b)`, decision D4 and its premise
 # correction; issue #38).
 #
 # The workspace exists so the engine (#42) lands in the same

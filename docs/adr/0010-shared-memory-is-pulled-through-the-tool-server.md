@@ -2,7 +2,7 @@
 
 **Status:** Accepted (2026-09-21). Branch `feat/shared-memory-unification`, after spec #77's thirteen tickets landed. Amended by ADR-0020: an ACP agent gets the server through the stdio bridge whatever it advertises; only the in-process native agent gets it over HTTP. ADR-0019 is the bridge itself. Three tools were added after the table below: `memory_history`, `memory_why` and `memory_feedback`; `CONTEXT.md` lists the current set.
 
-**For agents:** this supersedes the "Push" row of `docs/archive/shared-memory-system.md` § "Outcome in one page" and rounds 2–3 decisions Q14, Q4 (reopened) and Q15 there. Nothing is prepended to a prompt any more. If a regression is traced to memory not reaching an agent, look at the tool server (`src-tauri/src/commands/memory_server/`) and its instructions, not at `agents_send`.
+**For agents:** this supersedes the "Push" row of `docs/archive/shared-memory-system.md (deleted; last in git at 9459428b)` § "Outcome in one page" and rounds 2–3 decisions Q14, Q4 (reopened) and Q15 there. Nothing is prepended to a prompt any more. If a regression is traced to memory not reaching an agent, look at the tool server (`src-tauri/src/commands/memory_server/`) and its instructions, not at `agents_send`.
 
 ## Context
 

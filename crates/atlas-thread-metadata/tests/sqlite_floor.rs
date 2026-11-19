@@ -25,7 +25,7 @@
 //! guards the resolution side (one `rusqlite` requirement across every
 //! manifest).
 //!
-//! Issue #39, spec `docs/archive/atlas-agent-codex-port-spec.md` D4 / Phase 0,
+//! Issue #39, spec `docs/archive/atlas-agent-codex-port-spec.md (deleted; last in git at 9459428b)` D4 / Phase 0,
 //! open question 6.
 
 /// `3.51.3` in SQLite's `SQLITE_VERSION_NUMBER` encoding: `major*1_000_000 +

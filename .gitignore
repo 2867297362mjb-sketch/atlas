@@ -61,8 +61,6 @@ skills-lock.json
 # The map of docs/ itself.
 !docs/README.md
 !docs/adr/*.md
-!docs/archive/*.md
-!docs/archive/radix-to-base-ui/*.md
 !docs/research/*.md
 !docs/qa/*.md
 !docs/reference/*.md
@@ -102,7 +100,7 @@ vendor/atlas-engine/**/target/
 .ds-sync/
 ds-bundle/
 
-# Python bytecode from the one-off scripts.
+# Python bytecode.
 __pycache__/
 
 # Built by scripts/linux/build-bwrap.sh for the AppImage; never committed.

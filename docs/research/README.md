@@ -6,7 +6,7 @@ read at, so it can be judged stale without guessing.
 
 A note is added when an investigation answers a question the code or an ADR depends on.
 When a decision is made from it, the ADR cites the note; when the note is superseded or
-its subject is gone, it moves to `docs/archive/`. Notes are not edited to track later
+its subject is gone, it is deleted (git keeps it). Notes are not edited to track later
 code, only corrected when they were wrong.
 
 - `agent-org-teams-api-access.md` - what exists for giving Atlas Agent access to the organisation and teams API.

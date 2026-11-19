@@ -472,7 +472,6 @@ atlas/
 │   └── atlas-engine                 the engine behind Atlas Agent (ADR-0004, ADR-0011)
 │
 ├── scripts/                       build/release helpers (with-posthog-env.mjs, bump.sh)
-├── landing/                       marketing site source
 │
 ├── index.html
 ├── package.json

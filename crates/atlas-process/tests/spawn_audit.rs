@@ -4,7 +4,7 @@
 //! Atlas is a GUI (console-less) process. On Windows, any console-subsystem
 //! child spawned without `CREATE_NO_WINDOW` gets a fresh console, and with
 //! Windows Terminal as the default terminal host that console is a visible
-//! window (see docs/archive/windows-terminal-spawn.md). The compiler cannot
+//! window (see docs/archive/windows-terminal-spawn.md (deleted; last in git at 9459428b)). The compiler cannot
 //! catch a missing flag, so this test walks the source instead.
 //!
 //! A spawn site counts as gated when, within `WINDOW` lines after
@@ -34,7 +34,7 @@ const GATES: &[&str] = &[
 ];
 
 /// Ungated spawn sites that are reachable on Windows and still open for work.
-/// Keep in sync with the action plan in docs/archive/windows-terminal-spawn.md.
+/// Keep in sync with the action plan in docs/archive/windows-terminal-spawn.md. (deleted; last in git at 9459428b)
 const KNOWN_GAPS: &[&str] = &[
     // Runs inside the sandbox `command_runner` binary, itself a console
     // process, so its `cmd.exe` child inherits that console: no new window.

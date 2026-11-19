@@ -22,7 +22,7 @@ import { expectFloor } from "./support/floor";
  *      constructed for **every** session, was on unless config said otherwise,
  *      and sent a subset of events *even under plain API-key auth*.
  *
- * Research: `docs/archive/atlas-engine-fork-seam.md` §3 and its identity table.
+ * Research: `docs/archive/atlas-engine-fork-seam.md (deleted; last in git at 9459428b)` §3 and its identity table.
  *
  * **Why a text test.** Neither path fails a build, a type-check, or a test when
  * it comes back. Both are reachable by an ordinary-looking edit — restoring an

@@ -160,7 +160,7 @@ reviews:
         secrets exposed to fork-triggered jobs, untrusted PR text interpolated
         into `run:` steps, and third-party actions not pinned to a commit SHA.
 
-    - path: "{docs,landing}/**"
+    - path: "docs/**"
       instructions: |
         Review for accuracy against the code it describes, not prose style.
 

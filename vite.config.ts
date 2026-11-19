@@ -381,7 +381,6 @@ export default defineConfig(() => ({
       ignored: [
         "**/src-tauri/**",
         "**/crates/**",
-        "**/landing/**",
         "**/scripts/**",
         "**/dist/**",
         "**/target/**",

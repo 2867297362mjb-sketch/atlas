@@ -214,7 +214,6 @@ export const NON_RUST = [
   "tests/",
   "e2e/",
   "docs/",
-  "landing/",
   "public/",
   "patches/",
   "scripts/",
