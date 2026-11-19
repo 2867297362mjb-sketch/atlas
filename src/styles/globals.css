@@ -1375,6 +1375,18 @@
   height: 100vh;
 }
 
+/* The transcript's "Scroll to bottom" pill (`JumpToBottomPill` in
+   @tryatlas/design). Its hover set the background to `element-hover`, which is
+   an alpha overlay (4% of the foreground), in place of the card it sits on: the
+   pill floats over the transcript, so on hover it went see-through and the
+   text behind showed in it. The card stays the background here and the tint is
+   laid over it as an image. Unlayered on purpose, so it outranks the utility
+   it corrects. Remove once the package draws its hover this way. */
+button.atlas-pill-in[title="Jump to latest"]:hover {
+  background-color: var(--card);
+  background-image: linear-gradient(var(--element-hover), var(--element-hover));
+}
+
 /* A run of turns the transcript window swapped out (use-transcript-window):
    an empty block exactly as tall as they measured. */
 .atlas-row-gap {
