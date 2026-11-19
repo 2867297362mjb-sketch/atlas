@@ -3,20 +3,15 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { DownloadProgress } from "@/lib/download-progress";
 import type { GraphLayout, MemoryGraphData } from "./memory-graph-types";
+
+export type { DownloadProgress };
 
 export interface EmbedStatus {
   downloaded: boolean;
   model: string;
   model_dir: string;
-}
-
-export interface DownloadProgress {
-  file: string;
-  file_index: number;
-  file_count: number;
-  received: number;
-  total: number;
 }
 
 export interface DownloadDone {

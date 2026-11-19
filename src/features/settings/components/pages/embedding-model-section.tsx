@@ -4,6 +4,7 @@ import { Download, Trash2 } from "lucide-react";
 import { AtlasLoader } from "@/components/atlas-loader";
 import { useAppStore } from "@/features/app/stores/app-store";
 import { useModelsStore } from "../../stores/models-store";
+import { downloadPercent } from "@/lib/download-progress";
 import { models, type DownloadProgress, type ModelStatus } from "../../lib/models-api";
 import {
   SettingsGroup,
@@ -212,12 +213,7 @@ function ModelRow({
 const INCOMPATIBLE_REASON = "Atlas's on-device embedding loader can't load this model";
 
 function ProgressBar({ progress: p }: { progress: DownloadProgress }) {
-  const pct = Math.min(
-    100,
-    Math.round(
-      ((p.fileIndex + (p.total ? p.received / p.total : 0)) / Math.max(1, p.fileCount)) * 100,
-    ),
-  );
+  const pct = downloadPercent(p);
   return (
     <div
       role="progressbar"

@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { GraphNodeList } from "@/components/graph-node-list";
 import { Application } from "pixi.js";
 import { destroyPixiApp, registerPixiApp } from "@/lib/pixi-app";
+import { GraphInitError } from "@/components/graph-init-error";
 import { GraphRuler, type Viewport } from "@/components/graph-ruler";
 import { graphPalette } from "@/components/graph-palette";
 import { onThemeApplied, themeBase } from "@/features/theme/theme-values";
@@ -107,6 +108,7 @@ function Scene({
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState<Viewport>({ x: 0, y: 0, scale: 1 });
+  const [initError, setInitError] = useState<string | null>(null);
   const vpRef = useRef<Viewport>({ x: 0, y: 0, scale: 1 });
   const vpRafRef = useRef(false);
   const sceneRef = useRef<MemorySceneState>({
@@ -192,6 +194,7 @@ function Scene({
           }
           return;
         }
+        setInitError(null);
         const pushViewport = (v: Viewport) => {
           vpRef.current = v;
           if (!vpRafRef.current) {
@@ -215,8 +218,11 @@ function Scene({
           labelFontFamily: themeBase("font-sans") || "system-ui, sans-serif",
         });
       })
-      .catch(() => {
-        /* disposal handles fallout */
+      .catch((e: unknown) => {
+        // A scene torn down mid-init fails for that reason, and the cleanup
+        // below handles it. Any other failure is shown: a renderer that never
+        // started otherwise reads as a graph with nothing in it.
+        if (!disposed) setInitError(e instanceof Error ? e.message : String(e));
       });
 
     return () => {
@@ -248,7 +254,11 @@ function Scene({
   return (
     <div className="relative h-full w-full">
       <div ref={hostRef} className="h-full w-full" />
-      <GraphRuler width={width} height={height} viewport={viewport} />
+      {initError ? (
+        <GraphInitError message={initError} source="Memory: drawing the graph" />
+      ) : (
+        <GraphRuler width={width} height={height} viewport={viewport} />
+      )}
     </div>
   );
 }
