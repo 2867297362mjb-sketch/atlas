@@ -395,10 +395,10 @@ describe("openAgentSession", () => {
     expect(session().acpSessionId).toBeUndefined();
   });
 
-  it("as found: a load that fails leaves the optimistic binding in place", async () => {
-    // `openThread` rolls this back, because a tab bound to a session the
-    // backend never opened is stranded (the panel's bind skips a bound tab).
-    // This path reports the failure and opens the send gate on that binding.
+  it("a load that fails rolls the optimistic binding back, as `openThread` does", async () => {
+    // A tab bound to a session the backend never opened is stranded: the
+    // panel's bind skips a bound tab, and every send goes to a session the
+    // agent does not have.
     await ensureAgent(PLUGIN);
     tauri.handleRaw({ agents_load_session: () => Promise.reject({ message: "no such session" }) });
     await open();
@@ -406,10 +406,10 @@ describe("openAgentSession", () => {
     expect(toastError).toHaveBeenCalledWith("Couldn't open session: no such session");
     expect(session().resumePending).toBe(false);
     expect(session().transcriptLoading).toBe(false);
-    expect(session().acpSessionId).toBe(SESSION);
+    expect(session().acpSessionId).toBeUndefined();
   });
 
-  it("as found: has no load token, so a load answered late still paints", async () => {
+  it("a load answered after the tab moved on paints and binds nothing", async () => {
     let release!: (v: unknown) => void;
     tauri.handleRaw({ agents_load_session: () => new Promise((r) => (release = r)) });
     const opening = open();
@@ -419,8 +419,8 @@ describe("openAgentSession", () => {
     store().actions.clearSession(TAB);
     release(KEY);
     await opening;
-    expect(session().acpSessionId).toBe(SESSION);
-    expect(session().messages).toHaveLength(2);
+    expect(session().acpSessionId).toBeUndefined();
+    expect(session().messages).toHaveLength(0);
   });
 });
 

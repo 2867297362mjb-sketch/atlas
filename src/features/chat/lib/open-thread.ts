@@ -29,6 +29,7 @@ import { bumpLoadToken, isLoadStale } from "./load-tokens";
 import { ResumeError, resumeThreadFast } from "./resume-session";
 import { applyModeOnResume, holdUnrestoredMode } from "./resume-mode";
 import { snapshotLive } from "./snapshot-message";
+import { clearKeepingUnsent } from "./unsent-text";
 import { AGENT_TYPE_BY_SIDEBAR, type SidebarAgent } from "./sidebar-agents";
 
 export interface OpenableThread {
@@ -208,10 +209,14 @@ export async function loadThreadIntoTab(
     } else {
       // Roll the optimistic binding back: a tab bound to a session the backend
       // never opened is stranded (the chat panel's bind effect skips a tab that
-      // already has a binding). The history row is untouched.
+      // already has a binding). The history row is untouched. What the user
+      // sent while it loaded goes back to the composer, not with the reset.
       console.warn("resume failed:", err);
-      clearSession(targetTabId);
-      toast.error(`Couldn't resume this session: ${msg.slice(0, 120)}`);
+      const kept = clearKeepingUnsent(targetTabId);
+      toast.error(
+        `Couldn't resume this session: ${msg.slice(0, 120)}` +
+          (kept ? " What you sent is back in the composer." : ""),
+      );
     }
     return false;
   }

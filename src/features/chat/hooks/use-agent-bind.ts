@@ -40,10 +40,13 @@ export function useAgentBind(
   bindControlRef: RefObject<BindControl | null>,
 ): void {
   const shown = useLayoutStore((s) => isChatTabShown(s, tabId));
-  // A message is waiting on this tab's session: a first message held for the
-  // bind, or one queued behind it. Someone sent to the tab, shown or not.
+  // How many messages wait on this tab's session: a first message held for
+  // the bind, and those queued behind it. Someone sent to the tab, shown or
+  // not. A count rather than a flag, so that every new one asks again: a start
+  // or restore that failed is retried by the next send, not only by showing
+  // the tab or focusing its composer (audit #57).
   const waiting = useChatStore(
-    (s) => !!s.sessions[tabId]?.pendingSend || (s.queues[tabId]?.length ?? 0) > 0,
+    (s) => (s.sessions[tabId]?.pendingSend ? 1 : 0) + (s.queues[tabId]?.length ?? 0),
   );
   const pendingRestore = session?.pendingRestore;
   // The agent spawn takes 1–3 s warm and up to 30 s on a cold `npx` cache,
@@ -118,7 +121,7 @@ export function useAgentBind(
   // conditions, so a hold that is replaced (an agent switch) is started too.
   // A no-op for a bound tab, and for an attempt already running.
   useEffect(() => {
-    if (shown || waiting) bindControlRef.current?.kick();
+    if (shown || waiting > 0) bindControlRef.current?.kick();
   }, [
     shown,
     waiting,

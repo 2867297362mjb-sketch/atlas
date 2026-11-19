@@ -34,8 +34,9 @@ import {
   readChatTabSession,
   restorableSessionOfTab,
 } from "../lib/chat-tab-session";
-import { openNewAgentChat } from "../lib/open-agent-session";
-import { tabShowingSession } from "../lib/open-thread";
+import { openAgentSession, openNewAgentChat } from "../lib/open-agent-session";
+import { loadThreadIntoTab, tabShowingSession } from "../lib/open-thread";
+import { sidebarAgentOf } from "../lib/sidebar-agents";
 import { sessionBind } from "../lib/session-bind";
 import { sessionSend } from "../lib/session-send";
 import { useAgentBind, type BindControl } from "./use-agent-bind";
@@ -466,6 +467,59 @@ describe("a tab saved with a conversation", () => {
     expect(session().messages).toEqual([]);
   });
 
+  it("sent to while hidden, then the agent cannot reopen it: the message comes back to the composer", async () => {
+    // The restore parks the held message in the queue before loading; the
+    // failed load reset the tab to a new chat and the reset deleted the
+    // queue, so a message the user had sent was simply gone (audit #46).
+    tauri.handleRaw({
+      threads_resume: () => {
+        throw new Error("no such session");
+      },
+    });
+    savedTab(OTHER);
+    mountPanel();
+    await settle();
+    await act(() => sessionSend.send(TAB, { content: "carry on", mentions: [] }));
+    await settle();
+
+    expect(count("threads_resume")).toBe(1);
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(store().queues[TAB] ?? []).toEqual([]);
+    expect(session().messages).toEqual([]);
+    expect(store().drafts[TAB]).toBe("carry on");
+  });
+
+  it("history unreadable with a message waiting: the message is parked, and the next send asks again", async () => {
+    // The history read failed before the held message was parked, so the tab
+    // sat on "Starting…" (status running) with nothing starting (audit #53),
+    // and a second send only queued: nothing asked for the restore again
+    // (audit #57).
+    let broken = true;
+    tauri.handleRaw({
+      threads_history: () => {
+        if (broken) throw new Error("store not open");
+        return [{ ...ROW, folderPaths: ["/proj"] }];
+      },
+    });
+    savedTab(OTHER);
+    mountPanel();
+    await settle();
+    await act(() => sessionSend.send(TAB, { content: "first", mentions: [] }));
+    await settle();
+
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(session().pendingSend).toBeUndefined();
+    expect(session().status).toBe("idle");
+    expect(store().queues[TAB]).toEqual(["first"]);
+
+    broken = false;
+    await act(() => sessionSend.send(TAB, { content: "second", mentions: [] }));
+    await settle();
+    expect(count("threads_resume")).toBe(1);
+    expect(session().acpSessionId).toBe(OLD);
+    expect(store().queues[TAB]).toEqual(["first", "second"]);
+  });
+
   it("counts as the tab showing its session, so the sidebar focuses it", () => {
     savedTab(OTHER);
     expect(tabShowingSession(OLD)).toBe(TAB);
@@ -494,5 +548,70 @@ describe("what a tab saves", () => {
 
     act(() => store().actions.clearSession(TAB));
     expect(readChatTabSession(layout().tabs[0].data)).toBeNull();
+  });
+});
+
+describe("a load that fails or is replaced", () => {
+  beforeEach(() => store().actions.createSession(TAB, PLUGIN));
+
+  it("a load that fails gives back what was typed while it ran", async () => {
+    // A sidebar open that fails resets the tab; the messages typed while it
+    // loaded went with the reset (audit #55).
+    let fail!: (err: unknown) => void;
+    tauri.handleRaw({
+      threads_resume: () => new Promise((_, reject) => (fail = reject)),
+    });
+    tabs(TAB);
+    const loading = loadThreadIntoTab(TAB, {
+      threadId: "th-1",
+      sessionId: OLD,
+      title: "An old session",
+      agent: sidebarAgentOf(PLUGIN),
+      cwd: "/proj",
+      projectPath: "/proj",
+    });
+    await settle();
+    await act(() => sessionSend.send(TAB, { content: "while it loads", mentions: [] }));
+    await act(() => sessionSend.send(TAB, { content: "and this", mentions: [] }));
+
+    fail(new Error("no such session"));
+    await act(() => loading);
+
+    expect(store().queues[TAB] ?? []).toEqual([]);
+    expect(session().pendingSend).toBeUndefined();
+    expect(store().drafts[TAB]).toBe("while it loads\n\nand this");
+  });
+
+  it("opening a session a saved tab is waiting for focuses that tab", async () => {
+    // `openAgentSession` (fork, the agent's own `ui_open`) looked only at
+    // bound tabs, and loaded the session into a second one; the saved tab
+    // took it back when shown (audit #49).
+    tabs(OTHER, { sessionId: OLD });
+    store().actions.setPendingRestore(TAB, OLD);
+    tauri.handleRaw({ agents_load_session: () => ({ agent_id: AGENT.agent_id, session_id: OLD }) });
+
+    await act(() => openAgentSession({ acpSessionId: OLD, title: "Old", cwd: "/proj" }));
+
+    expect(layout().activeTabId).toBe(TAB);
+    expect(count("agents_load_session")).toBe(0);
+  });
+
+  it("New chat while opening a session: the session is not painted or bound into the new chat", async () => {
+    let answer!: (v: unknown) => void;
+    tauri.handleRaw({
+      agents_load_session: () => new Promise((resolve) => (answer = resolve)),
+    });
+    tabs(TAB);
+    const opening = openAgentSession({ acpSessionId: OLD, title: "Old", cwd: "/proj" });
+    await settle();
+
+    act(() => void openNewAgentChat());
+    answer({ agent_id: AGENT.agent_id, session_id: OLD });
+    await act(() => opening);
+
+    expect(session().acpSessionId).not.toBe(OLD);
+    expect(session().messages).toEqual([]);
+    expect(session().transcriptLoading).toBeFalsy();
+    expect(session().resumePending).toBeFalsy();
   });
 });

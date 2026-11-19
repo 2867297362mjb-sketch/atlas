@@ -63,26 +63,20 @@ export async function restoreTabSession(tabId: string, deps: RestoreDeps = appDe
       // History could not be read, which says nothing about the session. The
       // tab keeps waiting for it, so the next show, focus or send asks again;
       // giving up here would start a new chat in the tab and drop its saved
-      // id, losing the tab's conversation to one failed read.
+      // id, losing the tab's conversation to one failed read. A message held
+      // for it waits in the queue meanwhile, rather than leaving the tab on
+      // "Starting…" with nothing starting.
+      parkHeld(tabId);
       deps.error(`Couldn't reopen this session: ${errInfo(err).message.slice(0, 120)}`);
       return;
     }
     if (pending() !== sessionId) return;
-    const { actions, sessions } = useChatStore.getState();
+    const { actions } = useChatStore.getState();
     if (!row) {
       actions.setPendingRestore(tabId, undefined);
       return;
     }
-    // A first message sent to the tab before it was ever shown is held with
-    // its bubble already in the transcript, and the load's paint replaces the
-    // transcript. Park it in the queue, which the load leaves alone and which
-    // drains once the session is back.
-    const held = sessions[tabId]?.pendingSend;
-    if (held) {
-      actions.setPendingSend(tabId, undefined);
-      actions.updateSessionStatus(tabId, "idle");
-      actions.enqueueMessage(tabId, held.content, held.mentions ?? []);
-    }
+    parkHeld(tabId);
     const projectPath = deps.projectPath(tabId) ?? "";
     const cwd = row.folderPaths[0] ?? projectPath;
     // Cleared in the same tick the load takes the tab (it marks the resume
@@ -105,4 +99,19 @@ export async function restoreTabSession(tabId: string, deps: RestoreDeps = appDe
   } finally {
     inFlight.delete(tabId);
   }
+}
+
+/**
+ * A first message sent to the tab before it was ever shown is held with its
+ * bubble already in the transcript, and the load's paint replaces the
+ * transcript. Park it in the queue, which the load leaves alone and which
+ * drains once the session is back.
+ */
+function parkHeld(tabId: string): void {
+  const { actions, sessions } = useChatStore.getState();
+  const held = sessions[tabId]?.pendingSend;
+  if (!held) return;
+  actions.setPendingSend(tabId, undefined);
+  actions.updateSessionStatus(tabId, "idle");
+  actions.enqueueMessage(tabId, held.content, held.mentions ?? []);
 }

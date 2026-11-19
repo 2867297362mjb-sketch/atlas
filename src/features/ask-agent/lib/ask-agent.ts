@@ -63,7 +63,7 @@ import { rememberMention } from "@/features/chat/lib/mention-registry";
 import { toShortForm, type MentionAgentContext } from "@/features/chat/lib/mentions";
 import { projectPathForTab } from "@/features/chat/lib/tab-project";
 import type { ChatSendDetail } from "@/features/chat/hooks/use-queue-drain";
-import type { ChatInsertDetail } from "@/features/chat/lib/response-selection";
+import { draftInto } from "@/features/chat/lib/unsent-text";
 
 import { agentContextMention, type AgentContext } from "./agent-context";
 
@@ -180,17 +180,6 @@ function sendUntilHeard(detail: ChatSendDetail, tries: number): Promise<boolean>
     };
     attempt();
   });
-}
-
-/** Write `text` after the session's draft: into its composer when mounted,
- *  else into the stored draft its composer reads on mount. */
-function draftInto(tabId: string, text: string): void {
-  const detail: ChatInsertDetail = { text, tabId, append: true };
-  const heard = !emitWindowEvent("atlas:chat-insert", detail, { cancelable: true });
-  if (heard) return;
-  const chat = useChatStore.getState();
-  const cur = chat.drafts[tabId] ?? "";
-  chat.actions.setDraft(tabId, cur.trim() ? `${cur}\n\n${text}` : text);
 }
 
 /** A timer, not a frame: frames stop in a hidden window, and the ask would
