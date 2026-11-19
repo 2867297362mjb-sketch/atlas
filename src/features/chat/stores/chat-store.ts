@@ -797,6 +797,15 @@ function isNewToolCall(session: ChatSession, toolCallId: string, added?: Set<str
   return !before.messages.some((m) => m.toolCalls.some((t) => t.id === toolCallId));
 }
 
+/** ACP's `StopReason` values: each ends a turn normally. */
+const NORMAL_STOP_REASONS = new Set([
+  "end_turn",
+  "cancelled",
+  "max_tokens",
+  "max_turn_requests",
+  "refusal",
+]);
+
 /** Human-readable end-of-turn notice for a stop reason, or null when the
  *  outcome speaks for itself (P2.4).
  *
@@ -809,7 +818,9 @@ export function stopReasonNotice(stopReason: string): string | null {
     case "max_turn_requests":
       return "(the agent stopped — it hit the maximum number of model requests for one turn)";
     case "refusal":
-      return "(the agent declined to continue this request)";
+      // ACP: the refused prompt and everything after it are left out of the
+      // next prompt, and the client should show that (audit #21).
+      return "(the agent declined this request — it, and anything after it in this turn, won't be in what the agent sees next)";
     // `end_turn` is a normal finish; `cancelled` already renders its own UI.
     // Anything unknown is left alone rather than guessed at — inventing a
     // description for a stop reason a future adapter added would be worse than
@@ -2269,7 +2280,8 @@ function applyDeltaToDraft(
         const label =
           env.stop_reason === "end_turn"
             ? "(no response — the agent ended its turn without output)"
-            : `(no response — stop_reason: ${env.stop_reason})`;
+            : (stopReasonNotice(env.stop_reason) ??
+              `(no response — stop_reason: ${env.stop_reason})`);
         session.messages.push(makeAssistantTextMessage(label));
       } else if (responded) {
         // P2.4: an abnormal stop reason has to surface even when output DID
@@ -2308,8 +2320,12 @@ function applyDeltaToDraft(
           if (m.role === "assistant" && !m.model) m.model = producingModel;
         }
       }
-      session.status =
-        env.stop_reason === "end_turn" || env.stop_reason === "cancelled" ? "idle" : "error";
+      // Every stop reason ACP defines is a way for a turn to END, not to
+      // fail: a token limit, the request cap and a refusal settle idle with a
+      // notice saying what happened. Read as errors, they flashed the session
+      // "Failed" in the sidebar and recorded the turn as failed (audit #20).
+      // A reason ACP does not define is not guessed at.
+      session.status = NORMAL_STOP_REASONS.has(env.stop_reason) ? "idle" : "error";
       session.stopping = undefined;
       session.retryStatus = undefined;
       session.inflightToolIds = undefined;
