@@ -226,6 +226,11 @@ fn incomplete_tail_len(bytes: &[u8]) -> usize {
 struct Inner {
     output: Mutex<OutputBuffer>,
     exit: Mutex<Option<CommandExit>>,
+    /// How the child ended in the kernel's own words, read the moment it ended
+    /// and before anything reaped it (`release_slave_after_exit`, unix only).
+    /// The reader thread records this as the exit when it is there: the status
+    /// portable-pty hands back cannot name a signal — see `exit_from`.
+    ended: Mutex<Option<CommandExit>>,
     /// Signalled once when the child exits, so `wait_for_exit` can park instead
     /// of polling.
     exit_notify: tokio::sync::Notify,
@@ -281,18 +286,20 @@ impl CommandTerminal {
         }
 
         let child = pair.slave.spawn_command(cmd)?;
-        // Our copy of the slave must close, or the master read never sees EOF
-        // and `wait_for_exit` hangs forever after the command finishes — but
-        // only once the command has exited, not now. See the function.
-        release_slave_after_exit(pair.slave, child.process_id());
-
-        let mut reader = pair.master.try_clone_reader()?;
         let inner = Arc::new(Inner {
             output: Mutex::new(OutputBuffer::new(output_byte_limit)),
             exit: Mutex::new(None),
+            ended: Mutex::new(None),
             exit_notify: tokio::sync::Notify::new(),
             output_notify: tokio::sync::Notify::new(),
         });
+        // Our copy of the slave must close, or the master read never sees EOF
+        // and `wait_for_exit` hangs forever after the command finishes — but
+        // only once the command has exited, not now. The same wait reads how
+        // it ended. See the function.
+        release_slave_after_exit(pair.slave, child.process_id(), inner.clone());
+
+        let mut reader = pair.master.try_clone_reader()?;
         let child = Arc::new(Mutex::new(child));
 
         // Reader thread: blocking reads off the PTY master until EOF, which
@@ -318,11 +325,25 @@ impl CommandTerminal {
             // that wait ends, and the reap below cannot deadlock against it.
             drop(reader);
             // EOF — reap the child so the exit status is real rather than
-            // inferred from the pipe closing.
-            let status = reader_child.lock().ok().and_then(|mut c| c.wait().ok());
+            // inferred from the pipe closing. The exit is recorded before the
+            // child's lock is let go: `kill` signals the pid only while it
+            // holds that lock and finds no exit recorded, and once the child
+            // is reaped the pid may belong to another process.
+            let mut child = reader_child
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let status = child.wait().ok();
+            // Always there by now on unix: EOF waits on the slave copy that
+            // `release_slave_after_exit` closes only after reading it.
+            let ended = reader_inner
+                .ended
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
             if let Ok(mut slot) = reader_inner.exit.lock() {
-                *slot = Some(exit_from(status));
+                *slot = Some(ended.unwrap_or_else(|| exit_from(status)));
             }
+            drop(child);
             reader_inner.exit_notify.notify_waiters();
             // Wake output watchers too: the last append before EOF may have
             // landed while nobody was registered, and this is their signal to
@@ -430,12 +451,23 @@ impl CommandTerminal {
     /// no-op, not an error, because the agent's kill can always race the
     /// process finishing on its own.
     pub fn kill(&self) -> anyhow::Result<()> {
+        // Held for the whole kill. The reader thread reaps under this lock and
+        // records the exit before letting go of it, so while it is held an
+        // exit not yet recorded means the child is not reaped: the pid is
+        // still this command's to signal.
+        let mut child = self
+            .child
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if self.exit_status().is_some() {
             return Ok(());
         }
-        if let Ok(mut child) = self.child.lock() {
-            let _ = child.kill();
+        #[cfg(unix)]
+        if let Some(pid) = child.process_id() {
+            terminate(pid);
+            return Ok(());
         }
+        let _ = child.kill();
         Ok(())
     }
 }
@@ -454,10 +486,18 @@ impl CommandTerminal {
 /// until the reader takes it, and EOF arrives when this copy closes.
 ///
 /// `WNOWAIT` leaves the child unreaped: the reader thread still reaps it after
-/// EOF and reports the real status. Descendants that keep the slave open still
-/// hold EOF off, as before.
+/// EOF. Descendants that keep the slave open still hold EOF off, as before.
+///
+/// That makes this wait the one place that sees the child's own account of how
+/// it ended before anything reaps it, and the only account that can name a
+/// signal (#31), so it is kept in `inner.ended` for the reader to record. It is
+/// always there in time: EOF cannot arrive before the slave copy closes below.
 #[cfg(unix)]
-fn release_slave_after_exit(slave: Box<dyn portable_pty::SlavePty + Send>, pid: Option<u32>) {
+fn release_slave_after_exit(
+    slave: Box<dyn portable_pty::SlavePty + Send>,
+    pid: Option<u32>,
+    inner: Arc<Inner>,
+) {
     let Some(pid) = pid else {
         drop(slave);
         return;
@@ -469,10 +509,19 @@ fn release_slave_after_exit(slave: Box<dyn portable_pty::SlavePty + Send>, pid: 
             let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
             let rc =
                 unsafe { libc::waitid(libc::P_PID, pid, &mut info, libc::WEXITED | libc::WNOWAIT) };
-            // Anything but an interrupted wait means the child is gone: exited
-            // (`rc == 0`), or already reaped by `kill`'s grace loop (`ECHILD`).
-            if rc == 0 || std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted
-            {
+            if rc == 0 {
+                if let Some(exit) = exit_from_siginfo(&info) {
+                    *inner
+                        .ended
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(exit);
+                }
+                break;
+            }
+            // Anything but an interrupted wait means the child is gone, with
+            // nothing left to read: reaped already, which only the reader
+            // thread does, and only after a read error rather than EOF.
+            if std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
                 break;
             }
         }
@@ -480,12 +529,125 @@ fn release_slave_after_exit(slave: Box<dyn portable_pty::SlavePty + Send>, pid: 
     });
 }
 
-/// Windows' ConPTY has no slave fd for an exiting child to close last.
+/// Windows' ConPTY has no slave fd for an exiting child to close last, and a
+/// Windows process ends with an exit code, never a signal.
 #[cfg(not(unix))]
-fn release_slave_after_exit(slave: Box<dyn portable_pty::SlavePty + Send>, _pid: Option<u32>) {
+fn release_slave_after_exit(
+    slave: Box<dyn portable_pty::SlavePty + Send>,
+    _pid: Option<u32>,
+    _inner: Arc<Inner>,
+) {
     drop(slave);
 }
 
+/// How a child ended, from what `waitid` reported for it.
+#[cfg(unix)]
+fn exit_from_siginfo(info: &libc::siginfo_t) -> Option<CommandExit> {
+    // SAFETY: `waitid` succeeded, so `info` describes a child that changed
+    // state, which is what `si_status` is defined for.
+    let status = unsafe { info.si_status() };
+    match info.si_code {
+        libc::CLD_EXITED => Some(CommandExit {
+            exit_code: u32::try_from(status).ok(),
+            signal: None,
+        }),
+        libc::CLD_KILLED | libc::CLD_DUMPED => Some(CommandExit {
+            exit_code: None,
+            signal: Some(signal_name(status)),
+        }),
+        // `WEXITED` asks for endings only; anything else is not one.
+        _ => None,
+    }
+}
+
+/// A signal's conventional name, which is what ACP's `signal` carries
+/// (`SIGKILL`). The number, for one with no portable name.
+#[cfg(unix)]
+fn signal_name(signal: libc::c_int) -> String {
+    let name = match signal {
+        libc::SIGHUP => "SIGHUP",
+        libc::SIGINT => "SIGINT",
+        libc::SIGQUIT => "SIGQUIT",
+        libc::SIGILL => "SIGILL",
+        libc::SIGTRAP => "SIGTRAP",
+        libc::SIGABRT => "SIGABRT",
+        libc::SIGBUS => "SIGBUS",
+        libc::SIGFPE => "SIGFPE",
+        libc::SIGKILL => "SIGKILL",
+        libc::SIGUSR1 => "SIGUSR1",
+        libc::SIGSEGV => "SIGSEGV",
+        libc::SIGUSR2 => "SIGUSR2",
+        libc::SIGPIPE => "SIGPIPE",
+        libc::SIGALRM => "SIGALRM",
+        libc::SIGTERM => "SIGTERM",
+        libc::SIGXCPU => "SIGXCPU",
+        libc::SIGXFSZ => "SIGXFSZ",
+        libc::SIGVTALRM => "SIGVTALRM",
+        libc::SIGPROF => "SIGPROF",
+        libc::SIGIO => "SIGIO",
+        libc::SIGSYS => "SIGSYS",
+        other => return other.to_string(),
+    };
+    name.to_string()
+}
+
+/// What portable-pty's kill does — hang up, give the command a moment to go,
+/// then kill it outright — without reaping the child.
+///
+/// portable-pty's grace loop polls with `try_wait`, which reaps the child the
+/// moment it is gone, and a reaped child can no longer be asked how it ended:
+/// `release_slave_after_exit` then read nothing, and the agent was told its
+/// killed command had exited with code 1 (#31). Polled with `WNOWAIT` here, the
+/// child stays for that wait to read and for the reader thread to reap.
+///
+/// The caller holds the child's lock and has seen no exit recorded, so `pid`
+/// is not reaped and still names this command.
+#[cfg(unix)]
+fn terminate(pid: u32) {
+    let Ok(target) = libc::pid_t::try_from(pid) else {
+        return;
+    };
+    // SAFETY: plain signal sends to our own unreaped child.
+    unsafe { libc::kill(target, libc::SIGHUP) };
+    for attempt in 0..5 {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        if has_exited(pid) {
+            return;
+        }
+    }
+    // SAFETY: as above.
+    unsafe { libc::kill(target, libc::SIGKILL) };
+}
+
+/// Whether `pid` has ended, asked without reaping it.
+#[cfg(unix)]
+fn has_exited(pid: u32) -> bool {
+    // SAFETY: as in `release_slave_after_exit`.
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    let rc = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            pid,
+            &mut info,
+            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+        )
+    };
+    if rc == 0 {
+        // `WNOHANG` with nothing to report succeeds and leaves `si_pid` zero.
+        // SAFETY: `waitid` succeeded.
+        return unsafe { info.si_pid() } != 0;
+    }
+    // No child left to wait for is no child left to signal either.
+    std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted
+}
+
+/// The exit as portable-pty reports it, for when the kernel's own account is
+/// missing: always on Windows, where a process ends with a code and never a
+/// signal, and on unix only if the child was reaped before it could be read.
+/// portable-pty keeps a signal only as `strsignal`'s description, privately,
+/// and reports it as exit code 1, so a signal cannot be told from here.
 fn exit_from(status: Option<ExitStatus>) -> CommandExit {
     match status {
         Some(s) => {
@@ -641,6 +803,94 @@ mod tests {
             .await
             .expect("killed command must exit promptly");
         assert_ne!(exit.exit_code, Some(0), "a killed command did not succeed");
+    }
+
+    /// Park until `term` has printed `marker`.
+    async fn printed(term: &CommandTerminal, marker: &str) {
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                let changed = term.output_changed();
+                tokio::pin!(changed);
+                std::future::poll_fn(|cx| Poll::Ready(changed.as_mut().poll(cx).is_ready())).await;
+                if term.output().0.contains(marker) {
+                    return;
+                }
+                changed.await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("the command never printed {marker:?}"));
+    }
+
+    /// #31. A command a signal ended has no exit code; it has the signal. The
+    /// agent reads this back as how its command ended, and "exit 1" says the
+    /// command ran and failed, which a command that was killed did not.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_killed_command_reports_the_signal_that_ended_it() {
+        let term = run("/bin/sh", &["-c", "exec sleep 30"]);
+        term.kill().expect("kill");
+        let exit = tokio::time::timeout(std::time::Duration::from_secs(10), term.wait_for_exit())
+            .await
+            .expect("killed command must exit promptly");
+        assert_eq!(
+            exit,
+            CommandExit {
+                exit_code: None,
+                signal: Some("SIGHUP".to_string()),
+            }
+        );
+    }
+
+    /// A signal nobody here sent is still the answer: the kernel says how the
+    /// child ended, whoever ended it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_command_ended_by_its_own_signal_reports_it() {
+        let term = run("/bin/sh", &["-c", "kill -TERM $$"]);
+        let exit = tokio::time::timeout(std::time::Duration::from_secs(10), term.wait_for_exit())
+            .await
+            .expect("the command must end");
+        assert_eq!(
+            exit,
+            CommandExit {
+                exit_code: None,
+                signal: Some("SIGTERM".to_string()),
+            }
+        );
+    }
+
+    /// Kill hangs up first and gives the command a moment; one that ignores the
+    /// hangup is then killed outright — and reported as killed by THAT signal.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_command_that_ignores_the_hangup_is_reported_killed() {
+        let term = run("/bin/sh", &["-c", "trap '' HUP; echo ready; exec sleep 30"]);
+        printed(&term, "ready").await;
+        term.kill().expect("kill");
+        let exit = tokio::time::timeout(std::time::Duration::from_secs(10), term.wait_for_exit())
+            .await
+            .expect("killed command must exit promptly");
+        assert_eq!(
+            exit,
+            CommandExit {
+                exit_code: None,
+                signal: Some("SIGKILL".to_string()),
+            }
+        );
+    }
+
+    /// And a command that exits on its own still has its code, and no signal.
+    #[tokio::test]
+    async fn an_exit_code_is_not_mistaken_for_a_signal() {
+        let term = run("/bin/sh", &["-c", "exit 1"]);
+        assert_eq!(
+            term.wait_for_exit().await,
+            CommandExit {
+                exit_code: Some(1),
+                signal: None,
+            }
+        );
     }
 
     #[tokio::test]

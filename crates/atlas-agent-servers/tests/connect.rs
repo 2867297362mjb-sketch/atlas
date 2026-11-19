@@ -1357,6 +1357,98 @@ async fn a_client_terminal_with_a_relative_cwd_is_refused() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// #27. ACP: after `terminal/release` "the TerminalId can no longer be used
+/// with other terminal/* methods, but tool calls that already contain it,
+/// continue to display its output". Release dropped the terminal outright, so
+/// the tool call showing it re-projected with no output at all — the command's
+/// output vanished from the transcript the moment the agent was done with it.
+#[tokio::test]
+async fn a_released_terminal_still_shows_its_output_in_its_tool_call() {
+    let (base, project) = scripted_dirs("terminal-release");
+    let steps = serde_json::json!([
+        {"method": "terminal/create", "save": "terminalId",
+         "params": {"command": "/bin/sh", "args": ["-c", "echo kept after release"]}},
+        {"update": {"sessionUpdate": "tool_call", "toolCallId": "call-1",
+                    "title": "echo", "kind": "execute", "status": "in_progress",
+                    "content": [{"type": "terminal", "terminalId": "$terminalId"}]}},
+        {"method": "terminal/wait_for_exit", "params": {"terminalId": "$terminalId"}},
+        {"method": "terminal/release", "params": {"terminalId": "$terminalId"}},
+        {"method": "terminal/output", "params": {"terminalId": "$terminalId"}},
+        {"update": {"sessionUpdate": "tool_call_update", "toolCallId": "call-1",
+                    "status": "completed"}},
+    ]);
+    let Some((outcomes, thread)) = run_client_requests(&base, &project, &steps).await else {
+        eprintln!("skipping: no python3 on this machine");
+        return;
+    };
+
+    let terminal_id = acp::TerminalId::new(
+        outcomes[0]["result"]["terminalId"]
+            .as_str()
+            .unwrap_or_else(|| panic!("terminal/create failed: {}", outcomes[0])),
+    );
+    assert!(
+        outcomes[3].get("result").is_some(),
+        "terminal/release failed: {}",
+        outcomes[3]
+    );
+    assert!(
+        outcomes[4].get("error").is_some(),
+        "a released terminal must be unknown to terminal/*: {}",
+        outcomes[4]
+    );
+
+    let thread = thread
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    assert!(
+        thread.terminal(&terminal_id).is_none(),
+        "a released id must not name a terminal for the terminal/* handlers"
+    );
+    let shown = thread.terminal_output(&terminal_id);
+    assert!(
+        shown
+            .as_deref()
+            .is_some_and(|output| output.contains("kept after release")),
+        "the tool call lost the released terminal's output: {shown:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// #31. A command the agent killed is reported as killed, with the signal
+/// that did it — not as one that exited with code 1, which reads as a command
+/// that ran and failed.
+#[tokio::test]
+async fn a_killed_client_terminal_reports_the_signal() {
+    let (base, project) = scripted_dirs("terminal-kill");
+    let steps = serde_json::json!([
+        {"method": "terminal/create", "save": "terminalId",
+         "params": {"command": "/bin/sh", "args": ["-c", "exec sleep 30"]}},
+        {"method": "terminal/kill", "params": {"terminalId": "$terminalId"}},
+        {"method": "terminal/wait_for_exit", "params": {"terminalId": "$terminalId"}},
+        {"method": "terminal/release", "params": {"terminalId": "$terminalId"}},
+    ]);
+    let Some((outcomes, _thread)) = run_client_requests(&base, &project, &steps).await else {
+        eprintln!("skipping: no python3 on this machine");
+        return;
+    };
+
+    let exit = &outcomes[2]["result"];
+    assert_eq!(
+        exit["signal"], "SIGHUP",
+        "the signal that ended the command: {}",
+        outcomes[2]
+    );
+    assert!(
+        exit["exitCode"].is_null(),
+        "a command a signal ended has no exit code: {}",
+        outcomes[2]
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// ATL-236 gap 1. Every fake agent in this suite emits well-formed JSON, and
 /// the only malformed-input test sat at the debug-log layer — a helper, not the
 /// transport. A garbage line from a real agent must be survivable: agents print

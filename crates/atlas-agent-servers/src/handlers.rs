@@ -1228,7 +1228,8 @@ pub fn handle_create_terminal(
 /// - the thread is gone (the upgrade fails, checked before parking again);
 /// - the terminal is released or the session torn down, both of which kill the
 ///   command — which is an exit, so the first condition fires. Release kills
-///   explicitly, just below; teardown kills through `AcpTerminal`'s `Drop`,
+///   explicitly (`TerminalRegistry::release`), and its last report is what the
+///   tool call keeps showing; teardown kills through `AcpTerminal`'s `Drop`,
 ///   which is the only thing covering an ABRUPT teardown — `close_session`
 ///   drops the thread handle without ever reaching this code.
 pub fn follow_terminal_output(
@@ -1294,9 +1295,10 @@ pub fn handle_kill_terminal(
     }
 }
 
-/// Release drops our handle on the terminal. The command is killed first: a
-/// released terminal has nobody left to read its output, so leaving the process
-/// running would leak it for the lifetime of the connection.
+/// Release kills the command — a released terminal has nobody left to read its
+/// output, so leaving the process running would leak it for the lifetime of the
+/// connection — and retires the id. What the command printed stays on the tool
+/// calls that show it (`AcpThread::release_terminal`).
 pub fn handle_release_terminal(
     args: acp::ReleaseTerminalRequest,
     responder: Responder<acp::ReleaseTerminalResponse>,
@@ -1307,17 +1309,11 @@ pub fn handle_release_terminal(
         Err(err) => return respond_err(responder, err),
     };
 
-    let mut thread = lock(&thread);
-    match thread.terminals_mut().remove(&args.terminal_id) {
-        Some(terminal) => {
-            let _ = terminal.kill();
-            drop(thread);
-            let _ = responder.respond(acp::ReleaseTerminalResponse::default());
-        }
-        None => {
-            drop(thread);
-            respond_err(responder, unknown_terminal(&args.terminal_id))
-        }
+    let released = lock(&thread).release_terminal(&args.terminal_id);
+    if released {
+        let _ = responder.respond(acp::ReleaseTerminalResponse::default());
+    } else {
+        respond_err(responder, unknown_terminal(&args.terminal_id));
     }
 }
 

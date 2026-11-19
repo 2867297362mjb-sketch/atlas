@@ -62,6 +62,8 @@ export async function healStatus(tabId: string, deps: HealDeps = appDeps): Promi
   } finally {
     inFlight.delete(tabId);
   }
+  // An answer that is no snapshot (a backend without the command) says nothing.
+  if (!snapshot) return;
   const { sessions, actions } = useChatStore.getState();
   const now = sessions[tabId];
   if (!now || now.acpSessionId !== before.acpSessionId) return;

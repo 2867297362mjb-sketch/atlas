@@ -2477,35 +2477,34 @@ impl AcpThread {
     /// Silent when nothing references the terminal — the agent is allowed to
     /// create one and never mention it in a tool call.
     pub fn note_terminal_output(&mut self, id: &acp::TerminalId) {
-        let updated: Vec<usize> =
-            self.entries
-                .iter()
-                .enumerate()
-                .filter(|(_, entry)| match entry {
-                    AgentThreadEntry::ToolCall(call) => call.content.iter().any(
-                        |block| matches!(block, ToolCallContent::Terminal(other) if other == id),
-                    ),
-                    _ => false,
-                })
-                .map(|(ix, _)| ix)
-                .collect();
+        let updated: Vec<usize> = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| shows_terminal(entry, id))
+            .map(|(ix, _)| ix)
+            .collect();
         for ix in updated {
             self.entry_updated(ix);
         }
     }
 
+    /// `terminal/release`: the command is killed and the id retired, so no
+    /// `terminal/*` request can name it again — but a tool call showing the
+    /// terminal keeps showing what it printed (#27), as ACP asks. A terminal
+    /// no tool call shows has nothing left to display and is dropped. `false`
+    /// when the id names no terminal in use.
+    pub fn release_terminal(&mut self, id: &acp::TerminalId) -> bool {
+        let shown = self.entries.iter().any(|entry| shows_terminal(entry, id));
+        self.terminals.release(id, shown)
+    }
+
+    /// A terminal the `terminal/*` methods may act on. A released one is not
+    /// here, even while a tool call still shows its output.
     pub fn terminal(&self, id: &acp::TerminalId) -> Option<&AcpTerminal> {
         self.terminals.get(id)
     }
 
-    /// A terminal's output as text, for the projection that flattens a tool
-    /// call's content. `None` when the id names no terminal this thread holds.
-    ///
-    /// Truncation is stated in the text because the text is all the reader
-    /// gets: a buffer that dropped its front otherwise reads as a command that
-    /// started mid-sentence. The exit status is deliberately NOT in here — the
-    /// agent reports how its own tool call ended through `tool_call_update`,
-    /// and the tool call's status is where the UI shows it.
     /// How [`Self::terminal_output`]'s answer has grown past `from` bytes.
     ///
     /// `None` when the id names no terminal this thread holds, or when the
@@ -2519,18 +2518,28 @@ impl AcpThread {
         id: &acp::TerminalId,
         from: usize,
     ) -> Option<TerminalAppend> {
-        self.terminals.get(id)?.output_appended(from)
+        self.terminals.shown(id)?.output_appended(from)
     }
 
     /// Where a terminal's output ends in the command's total output; the
     /// `from` for the next [`Self::terminal_output_appended`]. See
     /// [`AcpTerminal::output_end`].
     pub fn terminal_output_end(&self, id: &acp::TerminalId) -> Option<usize> {
-        self.terminals.get(id).map(AcpTerminal::output_end)
+        self.terminals.shown(id).map(AcpTerminal::output_end)
     }
 
+    /// A terminal's output as text, for the projection that flattens a tool
+    /// call's content. `None` when the id names no terminal this thread holds.
+    /// A released terminal a tool call showed still counts: the call keeps
+    /// showing its output (#27).
+    ///
+    /// Truncation is stated in the text because the text is all the reader
+    /// gets: a buffer that dropped its front otherwise reads as a command that
+    /// started mid-sentence. The exit status is deliberately NOT in here — the
+    /// agent reports how its own tool call ended through `tool_call_update`,
+    /// and the tool call's status is where the UI shows it.
     pub fn terminal_output(&self, id: &acp::TerminalId) -> Option<String> {
-        self.terminals.get(id).map(|terminal| {
+        self.terminals.shown(id).map(|terminal| {
             let response = terminal.current_output();
             if response.truncated {
                 format!("[earlier output dropped]\n{}", response.output)
@@ -2539,4 +2548,10 @@ impl AcpThread {
             }
         })
     }
+}
+
+/// Whether `entry` is a tool call showing terminal `id`: the calls a change to
+/// that terminal re-projects, and the ones its output is kept for on release.
+fn shows_terminal(entry: &AgentThreadEntry, id: &acp::TerminalId) -> bool {
+    matches!(entry, AgentThreadEntry::ToolCall(call) if call.terminals().any(|other| other == id))
 }
