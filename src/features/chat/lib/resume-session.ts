@@ -73,6 +73,12 @@ export interface ResumeCallbacks {
   paint: (messages: WireMessage[], asOfSeq: number) => void;
   /** Drop the skeleton. Fired with the paint. */
   onPainted: () => void;
+  /** The agent has the session open, under `key`; nothing is painted yet.
+   *  The tab binds here, not after the paint: the transcript keys its scroll
+   *  state on the bound session id, so a paint landing before the bind is
+   *  laid out twice, once unbound and again when the id arrives, and the
+   *  reader sees it jump. Only `resumeThreadFast` calls it. */
+  onOpened?: (key: SessionKey) => void;
   /** True when a newer click/open has superseded this one — polled before every
    *  mutation so a superseded resume never repaints a tab the user has already
    *  navigated away from (mirrors the sidebar's load-token guard). */
@@ -232,6 +238,7 @@ export async function resumeThreadFast(opts: {
     throw new ResumeError("resume", err);
   }
   timer.stage("load");
+  if (!cb.isStale()) cb.onOpened?.(resumed.key);
 
   let snapshot: SessionSnapshot;
   try {

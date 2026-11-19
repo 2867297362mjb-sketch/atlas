@@ -249,7 +249,10 @@ interface ChatState {
 
 interface ChatActions {
   actions: {
-    createSession: (tabId: string, agentType?: SwitchableAgent) => void;
+    /** `pendingRestore`: the agent session the tab is saved as showing, to be
+     *  loaded when the tab is first shown (`ChatSession.pendingRestore`). */
+    createSession: (tabId: string, agentType?: SwitchableAgent, pendingRestore?: string) => void;
+    setPendingRestore: (tabId: string, sessionId: string | undefined) => void;
     /** Re-bind a fresh (message-less) chat to a different agent. Clears the ACP
      *  binding so the chat panel re-creates a session with the new agent. */
     switchChatAgent: (tabId: string, agentType: SwitchableAgent) => void;
@@ -865,7 +868,7 @@ export const useChatStore = create<ChatState & ChatActions>()(
       // `defaultAgent` setting, else Atlas Agent (`agentForNewSession`).
       // Never hard-code an ACP agent here: on a fresh install that produces
       // a permanently disabled composer with no way to reach another agent.
-      createSession: (tabId, agentType = agentForNewSession()) =>
+      createSession: (tabId, agentType = agentForNewSession(), pendingRestore) =>
         set((s) => {
           if (s.sessions[tabId]) return;
           s.sessions[tabId] = {
@@ -884,6 +887,7 @@ export const useChatStore = create<ChatState & ChatActions>()(
             claudePermissionMode: agentType === "claude-code" ? "default" : undefined,
             claudePermissionModeExplicit: false,
             acpModeExplicit: false,
+            ...(pendingRestore ? { pendingRestore } : {}),
             // Optimistically pre-fill a non-Claude agent's mode picker from the
             // persisted cache so switching feels instant; mark pending until the
             // real session confirms (the picker shows a loading state).
@@ -1220,55 +1224,12 @@ export const useChatStore = create<ChatState & ChatActions>()(
           const session = s.sessions[sessionId];
           if (session) session.resumePending = pending;
         }),
-      clearSession: (sessionId) =>
+      setPendingRestore: (tabId, sessionId) =>
         set((s) => {
-          const session = s.sessions[sessionId];
-          if (session) {
-            session.messages = [];
-            session.tasks = [];
-            session.status = "idle";
-            session.inflightToolIds = undefined;
-            session.acpAgentId = undefined;
-            session.acpSessionId = undefined;
-            forgetSessionUsage(session);
-            session.title = UNTITLED_SESSION;
-            session.firstUserContent = undefined;
-            session.userMessageCount = 0;
-            // Reset the turn-identity high-water mark + live per-turn scratch
-            // so the next bound session's fresh turn_seq (which restarts at 1)
-            // isn't rejected as stale by `isStaleTurn` (see `setAcpBinding`).
-            session.currentTurnSeq = 0;
-            session.livePlan = undefined;
-            // The transcript these belonged to is gone with `messages`;
-            // leaving them would hang the old chat's children off the new
-            // one's first message.
-            session.subagents = undefined;
-            session.turnScratch = undefined;
-            // Commands belong to the ACP session being dropped; the next
-            // binding re-advertises its own list.
-            session.availableCommands = undefined;
-            // The advertised knobs go with it, for the same reason. Reseeded
-            // from this agent's cache rather than blanked, so the Options pill
-            // keeps rendering the right list across a clear instead of
-            // dropping to a spinner for something we already know.
-            session.acpConfigOptions = loadCachedAcpConfigOptions(session.agentType) ?? undefined;
-            // The tab no longer points at the session being resumed, so the
-            // send gate must drop with it. A resume that gets superseded
-            // (New chat / another sidebar click) bails WITHOUT clearing its own
-            // flag — deliberately, so it can't un-gate the resume that replaced
-            // it — which makes this the single place the flag is guaranteed to
-            // reset. Leaving it set would silently queue every future send in
-            // this tab forever.
-            session.resumePending = false;
-            // A first message still waiting on the old bind belongs to the
-            // conversation being dropped, exactly like the queue below.
-            session.pendingSend = undefined;
-            session.unrestoredModeId = undefined;
-            session.bindCwd = undefined;
-          }
-          delete s.queues[sessionId];
-          delete s.queueIds[sessionId];
+          const session = s.sessions[tabId];
+          if (session) session.pendingRestore = sessionId;
         }),
+      clearSession: (sessionId) => set((s) => resetToNewChat(s, sessionId)),
       setBindCwd: (tabId, cwd) =>
         set((s) => {
           const session = s.sessions[tabId];
@@ -2093,6 +2054,63 @@ function appendThoughtToDraft(s: ChatDraft, acpSessionId: string, text: string):
 function dropBackendSession(session: ChatSession | undefined): void {
   if (!session?.acpAgentId || !session.acpSessionId || session.disconnected) return;
   void agents.dropSession(session.acpAgentId, session.acpSessionId).catch(() => {});
+}
+
+/**
+ * Make `tabId` an empty new chat: no transcript, no binding, nothing pending.
+ * The agent session it was bound to is left running: whoever cleared the tab
+ * either has another tab taking that session or drops it themselves.
+ */
+function resetToNewChat(s: ChatDraft, tabId: string): void {
+  const session = s.sessions[tabId];
+  if (session) {
+    session.messages = [];
+    session.tasks = [];
+    session.status = "idle";
+    session.inflightToolIds = undefined;
+    session.acpAgentId = undefined;
+    session.acpSessionId = undefined;
+    forgetSessionUsage(session);
+    session.title = UNTITLED_SESSION;
+    session.firstUserContent = undefined;
+    session.userMessageCount = 0;
+    // Reset the turn-identity high-water mark + live per-turn scratch
+    // so the next bound session's fresh turn_seq (which restarts at 1)
+    // isn't rejected as stale by `isStaleTurn` (see `setAcpBinding`).
+    session.currentTurnSeq = 0;
+    session.livePlan = undefined;
+    // The transcript these belonged to is gone with `messages`;
+    // leaving them would hang the old chat's children off the new
+    // one's first message.
+    session.subagents = undefined;
+    session.turnScratch = undefined;
+    // Commands belong to the ACP session being dropped; the next
+    // binding re-advertises its own list.
+    session.availableCommands = undefined;
+    // The advertised knobs go with it, for the same reason. Reseeded
+    // from this agent's cache rather than blanked, so the Options pill
+    // keeps rendering the right list across a clear instead of
+    // dropping to a spinner for something we already know.
+    session.acpConfigOptions = loadCachedAcpConfigOptions(session.agentType) ?? undefined;
+    // The tab no longer points at the session being resumed, so the
+    // send gate must drop with it. A resume that gets superseded
+    // (New chat / another sidebar click) bails WITHOUT clearing its own
+    // flag — deliberately, so it can't un-gate the resume that replaced
+    // it — which makes this the single place the flag is guaranteed to
+    // reset. Leaving it set would silently queue every future send in
+    // this tab forever.
+    session.resumePending = false;
+    // Another conversation is taking the tab: the saved one is no
+    // longer what it should load when shown.
+    session.pendingRestore = undefined;
+    // A first message still waiting on the old bind belongs to the
+    // conversation being dropped, exactly like the queue below.
+    session.pendingSend = undefined;
+    session.unrestoredModeId = undefined;
+    session.bindCwd = undefined;
+  }
+  delete s.queues[tabId];
+  delete s.queueIds[tabId];
 }
 
 function isStaleTurn(session: ChatSession, turnSeq: number | undefined): boolean {

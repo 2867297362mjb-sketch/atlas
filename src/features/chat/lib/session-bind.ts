@@ -4,8 +4,8 @@
  * binding (which is what releases a held first message).
  *
  * The panel's hook (`hooks/use-agent-bind.ts`) is a thin caller: it attaches
- * while its tab has no session, kicks, and detaches. Everything a test needs is
- * a parameter (`SessionBindDeps`).
+ * while its tab has no session, kicks once the tab is on screen or sent to,
+ * and detaches. Everything a test needs is a parameter (`SessionBindDeps`).
  *
  * What a tab+agent pair has already been through (a failure reported, the one
  * silent retry spent, sign-in offered) outlives any one mount of the panel, so
@@ -17,7 +17,9 @@
  * EXISTING session back and do not come through here: `openThread`
  * (`open-thread.ts`), `openAgentSession` (`open-agent-session.ts`) and
  * `rebindDisconnectedSession` (`agent-rebind.ts`). They differ in what they
- * hydrate; `session-resume.test.ts` holds the table.
+ * hydrate; `session-resume.test.ts` holds the table. A tab saved with a
+ * conversation gets it back through `openThread`'s own load
+ * (`restore-tab-session.ts`), so it is not a fifth.
  */
 import { toast } from "sonner";
 import { agentMeta } from "@/features/agents/lib/agent-meta";

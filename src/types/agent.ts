@@ -425,6 +425,14 @@ export interface ChatSession {
    */
   resumePending?: boolean;
   /**
+   * The agent session this tab was showing when it was saved (a restart, or
+   * its project leaving memory), not loaded yet. The tab loads it the first
+   * time it is shown or sent to (`restore-tab-session.ts`), and until then
+   * starts no session of its own. Cleared by the load, and by anything that
+   * puts another conversation in the tab (`clearSession`).
+   */
+  pendingRestore?: string;
+  /**
    * The first message of a session that has not finished binding yet.
    *
    * Sending while the agent is still spawning used to park the prompt in the
