@@ -263,6 +263,24 @@ pub fn handle_request_permission(
     // exists and the drain can move on to whatever the agent said next.
     let waiter = {
         let mut thread = lock(&thread);
+        // No turn running: this request crossed the user's Stop on the wire
+        // (Stop clears the turn, then sends `session/cancel`), or came after
+        // the agent had already answered its prompt. Nobody is waiting on it,
+        // and raising it would pin a prompt for a turn that is over, answered
+        // by whoever clicks it later. ACP: having cancelled the turn, the client
+        // MUST answer every pending permission request `Cancelled` — so it is,
+        // here, before anything shows. Checked under the same lock as the
+        // registration, so a Stop cannot land between the two. A turn is
+        // always open before its `session/prompt` goes out
+        // (`AgentManager::send` calls `begin_turn` first), so no request the
+        // turn could raise arrives ahead of it.
+        if !thread.is_generating() {
+            drop(thread);
+            let _ = responder.respond(acp::RequestPermissionResponse::new(
+                RequestPermissionOutcome::Cancelled.into(),
+            ));
+            return;
+        }
         thread.request_tool_call_authorization(
             args.tool_call,
             PermissionOptions::Flat(args.options),
@@ -451,6 +469,13 @@ pub fn handle_read_text_file(
     });
 }
 
+/// The most a single `fs/read_text_file` hands back: a whole-file read of
+/// anything bigger is refused with a pointer to `line`/`limit`, and a window
+/// stops here. The whole answer is one JSON-RPC message, copied several times
+/// on its way (serialised, logged by the debug tap, parsed by the agent), so a
+/// multi-gigabyte log asked for whole cost Atlas several times its size.
+const MAX_READ_BYTES: u64 = 32 * 1024 * 1024;
+
 /// `line` is 1-based and `limit` counts lines, matching the ACP field docs.
 fn read_text_file(
     path: &Path,
@@ -459,7 +484,26 @@ fn read_text_file(
     roots: &[PathBuf],
 ) -> anyhow::Result<String> {
     let path = resolve_within_roots(path, roots)?;
+    // What the path is, before it is opened: opening a FIFO blocks until a
+    // writer appears, which parked a blocking-pool thread for good (cancelling
+    // the request drops the future, not the read), and a device never ends.
+    // Only a regular file is a text file to read (#90).
+    let meta = std::fs::metadata(&path)?;
+    if meta.is_dir() {
+        return Err(std::io::Error::from(std::io::ErrorKind::IsADirectory).into());
+    }
+    if !meta.is_file() {
+        anyhow::bail!("{} is not a regular file", path.display());
+    }
     if line.is_none() && limit.is_none() {
+        if meta.len() > MAX_READ_BYTES {
+            anyhow::bail!(
+                "{} is {} MB, more than the {} MB one read returns; read it in parts with `line` and `limit`",
+                path.display(),
+                meta.len() / (1024 * 1024),
+                MAX_READ_BYTES / (1024 * 1024),
+            );
+        }
         return Ok(std::fs::read_to_string(&path)?);
     }
 
@@ -471,22 +515,38 @@ fn read_text_file(
     let skip = line.unwrap_or(1).saturating_sub(1) as usize;
     let take = limit.map(|limit| limit as usize).unwrap_or(usize::MAX);
 
-    let file = std::fs::File::open(&path)?;
-    // `read_to_string` used to be what rejected a directory. Opening one
-    // succeeds on unix and only the *read* fails — which a `limit: 0` window
-    // never performs, so without this an unreadable path would answer with a
-    // confident empty string instead of an error.
-    if file.metadata()?.is_dir() {
-        return Err(std::io::Error::from(std::io::ErrorKind::IsADirectory).into());
-    }
+    // The lines' own bytes, endings included. Splitting into lines and joining
+    // them with "\n" turned CRLF into LF and dropped the last newline, so a
+    // window and a whole read of the same lines disagreed, and an edit built
+    // from one failed to match the other (#32).
+    let mut reader = std::io::BufReader::new(std::fs::File::open(&path)?);
     let mut selected = Vec::new();
-    for line in std::io::BufRead::lines(std::io::BufReader::new(file))
-        .skip(skip)
-        .take(take)
-    {
-        selected.push(line?);
+    let mut line_bytes = Vec::new();
+    let (mut seen, mut taken) = (0usize, 0usize);
+    while taken < take {
+        line_bytes.clear();
+        if std::io::BufRead::read_until(&mut reader, b'\n', &mut line_bytes)? == 0 {
+            break;
+        }
+        if seen >= skip {
+            if (selected.len() + line_bytes.len()) as u64 > MAX_READ_BYTES {
+                anyhow::bail!(
+                    "the lines asked for are more than the {} MB one read returns; ask for fewer",
+                    MAX_READ_BYTES / (1024 * 1024),
+                );
+            }
+            selected.extend_from_slice(&line_bytes);
+            taken += 1;
+        }
+        seen += 1;
     }
-    Ok(selected.join("\n"))
+    String::from_utf8(selected).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "stream did not contain valid UTF-8",
+        )
+        .into()
+    })
 }
 
 /// Reject a path outside every root in `roots`, before it ever reaches
@@ -730,7 +790,7 @@ mod fs_bound_tests {
 
         let out = read_text_file(&path, Some(1), Some(1), std::slice::from_ref(&root))
             .expect("a windowed read must not decode past its window");
-        assert_eq!(out, "the line that was asked for");
+        assert_eq!(out, "the line that was asked for\n");
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -751,21 +811,75 @@ mod fs_bound_tests {
         );
         assert_eq!(
             read_text_file(&path, Some(2), Some(2), roots).expect("window"),
-            "two\nthree"
+            "two\nthree\n"
         );
         assert_eq!(
             read_text_file(&path, Some(1), None, roots).expect("from the top"),
-            "one\ntwo\nthree\nfour\nfive"
+            "one\ntwo\nthree\nfour\nfive\n"
         );
         assert_eq!(
             read_text_file(&path, None, Some(1), roots).expect("first line only"),
-            "one"
+            "one\n"
         );
         assert_eq!(
             read_text_file(&path, Some(99), Some(3), roots).expect("past the end"),
             "",
             "a window past the end is empty, not an error"
         );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A window is the lines' own bytes: a CRLF file read in parts reads the
+    /// same as read whole, so an edit built from one matches the other (#32).
+    #[test]
+    fn a_window_keeps_the_lines_own_endings() {
+        let root = test_root();
+        let path = root.join("crlf.txt");
+        std::fs::write(&path, "one\r\ntwo\r\nthree").expect("write fixture");
+        let roots = std::slice::from_ref(&root);
+
+        assert_eq!(
+            read_text_file(&path, Some(1), Some(2), roots).expect("window"),
+            "one\r\ntwo\r\n"
+        );
+        assert_eq!(
+            read_text_file(&path, Some(3), Some(1), roots).expect("last, unterminated"),
+            "three"
+        );
+        let whole = read_text_file(&path, None, None, roots).expect("whole");
+        let parts = read_text_file(&path, Some(1), None, roots).expect("from the top");
+        assert_eq!(whole, parts);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Only a regular file is read, and a whole read has a ceiling (#90). A
+    /// FIFO is the sharp case: opening one blocks until a writer appears, so
+    /// it must be refused before anything opens it — this test would hang,
+    /// not fail, if it were not.
+    #[cfg(unix)]
+    #[test]
+    fn a_read_is_of_a_regular_file_of_bounded_size() {
+        let root = test_root();
+        let roots = std::slice::from_ref(&root);
+        let fifo = root.join("pipe");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .expect("run mkfifo");
+        assert!(made.success(), "mkfifo failed");
+        for (line, limit) in [(None, None), (Some(1), Some(1))] {
+            let err = read_text_file(&fifo, line, limit, roots).expect_err("a FIFO is not read");
+            assert!(err.to_string().contains("not a regular file"), "{err}");
+        }
+
+        let big = root.join("big.log");
+        let file = std::fs::File::create(&big).expect("create");
+        // Sparse: as long as the ceiling without writing it.
+        file.set_len(MAX_READ_BYTES + 1).expect("grow");
+        let err = read_text_file(&big, None, None, roots).expect_err("too big to read whole");
+        assert!(err.to_string().contains("`line` and `limit`"), "{err}");
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -819,6 +933,45 @@ mod fs_bound_tests {
         }
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// #29's decision table: a command runs in a directory that exists inside
+    /// the session's folders — the session's own when none is named — or the
+    /// agent is told why not. `$HOME` is never the answer.
+    #[test]
+    fn a_terminal_cwd_is_an_existing_directory_inside_the_roots() {
+        let root = test_root();
+        let canon = root.canonicalize().expect("canonicalize the root");
+        let sub = root.join("sub");
+        std::fs::create_dir_all(&sub).expect("create a subdirectory");
+        let file = root.join("file.txt");
+        std::fs::write(&file, "not a directory\n").expect("write fixture");
+        let outside = test_root();
+        let roots = std::slice::from_ref(&root);
+        let invalid = |err: acp::Error| err.code == acp::ErrorCode::InvalidParams;
+
+        assert_eq!(
+            terminal_cwd(None, Some(&root), roots).expect("the session's folder"),
+            canon
+        );
+        assert_eq!(
+            terminal_cwd(Some(&sub), Some(&root), roots).expect("a folder inside it"),
+            canon.join("sub")
+        );
+        assert!(invalid(
+            terminal_cwd(Some(Path::new("sub")), Some(&root), roots).expect_err("relative")
+        ));
+        assert!(invalid(
+            terminal_cwd(Some(&root.join("missing")), Some(&root), roots).expect_err("missing")
+        ));
+        assert!(invalid(
+            terminal_cwd(Some(&file), Some(&root), roots).expect_err("a file")
+        ));
+        assert!(terminal_cwd(Some(&outside), Some(&root), roots).is_err());
+        assert!(terminal_cwd(None, None, roots).is_err());
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
     }
 
     /// The containment check has to run before the file is opened, not after.
@@ -992,6 +1145,48 @@ fn env_is_denied(name: &str) -> bool {
     name.starts_with("DYLD_") || name.starts_with("LD_")
 }
 
+/// Where a `terminal/create` runs: the directory the agent named, or the
+/// session's own folder when it named none (#29).
+///
+/// Never `$HOME`, which is where portable-pty starts a command it is given no
+/// directory for, or a directory that does not exist — so leaving `cwd` out,
+/// or naming a folder that is not there, ran the command in the user's home,
+/// outside everything the session was granted. A relative path is refused
+/// too: ACP says `cwd` "must be an absolute path", and one that is not would
+/// resolve against Atlas's own working directory, which means nothing to the
+/// agent. Those are the agent's mistakes, so they are answered as invalid
+/// params.
+///
+/// Returns the directory in the resolved form [`resolve_within_roots`]
+/// compared, so the command starts in the directory that was checked rather
+/// than wherever a symlink points by the time it spawns.
+fn terminal_cwd(
+    requested: Option<&Path>,
+    session_cwd: Option<&Path>,
+    roots: &[PathBuf],
+) -> Result<PathBuf, acp::Error> {
+    let dir = match (requested, session_cwd) {
+        (Some(dir), _) if !dir.is_absolute() => {
+            return Err(acp::Error::invalid_params().data(format!(
+                "terminal cwd must be an absolute path, got {}",
+                dir.display()
+            )))
+        }
+        (Some(dir), _) | (None, Some(dir)) => dir,
+        (None, None) => {
+            return Err(acp::Error::internal_error()
+                .data("no terminal cwd given, and this session has no folder to run in"))
+        }
+    };
+    let resolved = resolve_within_roots(dir, roots)
+        .map_err(|err| acp::Error::internal_error().data(format!("terminal cwd refused: {err}")))?;
+    if !resolved.is_dir() {
+        return Err(acp::Error::invalid_params()
+            .data(format!("terminal cwd {} is not a directory", dir.display())));
+    }
+    Ok(resolved)
+}
+
 pub fn handle_create_terminal(
     args: acp::CreateTerminalRequest,
     responder: Responder<acp::CreateTerminalResponse>,
@@ -1015,7 +1210,6 @@ pub fn handle_create_terminal(
         .filter(|env| !env_is_denied(&env.name))
         .map(|env| (env.name, env.value))
         .collect();
-    let cwd: Option<PathBuf> = args.cwd.clone();
     let byte_limit = args.output_byte_limit.unwrap_or(DEFAULT_OUTPUT_BYTE_LIMIT);
 
     // The cwd is held to the same rule as fs reads/writes: inside a granted
@@ -1023,15 +1217,14 @@ pub fn handle_create_terminal(
     // a legal request. Writable roots, not readable ones: a command can
     // write wherever it runs, so a read-only attached project is no place to
     // start one.
-    let roots = lock(&thread).writable_roots();
-    if let Some(dir) = cwd.as_deref() {
-        if let Err(err) = resolve_within_roots(dir, &roots) {
-            return respond_err(
-                responder,
-                acp::Error::internal_error().data(format!("terminal cwd refused: {err}")),
-            );
-        }
-    }
+    let (roots, session_cwd) = {
+        let thread = lock(&thread);
+        (thread.writable_roots(), thread.work_dirs().first().cloned())
+    };
+    let cwd = match terminal_cwd(args.cwd.as_deref(), session_cwd.as_deref(), &roots) {
+        Ok(cwd) => cwd,
+        Err(err) => return respond_err(responder, err),
+    };
 
     // The gate. `terminal/create` used to spawn with agent-chosen argv/env/
     // cwd and no question asked — which made the fs-handler path bind above
@@ -1041,7 +1234,7 @@ pub fn handle_create_terminal(
     let tool_call_id = acp::ToolCallId::new(format!("terminal-{}", uuid::Uuid::new_v4()));
     let mut fields = acp::ToolCallUpdateFields::default();
     fields.kind = Some(acp::ToolKind::Execute);
-    fields.title = Some(if let Some(dir) = cwd.as_deref() {
+    fields.title = Some(if let Some(dir) = args.cwd.as_deref() {
         format!("Run `{label}` in {}", dir.display())
     } else {
         format!("Run `{label}`")
@@ -1101,7 +1294,7 @@ pub fn handle_create_terminal(
 
         // Register-before-respond still holds: the agent cannot name this
         // terminal until the response below hands it the id.
-        let spawned = CommandTerminal::spawn(&command, &cmd_args, &env, cwd.as_deref(), byte_limit);
+        let spawned = CommandTerminal::spawn(&command, &cmd_args, &env, Some(&cwd), byte_limit);
         let terminal = match spawned {
             Ok(terminal) => Arc::new(terminal),
             Err(err) => {
@@ -1117,7 +1310,7 @@ pub fn handle_create_terminal(
         lock(&thread).on_terminal_provider_event(TerminalProviderEvent::Created {
             terminal_id: terminal_id.clone(),
             label,
-            cwd,
+            cwd: Some(cwd),
             output_byte_limit,
             terminal: Some(terminal.clone()),
         });
@@ -1149,7 +1342,8 @@ pub fn handle_create_terminal(
 /// - the thread is gone (the upgrade fails, checked before parking again);
 /// - the terminal is released or the session torn down, both of which kill the
 ///   command — which is an exit, so the first condition fires. Release kills
-///   explicitly, just below; teardown kills through `AcpTerminal`'s `Drop`,
+///   explicitly (`TerminalRegistry::release`), and its last report is what the
+///   tool call keeps showing; teardown kills through `AcpTerminal`'s `Drop`,
 ///   which is the only thing covering an ABRUPT teardown — `close_session`
 ///   drops the thread handle without ever reaching this code.
 pub fn follow_terminal_output(
@@ -1215,9 +1409,10 @@ pub fn handle_kill_terminal(
     }
 }
 
-/// Release drops our handle on the terminal. The command is killed first: a
-/// released terminal has nobody left to read its output, so leaving the process
-/// running would leak it for the lifetime of the connection.
+/// Release kills the command — a released terminal has nobody left to read its
+/// output, so leaving the process running would leak it for the lifetime of the
+/// connection — and retires the id. What the command printed stays on the tool
+/// calls that show it (`AcpThread::release_terminal`).
 pub fn handle_release_terminal(
     args: acp::ReleaseTerminalRequest,
     responder: Responder<acp::ReleaseTerminalResponse>,
@@ -1228,17 +1423,11 @@ pub fn handle_release_terminal(
         Err(err) => return respond_err(responder, err),
     };
 
-    let mut thread = lock(&thread);
-    match thread.terminals_mut().remove(&args.terminal_id) {
-        Some(terminal) => {
-            let _ = terminal.kill();
-            drop(thread);
-            let _ = responder.respond(acp::ReleaseTerminalResponse::default());
-        }
-        None => {
-            drop(thread);
-            respond_err(responder, unknown_terminal(&args.terminal_id))
-        }
+    let released = lock(&thread).release_terminal(&args.terminal_id);
+    if released {
+        let _ = responder.respond(acp::ReleaseTerminalResponse::default());
+    } else {
+        respond_err(responder, unknown_terminal(&args.terminal_id));
     }
 }
 

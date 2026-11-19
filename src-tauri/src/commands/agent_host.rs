@@ -226,7 +226,18 @@ pub struct SessionSnapshot {
     /// Whether a hold keeps this session running without its tab.
     #[serde(default)]
     pub held: bool,
+    /// The turn the session is on (`SessionRegistry::next_turn_seq`): what
+    /// the turn-scoped deltas of its live or last turn carry. A client that
+    /// binds adopts it, so the turns of a session bound again after its agent
+    /// restarted (numbered from 1 again) are not refused as stale.
+    #[serde(default)]
+    pub turn_seq: u64,
 }
+
+/// What every chat on an agent is told when the agent is stopped from Atlas
+/// (Stop pressed twice, Stop while it was starting, Restart, a start that
+/// never finished): the `agent_disconnected` reason.
+pub(crate) const KILLED_NOTICE: &str = "the agent was stopped; the next message restarts it";
 
 /// Frontend-friendly permission outcome. Struct variant, not tuple: serde's
 /// internal tagging only supports struct or unit variants, and a tuple variant
@@ -1113,6 +1124,27 @@ impl AgentHost {
         Ok(())
     }
 
+    /// [`Self::kill`], for a Stop pressed on `session_id`: only while that
+    /// session is still open on the agent.
+    ///
+    /// The handle names the agent, not one process of it, so it stays the
+    /// same across a respawn. A second Stop that lands after the agent was
+    /// already killed (by another tab, or by the first Stop) and started
+    /// again would otherwise take the new process down too, and every chat
+    /// on it. The session it was pressed for ended with the old process, so
+    /// there is nothing left for it to stop.
+    pub fn kill_session_agent(&self, agent_id: AgentId, session_id: &str) -> Result<()> {
+        let record = self.record_for(agent_id)?;
+        let still_open = self
+            .sessions
+            .info(session_id)
+            .is_some_and(|info| info.agent == record.agent);
+        if still_open {
+            self.kill_agent(&record.plugin_id, &record.agent);
+        }
+        Ok(())
+    }
+
     /// [`Self::kill`], keyed by plugin id rather than by spawn handle.
     ///
     /// The escape hatch for a tab that never got a handle: a connect that has
@@ -1125,8 +1157,17 @@ impl AgentHost {
         Ok(())
     }
 
+    /// Every chat on the agent is told, not only the one whose button killed
+    /// it: one process serves every tab on the agent, and a tab that never
+    /// heard kept saying "Working" for a turn that had died with it, its next
+    /// send failing with "unknown session id". Told, it shows the Restart
+    /// banner and its next send rebinds.
     fn kill_agent(&self, plugin_id: &str, agent: &Agent) {
-        self.end_agent(plugin_id, agent, AgentEnd::stopping());
+        self.end_agent(
+            plugin_id,
+            agent,
+            AgentEnd::stopping().with_notice(KILLED_NOTICE),
+        );
     }
 
     /// Whether any open session on `plugin_id` has a turn running. `false` for
@@ -1139,6 +1180,23 @@ impl AgentHost {
             self.thread(id)
                 .is_ok_and(|handle| lock_thread(&handle).is_generating())
         })
+    }
+
+    /// Whether restarting `plugin_id` now would cost an open chat its
+    /// conversation: a session is open on it, and the agent can neither
+    /// replay one (`session/load`) nor continue one (`session/resume`). Such
+    /// a restart left the chat on screen with an agent that remembered none
+    /// of it, under a banner saying the conversation was safe (audit #70).
+    pub fn restart_would_lose_chats(&self, plugin_id: &str) -> bool {
+        let Ok(agent) = self.installed_agent(plugin_id) else {
+            return false;
+        };
+        let Some(connection) = self.manager.connected(&agent) else {
+            return false;
+        };
+        !self.sessions.sessions_of(&agent).is_empty()
+            && !connection.supports_load_session()
+            && !connection.supports_resume_session()
     }
 
     /// Restart `plugin_id` so its next connect runs the version the registry
@@ -1204,8 +1262,11 @@ impl AgentHost {
     /// them: the cache dies with it, and so does any in-flight turn. The
     /// next spawn reconnects and mints fresh — or fails, honestly, now that
     /// there is nothing to mint with.
+    ///
+    /// Silent, unlike a kill from a chat: signing out has its own surface,
+    /// and every native chat's next send meets sign-in, not a Restart banner.
     pub fn drop_native_connection(&self) {
-        self.kill_agent(ATLAS_AGENT_ID, &Agent::Native);
+        self.end_agent(ATLAS_AGENT_ID, &Agent::Native, AgentEnd::stopping());
     }
 
     /// Re-fetch an agent's model catalogue (ADR-0007): the picker's Refresh.
@@ -1614,6 +1675,7 @@ impl AgentHost {
             .ok_or_else(HostError::unknown_session)?;
         let (plugin_id, cwd, current_model) = (info.plugin_id, info.cwd, info.current_model);
         let created_at = DateTime::<Utc>::from(info.created_at);
+        let turn_seq = info.turn_seq;
         let handle = self.thread(&key.session_id)?;
         let session_id = acp::SessionId::new(key.session_id.as_str());
         let connection = lock_thread(&handle).connection().clone();
@@ -1763,6 +1825,7 @@ impl AgentHost {
                 .map(PendingElicitationWire::from),
             queue,
             held,
+            turn_seq,
         };
         Ok(snapshot)
     }

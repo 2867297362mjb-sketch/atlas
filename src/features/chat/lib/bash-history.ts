@@ -18,9 +18,10 @@ export function bashEntriesOf(messages: ChatMessage[]): BashEntry[] {
   messages.forEach((m, i) => {
     for (const tc of m.toolCalls) {
       if (!isBashToolCall(tc)) continue;
-      const args = tc.arguments as Record<string, unknown>;
+      const args = tc.arguments as Record<string, unknown> | null | undefined;
       const cmd = bashCommandOf(args);
-      const desc = (args.description as string) ?? undefined;
+      // The agent's raw input: only a string is a description.
+      const desc = typeof args?.description === "string" ? args.description : undefined;
       if (!cmd) continue;
       out.push({
         command: cmd,

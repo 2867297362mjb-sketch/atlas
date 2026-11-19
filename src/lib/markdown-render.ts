@@ -590,12 +590,35 @@ function rehypeLinkIcons() {
   };
 }
 
+/**
+ * Raw HTML in a reply, kept as the text it is.
+ *
+ * Markdown reads `<T>` as an inline HTML tag, and with dangerous HTML off the
+ * HTML step dropped it whole, so a type parameter vanished from the sentence:
+ * "Vec<T>" read "Vec", and the copy (the source) disagreed with the screen
+ * (audit #101). As a text node it is escaped on the way out like any other
+ * text, so nothing here can become markup.
+ */
+function remarkHtmlAsText() {
+  type MdNode = { type: string; value?: string; children?: MdNode[] };
+  return (tree: object) => {
+    const walk = (node: MdNode) => {
+      for (const child of node.children ?? []) {
+        if (child.type === "html") child.type = "text";
+        else walk(child);
+      }
+    };
+    walk(tree as MdNode);
+  };
+}
+
 let processor: Processor | null = null;
 function getProcessor(): Processor {
   if (!processor) {
     processor = unified()
       .use(remarkParse)
       .use(remarkGfm)
+      .use(remarkHtmlAsText)
       .use(remarkRehype, { allowDangerousHtml: false })
       // oxlint-disable-next-line typescript/no-explicit-any
       .use(rehypeMentionChips as any)

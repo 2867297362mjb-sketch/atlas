@@ -435,12 +435,77 @@ async fn killing_an_agent_ends_its_sessions() {
         assert!(!s.connection_pinned(), "nothing keeps the killed process");
         assert_eq!(s.ended(), [SESSION]);
         assert!(s.closes().is_empty(), "the process is going: no close");
-        assert!(s.deltas.disconnects().is_empty(), "a kill sends no notice");
+        // Every chat on the agent hears it, not only the one whose Stop
+        // killed it: one process serves every tab on the agent, and a tab
+        // left unaware said "Working" forever, its next send failing with
+        // "unknown session id" (audit #74).
+        assert_eq!(s.deltas.disconnects(), [KILLED_NOTICE]);
         assert!(s.host.manager().connected(&Agent::Native).is_none());
 
         s.host.kill_plugin(ATLAS_AGENT_ID).expect("again");
         assert_eq!(s.ended(), [SESSION]);
+        assert_eq!(
+            s.deltas.disconnects(),
+            [KILLED_NOTICE],
+            "nothing left to tell"
+        );
         s.done();
+    }
+}
+
+/// A Stop pressed twice escalates to killing the agent, by a handle that
+/// names the agent and so survives a respawn. A second Stop that lands after
+/// the agent was already killed and started again (another tab sent to it)
+/// must not take the new process down with it: the kill names the session it
+/// was pressed for, and that session ended with the first process (audit
+/// #69).
+#[tokio::test]
+async fn a_late_second_stop_leaves_the_agent_that_replaced_the_first_alone() {
+    let s = open().await;
+    s.host
+        .kill_session_agent(s.agent_id, SESSION)
+        .expect("first kill");
+    assert!(s.host.manager().connected(&Agent::Native).is_none());
+
+    s.host.spawn(ATLAS_AGENT_ID).await.expect("respawn");
+    assert!(s.host.manager().connected(&Agent::Native).is_some());
+
+    s.host
+        .kill_session_agent(s.agent_id, SESSION)
+        .expect("late kill");
+    assert!(
+        s.host.manager().connected(&Agent::Native).is_some(),
+        "the session it named is gone: the new process is someone else's"
+    );
+    s.done();
+}
+
+/// An update restart waits while it would cost an open chat its
+/// conversation: a session is open, and the agent can neither reload nor
+/// resume one (audit #70). One that can reload is restarted as before.
+#[tokio::test]
+async fn an_update_waits_for_chats_an_agent_could_not_reopen() {
+    for can_reload in [false, true] {
+        let script = if can_reload {
+            script().supports_load()
+        } else {
+            script()
+        };
+        let (host, dir, _deltas, _ended, _watchdog, _fake) = observed_host(script);
+        let agent_id = host.spawn(ATLAS_AGENT_ID).await.expect("spawn").agent_id;
+        assert!(
+            !host.restart_would_lose_chats(ATLAS_AGENT_ID),
+            "no chat yet"
+        );
+        host.new_session(agent_id, dir.clone(), Vec::new())
+            .await
+            .expect("a session opens");
+        assert_eq!(
+            host.restart_would_lose_chats(ATLAS_AGENT_ID),
+            !can_reload,
+            "can_reload={can_reload}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

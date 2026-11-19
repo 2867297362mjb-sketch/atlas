@@ -564,11 +564,15 @@ async fn a_pending_permission_does_not_block_the_messages_behind_it() {
         .new_session(vec![std::env::temp_dir()])
         .await
         .expect("session/new failed");
-    let session_id = thread
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .session_id()
-        .clone();
+    let session_id = {
+        let mut thread = thread
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // The turn opens before the prompt goes out, as `AgentManager::send`
+        // opens it: a permission request is only ever raised inside one.
+        thread.begin_turn();
+        thread.session_id().clone()
+    };
 
     let prompt = tokio::spawn(connection.clone().prompt(acp::PromptRequest::new(
         session_id,
@@ -633,6 +637,150 @@ async fn a_pending_permission_does_not_block_the_messages_behind_it() {
         .expect("prompt task panicked")
         .expect("prompt failed");
     assert_eq!(response.stop_reason, acp::StopReason::EndTurn);
+}
+
+/// A fake agent whose permission request crosses the user's Stop on the wire:
+/// it announces a tool call, and asks permission for it only once the
+/// `session/cancel` has reached it — the request it had in flight when the
+/// client cancelled. It reports the answer it got as a text chunk, then ends
+/// the turn as cancelled.
+const LATE_PERMISSION_AGENT: &str = r#"
+import sys, json
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+def update(u):
+    send({"jsonrpc": "2.0", "method": "session/update",
+          "params": {"sessionId": "session-1", "update": u}})
+prompt_id = None
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    method = msg.get("method")
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": msg["id"], "result": {
+            "protocolVersion": 1, "agentCapabilities": {}, "authMethods": [],
+            "agentInfo": {"name": "fake-agent", "version": "9.9.9"}}})
+    elif method == "session/new":
+        send({"jsonrpc": "2.0", "id": msg["id"], "result": {"sessionId": "session-1"}})
+    elif method == "session/prompt":
+        prompt_id = msg["id"]
+        update({"sessionUpdate": "tool_call", "toolCallId": "call-1",
+                "title": "rm -rf build", "kind": "execute", "status": "pending"})
+    elif method == "session/cancel":
+        send({"jsonrpc": "2.0", "id": 100, "method": "session/request_permission",
+              "params": {"sessionId": "session-1",
+                         "toolCall": {"toolCallId": "call-1"},
+                         "options": [
+                             {"optionId": "allow", "name": "Allow", "kind": "allow_once"},
+                             {"optionId": "deny", "name": "Deny", "kind": "reject_once"}]}})
+    elif msg.get("id") == 100 and "result" in msg:
+        outcome = msg["result"]["outcome"]["outcome"]
+        update({"sessionUpdate": "agent_message_chunk",
+                "content": {"type": "text", "text": "permission answered: " + outcome}})
+        send({"jsonrpc": "2.0", "id": prompt_id, "result": {"stopReason": "cancelled"}})
+"#;
+
+/// #89. Stop cleared the turn and sent `session/cancel`, but a permission
+/// request the agent had already sent arrived after it and was raised like any
+/// other: a prompt for a turn that was over, which nobody was waiting on and a
+/// later click would answer. ACP: once the client cancels the turn it MUST
+/// answer every pending `session/request_permission` with `Cancelled` — so one
+/// that arrives with no turn running is answered that way at once, and never
+/// shown.
+#[tokio::test]
+async fn a_permission_request_crossing_stop_is_answered_cancelled_and_never_shown() {
+    use atlas_acp_thread::{AgentConnection as _, AgentThreadEntry, ToolCallStatus};
+
+    let Some(python) = python() else {
+        eprintln!("skipping: no python3 on this machine");
+        return;
+    };
+    let command = AgentServerCommand {
+        path: python,
+        args: vec!["-c".to_string(), LATE_PERMISSION_AGENT.to_string()],
+        env: Some(HashMap::new()),
+    };
+    let connection = Arc::new(connect(command).await.expect("handshake failed"));
+    let thread = connection
+        .clone()
+        .new_session(vec![std::env::temp_dir()])
+        .await
+        .expect("session/new failed");
+    let lock = || {
+        thread
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    };
+    let session_id = {
+        let mut thread = lock();
+        thread.begin_turn();
+        thread.session_id().clone()
+    };
+    let prompt = tokio::spawn(connection.clone().prompt(acp::PromptRequest::new(
+        session_id,
+        vec![acp::ContentBlock::from("clean up")],
+    )));
+
+    // Stop once the agent is working on the call.
+    let announced = |thread: &atlas_acp_thread::AcpThread| {
+        thread
+            .entries()
+            .iter()
+            .any(|entry| matches!(entry, AgentThreadEntry::ToolCall(_)))
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !announced(&lock()) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the tool call never arrived"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    lock().cancel();
+
+    let answer = |thread: &atlas_acp_thread::AcpThread| -> Option<String> {
+        thread.entries().iter().find_map(|entry| match entry {
+            AgentThreadEntry::AssistantMessage(message) => message
+                .chunks
+                .iter()
+                .map(|chunk| chunk.block().to_text().to_string())
+                .find(|text| text.contains("permission answered")),
+            _ => None,
+        })
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    let answered = loop {
+        {
+            let thread = lock();
+            assert!(
+                !thread.entries().iter().any(|entry| matches!(
+                    entry,
+                    AgentThreadEntry::ToolCall(call)
+                        if matches!(call.status, ToolCallStatus::WaitingForConfirmation { .. })
+                )),
+                "a request that crossed Stop must never be raised as a prompt"
+            );
+            if let Some(text) = answer(&thread) {
+                break text;
+            }
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the agent was never answered: its request is waiting on a prompt nobody sees"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    };
+    assert_eq!(answered, "permission answered: cancelled");
+
+    let response = tokio::time::timeout(std::time::Duration::from_secs(5), prompt)
+        .await
+        .expect("the turn must end")
+        .expect("prompt task panicked")
+        .expect("prompt failed");
+    assert_eq!(response.stop_reason, acp::StopReason::Cancelled);
 }
 
 /// A fake agent that runs its command ITSELF and embeds the terminal in
@@ -1085,6 +1233,365 @@ async fn an_agent_cannot_write_outside_the_sessions_granted_directories() {
     assert!(
         !base.join("NOT-the-project").exists(),
         "create_dir_all ran before the containment check"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+// ------------------------------------------------------- client methods, scripted
+//
+// The `terminal/*` and `fs/*` requests an agent makes of Atlas. The installed
+// Claude and Codex adapters run their commands themselves (`terminal_info`
+// meta), so these paths are what every OTHER agent takes — and nothing but a
+// real request over a real pipe exercises the handlers end to end.
+
+/// Plays the agent side of the client methods from a script. On
+/// `session/prompt` it sends each step in order — a request to the client, or a
+/// `session/update` — waits for each request's answer, then writes every answer
+/// (`null` for an update) to a file and ends the turn. A step's `save` names a
+/// field of its result that later steps can refer to as `"$name"`.
+const CLIENT_REQUESTS_AGENT: &str = r#"
+import sys, json
+steps = json.load(open(STEPS_FILE))
+result_file = RESULT_FILE
+saved = {}
+outcomes = []
+prompt_id = None
+at = 0
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+def fill(value):
+    if isinstance(value, str) and value.startswith("$"):
+        return saved.get(value[1:], value)
+    if isinstance(value, dict):
+        return {key: fill(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [fill(item) for item in value]
+    return value
+def advance():
+    global at
+    while at < len(steps) and "update" in steps[at]:
+        send({"jsonrpc": "2.0", "method": "session/update",
+              "params": {"sessionId": "session-1", "update": fill(steps[at]["update"])}})
+        outcomes.append(None)
+        at += 1
+    if at == len(steps):
+        open(result_file, "w").write(json.dumps(outcomes))
+        send({"jsonrpc": "2.0", "id": prompt_id, "result": {"stopReason": "end_turn"}})
+        return
+    params = fill(steps[at]["params"])
+    params["sessionId"] = "session-1"
+    send({"jsonrpc": "2.0", "id": 1000 + at, "method": steps[at]["method"], "params": params})
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    method = msg.get("method")
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": msg["id"], "result": {
+            "protocolVersion": 1, "agentCapabilities": {}, "authMethods": [],
+            "agentInfo": {"name": "client-requests-agent", "version": "9.9.9"}}})
+    elif method == "session/new":
+        send({"jsonrpc": "2.0", "id": msg["id"], "result": {"sessionId": "session-1"}})
+    elif method == "session/prompt":
+        prompt_id = msg["id"]
+        advance()
+    elif method is None and msg.get("id") == 1000 + at:
+        outcomes.append({key: msg[key] for key in ("result", "error") if key in msg})
+        save = steps[at].get("save")
+        if save and "result" in msg:
+            saved[save] = msg["result"][save]
+        at += 1
+        advance()
+"#;
+
+/// A fresh directory for one scripted run, and the session folder inside it.
+fn scripted_dirs(name: &str) -> (PathBuf, PathBuf) {
+    let base = std::env::temp_dir().join(format!(
+        "atlas-{name}-{}-{}",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    let project = base.join("project");
+    std::fs::create_dir_all(&project).expect("create the session folder");
+    (base, project)
+}
+
+/// Run `steps` in a session whose one folder is `project`, answering Allow to
+/// every permission Atlas asks for along the way (`terminal/create` asks
+/// before it spawns), and return what each step was answered, with the thread.
+/// `None` when there is no python3 to play the agent.
+async fn run_client_requests(
+    base: &std::path::Path,
+    project: &std::path::Path,
+    steps: &serde_json::Value,
+) -> Option<(Vec<serde_json::Value>, atlas_acp_thread::AcpThreadHandle)> {
+    use atlas_acp_thread::{AgentConnection as _, AgentThreadEntry, ToolCallStatus};
+
+    let steps_file = base.join("steps.json");
+    let result_file = base.join("outcomes.json");
+    std::fs::write(&steps_file, steps.to_string()).expect("write the script");
+    let script = CLIENT_REQUESTS_AGENT
+        .replace(
+            "STEPS_FILE",
+            &format!("{:?}", steps_file.display().to_string()),
+        )
+        .replace(
+            "RESULT_FILE",
+            &format!("{:?}", result_file.display().to_string()),
+        );
+    let command = AgentServerCommand {
+        path: python()?,
+        args: vec!["-c".to_string(), script],
+        env: Some(HashMap::new()),
+    };
+
+    let connection = Arc::new(connect(command).await.expect("handshake failed"));
+    let thread = connection
+        .clone()
+        .new_session(vec![project.to_path_buf()])
+        .await
+        .expect("session/new failed");
+    let session_id = thread
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .session_id()
+        .clone();
+
+    let approver = tokio::spawn({
+        let thread = thread.clone();
+        async move {
+            loop {
+                let waiting: Vec<acp::ToolCallId> = thread
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .entries()
+                    .iter()
+                    .filter_map(|entry| match entry {
+                        AgentThreadEntry::ToolCall(call)
+                            if matches!(
+                                call.status,
+                                ToolCallStatus::WaitingForConfirmation { .. }
+                            ) =>
+                        {
+                            Some(call.id.clone())
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                for id in waiting {
+                    thread
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .authorize_tool_call(
+                            id,
+                            atlas_acp_thread::SelectedPermissionOutcome::new(
+                                acp::PermissionOptionId::new("allow_once"),
+                                acp::PermissionOptionKind::AllowOnce,
+                            ),
+                        );
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        }
+    });
+
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        connection.clone().prompt(acp::PromptRequest::new(
+            session_id,
+            vec![acp::ContentBlock::from("run the script")],
+        )),
+    )
+    .await
+    .expect("the scripted turn never ended")
+    .expect("prompt failed");
+    approver.abort();
+    assert_eq!(response.stop_reason, acp::StopReason::EndTurn);
+
+    let outcomes: Vec<serde_json::Value> = serde_json::from_str(
+        &std::fs::read_to_string(&result_file).expect("the agent wrote no outcomes"),
+    )
+    .expect("outcomes are json");
+    Some((outcomes, thread))
+}
+
+/// What `pwd` printed, from a `terminal/output` answer.
+fn printed(outcome: &serde_json::Value) -> String {
+    outcome["result"]["output"]
+        .as_str()
+        .unwrap_or_else(|| panic!("not a terminal/output answer: {outcome}"))
+        .trim()
+        .to_string()
+}
+
+/// #29. ACP's `cwd` is optional, and portable-pty starts a command with no
+/// directory in `$HOME` — so an agent that left it out ran its command in the
+/// user's home, outside every folder the session was granted. No `cwd` means
+/// the session's own folder.
+#[tokio::test]
+async fn a_client_terminal_without_a_cwd_runs_in_the_sessions_folder() {
+    let (base, project) = scripted_dirs("terminal-cwd");
+    let steps = serde_json::json!([
+        {"method": "terminal/create", "save": "terminalId",
+         "params": {"command": "/bin/sh", "args": ["-c", "pwd"]}},
+        {"method": "terminal/wait_for_exit", "params": {"terminalId": "$terminalId"}},
+        {"method": "terminal/output", "params": {"terminalId": "$terminalId"}},
+        {"method": "terminal/release", "params": {"terminalId": "$terminalId"}},
+    ]);
+    let Some((outcomes, _thread)) = run_client_requests(&base, &project, &steps).await else {
+        eprintln!("skipping: no python3 on this machine");
+        return;
+    };
+
+    let expected = project.canonicalize().expect("the session folder exists");
+    assert_eq!(
+        printed(&outcomes[2]),
+        expected.display().to_string(),
+        "a terminal/create without a cwd ran somewhere other than the session's folder"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// #29. portable-pty also falls back to `$HOME` when the directory it is given
+/// does not exist, and the containment check passes a path that does not exist
+/// yet (it was written for a write's target). The agent is told, instead.
+#[tokio::test]
+async fn a_client_terminal_in_a_folder_that_does_not_exist_is_refused() {
+    let (base, project) = scripted_dirs("terminal-cwd-missing");
+    let steps = serde_json::json!([
+        {"method": "terminal/create",
+         "params": {"command": "/bin/sh", "args": ["-c", "pwd"],
+                    "cwd": project.join("missing").display().to_string()}},
+    ]);
+    let Some((outcomes, _thread)) = run_client_requests(&base, &project, &steps).await else {
+        eprintln!("skipping: no python3 on this machine");
+        return;
+    };
+
+    assert_eq!(
+        outcomes[0]["error"]["code"], -32602,
+        "a cwd that does not exist must be refused as invalid params: {}",
+        outcomes[0]
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// #29. ACP: the `cwd` "must be an absolute path". A relative one used to be
+/// resolved against Atlas's OWN working directory, which means nothing to the
+/// agent.
+#[tokio::test]
+async fn a_client_terminal_with_a_relative_cwd_is_refused() {
+    let (base, project) = scripted_dirs("terminal-cwd-relative");
+    let steps = serde_json::json!([
+        {"method": "terminal/create",
+         "params": {"command": "/bin/sh", "args": ["-c", "pwd"], "cwd": "project"}},
+    ]);
+    let Some((outcomes, _thread)) = run_client_requests(&base, &project, &steps).await else {
+        eprintln!("skipping: no python3 on this machine");
+        return;
+    };
+
+    assert_eq!(
+        outcomes[0]["error"]["code"], -32602,
+        "a relative cwd must be refused as invalid params: {}",
+        outcomes[0]
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// #27. ACP: after `terminal/release` "the TerminalId can no longer be used
+/// with other terminal/* methods, but tool calls that already contain it,
+/// continue to display its output". Release dropped the terminal outright, so
+/// the tool call showing it re-projected with no output at all — the command's
+/// output vanished from the transcript the moment the agent was done with it.
+#[tokio::test]
+async fn a_released_terminal_still_shows_its_output_in_its_tool_call() {
+    let (base, project) = scripted_dirs("terminal-release");
+    let steps = serde_json::json!([
+        {"method": "terminal/create", "save": "terminalId",
+         "params": {"command": "/bin/sh", "args": ["-c", "echo kept after release"]}},
+        {"update": {"sessionUpdate": "tool_call", "toolCallId": "call-1",
+                    "title": "echo", "kind": "execute", "status": "in_progress",
+                    "content": [{"type": "terminal", "terminalId": "$terminalId"}]}},
+        {"method": "terminal/wait_for_exit", "params": {"terminalId": "$terminalId"}},
+        {"method": "terminal/release", "params": {"terminalId": "$terminalId"}},
+        {"method": "terminal/output", "params": {"terminalId": "$terminalId"}},
+        {"update": {"sessionUpdate": "tool_call_update", "toolCallId": "call-1",
+                    "status": "completed"}},
+    ]);
+    let Some((outcomes, thread)) = run_client_requests(&base, &project, &steps).await else {
+        eprintln!("skipping: no python3 on this machine");
+        return;
+    };
+
+    let terminal_id = acp::TerminalId::new(
+        outcomes[0]["result"]["terminalId"]
+            .as_str()
+            .unwrap_or_else(|| panic!("terminal/create failed: {}", outcomes[0])),
+    );
+    assert!(
+        outcomes[3].get("result").is_some(),
+        "terminal/release failed: {}",
+        outcomes[3]
+    );
+    assert!(
+        outcomes[4].get("error").is_some(),
+        "a released terminal must be unknown to terminal/*: {}",
+        outcomes[4]
+    );
+
+    let thread = thread
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    assert!(
+        thread.terminal(&terminal_id).is_none(),
+        "a released id must not name a terminal for the terminal/* handlers"
+    );
+    let shown = thread.terminal_output(&terminal_id);
+    assert!(
+        shown
+            .as_deref()
+            .is_some_and(|output| output.contains("kept after release")),
+        "the tool call lost the released terminal's output: {shown:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// #31. A command the agent killed is reported as killed, with the signal
+/// that did it — not as one that exited with code 1, which reads as a command
+/// that ran and failed.
+#[tokio::test]
+async fn a_killed_client_terminal_reports_the_signal() {
+    let (base, project) = scripted_dirs("terminal-kill");
+    let steps = serde_json::json!([
+        {"method": "terminal/create", "save": "terminalId",
+         "params": {"command": "/bin/sh", "args": ["-c", "exec sleep 30"]}},
+        {"method": "terminal/kill", "params": {"terminalId": "$terminalId"}},
+        {"method": "terminal/wait_for_exit", "params": {"terminalId": "$terminalId"}},
+        {"method": "terminal/release", "params": {"terminalId": "$terminalId"}},
+    ]);
+    let Some((outcomes, _thread)) = run_client_requests(&base, &project, &steps).await else {
+        eprintln!("skipping: no python3 on this machine");
+        return;
+    };
+
+    let exit = &outcomes[2]["result"];
+    assert_eq!(
+        exit["signal"], "SIGHUP",
+        "the signal that ended the command: {}",
+        outcomes[2]
+    );
+    assert!(
+        exit["exitCode"].is_null(),
+        "a command a signal ended has no exit code: {}",
+        outcomes[2]
     );
 
     let _ = std::fs::remove_dir_all(&base);

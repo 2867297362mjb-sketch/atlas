@@ -71,17 +71,39 @@ pub struct RunSpan {
 }
 
 /// Group an assistant entry's chunks into runs, without touching their text.
+///
+/// A run is one message as the reader sees it: it breaks where prose turns to
+/// thought or back, and where the agent's `messageId` changes, which ACP
+/// defines as a new message starting. Grouped on the first alone, two
+/// messages read as one bubble run together, "Checking the file.Here is the
+/// fix" (audit #18). Chunks without an id join their neighbours, as the
+/// thread does (`can_merge_message_chunks`).
 pub fn run_spans(chunks: &[AssistantMessageChunk]) -> Vec<RunSpan> {
     let mut spans: Vec<RunSpan> = Vec::new();
+    let mut span_id: Option<&acp::MessageId> = None;
     for (ix, chunk) in chunks.iter().enumerate() {
         let is_thought = chunk.is_thought();
+        let id = match chunk {
+            AssistantMessageChunk::Message { id, .. }
+            | AssistantMessageChunk::Thought { id, .. } => id.as_ref(),
+        };
+        let same_message = match (span_id, id) {
+            (Some(open), Some(incoming)) => open == incoming,
+            _ => true,
+        };
         match spans.last_mut() {
-            Some(span) if span.is_thought == is_thought => span.end = ix + 1,
-            _ => spans.push(RunSpan {
-                is_thought,
-                start: ix,
-                end: ix + 1,
-            }),
+            Some(span) if span.is_thought == is_thought && same_message => {
+                span.end = ix + 1;
+                span_id = span_id.or(id);
+            }
+            _ => {
+                spans.push(RunSpan {
+                    is_thought,
+                    start: ix,
+                    end: ix + 1,
+                });
+                span_id = id;
+            }
         }
     }
     spans
@@ -573,6 +595,15 @@ pub fn permission_options(options: &PermissionOptions) -> serde_json::Value {
 /// comment") still says which tool it is. `content` is the call's text, one
 /// string per block, when it has any: what an outward action's card shows as
 /// the recipient and the full body (ADR-0014). Neither is shortened here.
+///
+/// `contentBlocks` and `locations` are the call's structured content and the
+/// places it names, in the tool row's own shapes ([`content_blocks`],
+/// `ToolCall::locations`), each only when there is one. An agent may send a
+/// proposed edit as a `diff` block alone, with nothing in `rawInput`, and a
+/// card drawn from `rawInput` asked for approval of a change it never showed.
+/// Additive keys of a value the wire carries as opaque JSON (`tool_call` of
+/// `SessionDelta::PermissionRequest`): a client that does not read them is
+/// unchanged.
 pub fn permission_tool_call(call: &ThreadToolCall) -> serde_json::Value {
     let tool_name = call.tool_name.as_ref().map_or_else(
         || {
@@ -602,6 +633,17 @@ pub fn permission_tool_call(call: &ThreadToolCall) -> serde_json::Value {
         .collect();
     if !content.is_empty() {
         out["content"] = serde_json::json!(content);
+    }
+    let blocks = content_blocks(&call.content);
+    if !blocks.is_empty() {
+        out["contentBlocks"] = serde_json::to_value(blocks).unwrap_or(serde_json::Value::Null);
+    }
+    if !call.locations.is_empty() {
+        out["locations"] = call
+            .locations
+            .iter()
+            .map(|location| serde_json::to_value(location).unwrap_or(serde_json::Value::Null))
+            .collect();
     }
     out
 }
@@ -994,6 +1036,38 @@ mod permission_tests {
             "falls back to the title, as a row does"
         );
         assert!(wire.get("content").is_none(), "no text, no content");
+        assert!(wire.get("contentBlocks").is_none(), "no diff, no blocks");
+        assert!(wire.get("locations").is_none(), "no locations, no key");
+    }
+
+    /// #33: the card showed only `rawInput`, and an agent that sends its edit
+    /// as a `diff` block (with nothing in `rawInput`) asked for approval of a
+    /// change the card never drew. The request's own diff and where it lands
+    /// travel with it, in the tool row's shapes.
+    #[test]
+    fn a_proposed_edits_card_carries_its_diff_and_where_it_lands() {
+        let wire = permission_tool_call(&call(
+            acp::ToolCall::new("call-1", "Edit src/auth.ts")
+                .kind(acp::ToolKind::Edit)
+                .content(vec![acp::ToolCallContent::Diff(
+                    acp::Diff::new("/repo/src/auth.ts", "let a = 2;\n").old_text("let a = 1;\n"),
+                )])
+                .locations(vec![acp::ToolCallLocation::new("/repo/src/auth.ts").line(3)]),
+        ));
+        assert_eq!(
+            wire["contentBlocks"],
+            serde_json::json!([{
+                "type": "diff",
+                "path": "/repo/src/auth.ts",
+                "oldText": "let a = 1;\n",
+                "newText": "let a = 2;\n",
+            }])
+        );
+        assert_eq!(
+            wire["locations"],
+            serde_json::json!([{ "path": "/repo/src/auth.ts", "line": 3 }])
+        );
+        assert!(wire.get("content").is_none(), "a diff is not text");
     }
 
     #[test]

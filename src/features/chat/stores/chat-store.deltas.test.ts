@@ -587,7 +587,15 @@ describe("applyAgentDelta: turn terminals", () => {
 
   it.each([
     ["end_turn", "(no response — the agent ended its turn without output)", "idle"],
-    ["max_tokens", "(no response — stop_reason: max_tokens)", "error"],
+    // A normal way for a turn to end (ACP `StopReason`), not an error: the
+    // session settles idle, with the notice saying what happened (audit #20).
+    ["max_tokens", "(the reply was cut off — the model hit its output token limit)", "idle"],
+    [
+      "refusal",
+      "(the agent declined this request — it, and anything after it in this turn, won't be in what the agent sees next)",
+      "idle",
+    ],
+    ["something_new", "(no response — stop_reason: something_new)", "error"],
   ] as const)(
     "an empty turn ending %s leaves a placeholder instead of a vanishing spinner",
     (stop_reason, label, status) => {
@@ -604,7 +612,7 @@ describe("applyAgentDelta: turn terminals", () => {
     expect(messages()).toHaveLength(1);
   });
 
-  it("a truncated reply gets a notice after it, and the session reads as errored", () => {
+  it("a truncated reply gets a notice after it, and the session settles idle", () => {
     boundTab();
     apply(
       d("text_chunk", { message_id: "m", delta: "The files are" }),
@@ -615,7 +623,7 @@ describe("applyAgentDelta: turn terminals", () => {
       "The files are",
       "(the reply was cut off — the model hit its output token limit)",
     ]);
-    expect(session().status).toBe("error");
+    expect(session().status).toBe("idle");
   });
 
   it("a stale turn_finished is dropped whole: no status flip, no placeholder", () => {

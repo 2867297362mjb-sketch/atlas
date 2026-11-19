@@ -25,7 +25,20 @@ export function isBashToolCall(tc: Pick<ToolCallDisplay, "kind" | "toolName">): 
   return BASH_TOOL_NAMES.has(tc.toolName.toLowerCase());
 }
 
-/** The shell command from a bash tool call's arguments, or "" if absent. */
-export function bashCommandOf(args: Record<string, unknown>): string {
-  return (args.command as string) ?? (args.cmd as string) ?? "";
+/** The shell command from a bash tool call's arguments, or "" if absent.
+ *
+ *  The arguments are the agent's raw input, free-form JSON: a command can come
+ *  as an argv array (`["bash", "-lc", "ls"]`), shown joined. Anything else is
+ *  no command at all. Cast unchecked, a non-string here threw inside the row
+ *  projection and took the whole window down with it (audit #94). */
+export function bashCommandOf(args: Record<string, unknown> | null | undefined): string {
+  return commandText(args?.command) ?? commandText(args?.cmd) ?? "";
+}
+
+function commandText(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value) && value.length > 0 && value.every((v) => typeof v === "string")) {
+    return value.join(" ");
+  }
+  return undefined;
 }

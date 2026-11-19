@@ -1108,9 +1108,7 @@ impl AgentManager {
         // meant the *cancelled* turn closed the *live* one (ATL-229).
         let turn = {
             let mut thread = lock_thread(&handle.thread);
-            for block in &content {
-                thread.push_user_content_block(client_id.clone(), block.clone());
-            }
+            thread.push_user_prompt(client_id.clone(), content.iter().cloned());
             thread.begin_turn()
         };
 

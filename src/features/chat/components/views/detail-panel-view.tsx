@@ -1,6 +1,7 @@
 // The detail panel's frame and its tool-output body, from props alone.
 // `detail-panel.tsx` owns the store, the Esc key, the drag and the clipboard.
 
+import { plainTerminalText } from "@/lib/terminal-text";
 import type { MouseEvent, ReactNode } from "react";
 import { ChevronRight, TerminalSquare } from "lucide-react";
 import { CopyGlyph, HintGroup, HintItem, Icon, IconButton } from "@tryatlas/design";
@@ -153,7 +154,7 @@ export function ToolOutputView({
         )}
         {output ? (
           <pre className="whitespace-pre-wrap break-words px-3 py-2 font-mono text-xs leading-snug text-secondary-foreground select-text">
-            {output}
+            {plainTerminalText(output)}
           </pre>
         ) : (
           <DetailPanelEmpty>{running ? "Still running…" : "No output."}</DetailPanelEmpty>

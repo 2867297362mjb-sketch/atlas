@@ -395,10 +395,10 @@ describe("openAgentSession", () => {
     expect(session().acpSessionId).toBeUndefined();
   });
 
-  it("as found: a load that fails leaves the optimistic binding in place", async () => {
-    // `openThread` rolls this back, because a tab bound to a session the
-    // backend never opened is stranded (the panel's bind skips a bound tab).
-    // This path reports the failure and opens the send gate on that binding.
+  it("a load that fails rolls the optimistic binding back, as `openThread` does", async () => {
+    // A tab bound to a session the backend never opened is stranded: the
+    // panel's bind skips a bound tab, and every send goes to a session the
+    // agent does not have.
     await ensureAgent(PLUGIN);
     tauri.handleRaw({ agents_load_session: () => Promise.reject({ message: "no such session" }) });
     await open();
@@ -406,10 +406,10 @@ describe("openAgentSession", () => {
     expect(toastError).toHaveBeenCalledWith("Couldn't open session: no such session");
     expect(session().resumePending).toBe(false);
     expect(session().transcriptLoading).toBe(false);
-    expect(session().acpSessionId).toBe(SESSION);
+    expect(session().acpSessionId).toBeUndefined();
   });
 
-  it("as found: has no load token, so a load answered late still paints", async () => {
+  it("a load answered after the tab moved on paints and binds nothing", async () => {
     let release!: (v: unknown) => void;
     tauri.handleRaw({ agents_load_session: () => new Promise((r) => (release = r)) });
     const opening = open();
@@ -419,12 +419,45 @@ describe("openAgentSession", () => {
     store().actions.clearSession(TAB);
     release(KEY);
     await opening;
-    expect(session().acpSessionId).toBe(SESSION);
-    expect(session().messages).toHaveLength(2);
+    expect(session().acpSessionId).toBeUndefined();
+    expect(session().messages).toHaveLength(0);
   });
 });
 
 describe("rebind after the agent disconnects", () => {
+  it("hears the restarted agent's turns, which Rust numbers from 1 again", async () => {
+    // Every bind gives the session a fresh turn counter in Rust
+    // (`SessionRegistry::bind`), and a rebind keeps the session id. The tab
+    // kept its old high-water mark, so every status and terminal of the
+    // restarted agent's turns (1, 2, ...) read as stale and was dropped: the
+    // tab said "Working" forever (audit #2).
+    disconnectedTab();
+    const delta = (status: string, turnSeq: number) =>
+      store().actions.applyAgentDelta({
+        kind: "status",
+        agent_id: AGENT.agent_id,
+        session_id: SESSION,
+        seq: 0,
+        status,
+        turn_seq: turnSeq,
+      } as never);
+    // Three turns ran before the agent died.
+    delta("running", 3);
+    delta("idle", 3);
+
+    await rebindDisconnectedSession(TAB);
+    delta("running", 1);
+    expect(session().status).toBe("running");
+    delta("idle", 1);
+    expect(session().status).toBe("idle");
+  });
+
+  it("a snapshot's turn number is adopted, so an older turn's late terminal is still refused", async () => {
+    tauri.handleRaw({ agents_snapshot: () => snapshot({ status: "running", turn_seq: 4 }) });
+    await openThread(THREAD);
+    expect(session().currentTurnSeq).toBe(4);
+  });
+
   it("resumes the same session and repaints it once, not on top of what is shown", async () => {
     disconnectedTab();
     await rebindDisconnectedSession(TAB);
@@ -435,6 +468,49 @@ describe("rebind after the agent disconnects", () => {
     });
     expect(session().messages.map((m) => m.content)).toEqual(["hi", "hello"]);
     expect(session().acpSessionId).toBe(SESSION);
+  });
+
+  it("an agent that can only resume: reopened through its thread, not started over", async () => {
+    // The restart called `session/load` and nothing else, and on any failure
+    // quietly opened a NEW session: the old transcript stayed on screen while
+    // the agent remembered none of it (audit #4). Through the thread the
+    // backend picks `session/load` or `session/resume`, whichever the agent
+    // advertised, as opening a history row does.
+    disconnectedTab();
+    tauri.handleRaw({
+      threads_history: () => [
+        {
+          threadId: "th-1",
+          sessionId: SESSION,
+          agentId: PLUGIN,
+          title: "t",
+          folderPaths: ["/proj"],
+        },
+      ],
+      threads_resume: () => ({ key: KEY, resumedWithoutHistory: true }),
+      agents_load_session: () =>
+        Promise.reject({ message: "this agent cannot load stored sessions" }),
+      agents_snapshot: () => snapshot({ messages: [] }),
+    });
+
+    expect(await rebindDisconnectedSession(TAB)).toBe(true);
+    expect(tauri.calls("threads_resume").map((c) => c.args)).toEqual([{ threadId: "th-1" }]);
+    expect(count("agents_new_session")).toBe(0);
+    expect(session().acpSessionId).toBe(SESSION);
+    expect(session().messages.map((m) => m.content)).toEqual(["hi", "hello"]);
+  });
+
+  it("a session the agent cannot reopen: the chat says it starts over", async () => {
+    disconnectedTab();
+    tauri.handleRaw({
+      threads_history: () => [],
+      agents_load_session: () => Promise.reject({ message: "no such session" }),
+    });
+
+    expect(await rebindDisconnectedSession(TAB)).toBe(true);
+    expect(session().acpSessionId).toBe("sess-fresh");
+    const last = session().messages[session().messages.length - 1]!;
+    expect(last.content).toMatch(/could not reopen this conversation/);
   });
 
   it("keeps what is on screen when the agent resumed without replaying", async () => {
@@ -467,9 +543,15 @@ describe("rebind after the agent disconnects", () => {
     await expect(rebindDisconnectedSession(TAB)).resolves.toBe(true);
     expect(session().acpSessionId).toBe("sess-fresh");
     expect(session().disconnected).toBeFalsy();
-    // Nothing was replayed, so nothing is repainted.
+    // Nothing was replayed, so nothing is repainted; what is on screen stays,
+    // with a line saying the agent no longer has it (audit #4).
     expect(count("agents_snapshot")).toBe(0);
-    expect(session().messages).toHaveLength(2);
+    expect(
+      session()
+        .messages.map((m) => m.content)
+        .slice(0, 2),
+    ).toEqual(["hi", "hello"]);
+    expect(session().messages).toHaveLength(3);
   });
 
   it("starts a fresh session for a tab that died before it ever bound", async () => {

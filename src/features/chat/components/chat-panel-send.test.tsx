@@ -274,7 +274,11 @@ describe("sends while a turn runs", () => {
 
     stop();
     expect(count("agents_cancel")).toBe(1);
-    expect(tauri.calls("agents_kill").map((c) => c.args.agentId)).toEqual([AGENT]);
+    // The kill names the session it was pressed for: a late one cannot take
+    // down the process that replaced the one it meant (audit #69).
+    expect(tauri.calls("agents_kill").map((c) => c.args)).toEqual([
+      { agentId: AGENT, sessionId: session().acpSessionId },
+    ]);
     expect(session().stopping).toBeUndefined();
   });
 });

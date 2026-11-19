@@ -2090,4 +2090,22 @@ mod tests {
         assert!(snapshot.pending_permissions.is_empty());
         let _ = std::fs::remove_dir_all(&f.dir);
     }
+
+    /// The snapshot names the turn the session is on, so a window that binds
+    /// it (a reload, a rebind after the agent restarted) adopts the numbering
+    /// its turn-scoped deltas carry instead of refusing them as stale.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_snapshot_names_the_turn_the_session_is_on() {
+        let f = fixture("s-turn").await;
+        assert_eq!(f.host.snapshot(&f.key).unwrap().turn_seq, 0);
+        let started = f
+            .host
+            .submit(&f.key, Prompt::text("x"), Origin::Local, SubmitPolicy::Now)
+            .unwrap();
+        let Submitted::Started { turn_seq } = started else {
+            panic!("an idle session starts the prompt at once: {started:?}");
+        };
+        assert_eq!(f.host.snapshot(&f.key).unwrap().turn_seq, turn_seq);
+        let _ = std::fs::remove_dir_all(&f.dir);
+    }
 }

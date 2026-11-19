@@ -1026,6 +1026,51 @@ async fn growing_terminal_output_re_projects_the_tool_call() {
     );
 }
 
+/// #27. The agent releases a terminal once it has what it needs from it, and
+/// ACP says the tool calls showing it keep showing its output. Release dropped
+/// the terminal, so the next projection of the call (its status flipping to
+/// completed) carried `result: null` — and the UI, which takes a tool call
+/// whole, blanked the output the user had been reading.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_released_terminal_keeps_its_output_on_the_wire() {
+    let harness = Harness::start();
+
+    create_terminal(&harness, "term-released", &["still here after release"]).await;
+    harness.update(terminal_tool_call("call-released", "term-released"));
+    harness.expect(1);
+
+    // What `terminal/release` does to the thread.
+    assert!(lock(&harness.thread).release_terminal(&acp::TerminalId::new("term-released")));
+    harness.update(serde_json::json!({
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call-released",
+        "status": "completed",
+    }));
+
+    let last = harness
+        .recorder
+        .deltas()
+        .into_iter()
+        .filter_map(|d| match d {
+            SessionDelta::ToolCallUpserted { tool_call, .. } => Some(tool_call),
+            _ => None,
+        })
+        .next_back()
+        .expect("the tool call reached the wire");
+    assert_eq!(
+        last.status,
+        atlas_agent_delta::ToolCallStatus::Completed,
+        "the update after the release is the one under test"
+    );
+    assert!(
+        last.result
+            .as_deref()
+            .is_some_and(|result| result.contains("still here after release")),
+        "the release blanked the tool call's output: {:?}",
+        last.result
+    );
+}
+
 /// #30 — the projection must be a function of the EVENT STREAM, not of live
 /// state re-read at drain time. The drain lags the thread: an agent that gives
 /// up on its own request (a cancelled turn ends the call) can move the status
@@ -3020,4 +3065,26 @@ async fn an_outline_names_each_call_without_its_input_or_output() {
     assert!(calls[0].arguments.is_null());
     assert!(calls[0].raw_output.is_none());
     assert!(outline.iter().any(|m| m.content == "searching"));
+}
+
+/// ACP: "A change in messageId indicates a new message has started". The
+/// thread kept a chunk per id, but the projection grouped neighbouring chunks
+/// by thought-or-not alone, so two messages read as one bubble, run together:
+/// "Checking the file.Here is the fix" (audit #18).
+#[test]
+fn a_changed_message_id_starts_a_new_message() {
+    let harness = Harness::start();
+    for (text, id) in [("Checking the file.", "a1"), ("Here is the fix", "a2")] {
+        harness.update(serde_json::json!({
+            "sessionUpdate": "agent_message_chunk",
+            "messageId": id,
+            "content": { "type": "text", "text": text },
+        }));
+    }
+
+    let thread = lock(&harness.thread);
+    let messages = atlas_agent_delta::project::snapshot_messages(&thread, None);
+    drop(thread);
+    let texts: Vec<&str> = messages.iter().map(|m| m.content.as_str()).collect();
+    assert_eq!(texts, ["Checking the file.", "Here is the fix"]);
 }
