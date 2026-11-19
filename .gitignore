@@ -100,7 +100,7 @@ vendor/atlas-engine/**/target/
 .ds-sync/
 ds-bundle/
 
-# Python bytecode from the one-off scripts.
+# Python bytecode.
 __pycache__/
 
 # Built by scripts/linux/build-bwrap.sh for the AppImage; never committed.

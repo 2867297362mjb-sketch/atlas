@@ -49,12 +49,10 @@ Rename both, completely, in one sweep, and keep them out with a test.
 
 ### What keeps the word, and why (the residue)
 
-`tests/no-legacy-names.test.ts` keeps both names out, in two regimes. The retired SDK's name is
-banned everywhere but the rows below that mention it. The original's name is banned outright in
-the engine's own territory (the engine tree, the seam crate, the manifests, CI, the contract
-tests, the living docs) and, everywhere else, only in the spellings the engine used — its crate
-and module identifiers, `vendor/codex`, its home field, its error and auth types, and prose that
-calls the engine by it — because the app layer legitimately names the third-party Codex CLI.
+No test polices these names. The retired SDK is no longer a dependency of any manifest or
+lockfile, so a return would show in review. The upstream name is also the name of the third-party
+Codex CLI, which the app layer legitimately mentions, so a word ban could only be approximate. The
+rows below are what was deliberately kept when the rename landed.
 
 | Where | Why |
 | --- | --- |
@@ -65,11 +63,11 @@ calls the engine by it — because the app layer legitimately names the third-pa
 | OpenAI's Codex CLI as a third-party ACP agent (`codex`, `codex-acp`, `@openai/codex-*`, its `CODEX_API_KEY` pass-through, the Memory panel's `~/.codex` reader, its icon and brand colour) | A different product that users install from the Marketplace |
 | `tests/vendor-licensing.test.ts` | Names the path the engine was first imported under, where its git history lives |
 | `crates/atlas-thread-metadata/src/schema.rs` | The V3 migration deletes the rows under the retired id |
-| `docs/adr/*`, `docs/archive/*` | The historical record |
+| `docs/adr/*` | The historical record |
 
 ### How the sweep ran
 
-`scripts/one-off/rename-engine.py` (committed with its output; delete it once the rename has landed) applied
+The sweep was `scripts/one-off/rename-engine.py`, deleted once the rename had landed. It applied
 these rules most-specific first, word-bounded, skipping the protected tokens above:
 `vendor/codex` → `vendor/atlas-engine`; proto packages `codex.X.` → `atlas_engine.X.`;
 product tokens (`codex_home`, `dot_codex_folder`, `codex_apps`, the MCP meta keys, the OTel
