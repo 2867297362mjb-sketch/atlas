@@ -162,7 +162,7 @@ function applyPersistedModePref(sess: ChatSession, agentType: AgentType): void {
 /** The paths in a wire call's ACP `locations` (`[{ path, line? }]`), or
  *  undefined when it carried none — the field stays absent rather than an
  *  empty array, like the other optional tool-call fields. */
-function toolLocations(raw: unknown): string[] | undefined {
+export function toolLocations(raw: unknown): string[] | undefined {
   if (!Array.isArray(raw) || raw.length === 0) return undefined;
   const paths: string[] = [];
   for (const l of raw) {
@@ -412,6 +412,10 @@ interface ChatActions {
          *  ends it (snapshot `worked_ms` / `stop_reason`). */
         workedMs?: number;
         stopReason?: string;
+        /** How the message reads (a thought, prose, tool work), and a
+         *  thought's text, as the live stream gave them. */
+        mode?: ChatMessage["mode"];
+        thinking?: string;
         toolCalls?: Array<{
           /** The agent's own tool call id, when the caller has it. Optional
            *  only because not every paint path carries one; a caller that has
@@ -428,6 +432,11 @@ interface ChatActions {
            *  stamped them. */
           startedAt?: number;
           endedAt?: number;
+          /** The diff and terminal blocks, the paths it touched, and the
+           *  subagent launch it belongs to, as the live stream gave them. */
+          contentBlocks?: ChatMessage["toolCalls"][number]["contentBlocks"];
+          locations?: string[];
+          parentToolCallId?: string | null;
         }>;
       }>,
       /** The painting snapshot's `as_of_seq`. A delta held while the
@@ -1481,7 +1490,16 @@ export const useChatStore = create<ChatState & ChatActions>()(
                 duration: null,
                 ...(tc.startedAt !== undefined ? { startedAt: tc.startedAt } : {}),
                 ...(tc.endedAt !== undefined ? { endedAt: tc.endedAt } : {}),
+                // What the live path keeps (`toChatToolCall`). Dropped here, an
+                // edit reported as a diff reopened as a bare "Edit", and a
+                // child's calls fell back into its parent's stream (audit #97).
+                contentBlocks: tc.contentBlocks,
+                locations: tc.locations,
+                parentToolCallId: tc.parentToolCallId ?? undefined,
               })),
+              // A thought reopened as an empty reply without these (audit #6).
+              ...(m.mode ? { mode: m.mode } : {}),
+              ...(m.thinking ? { thinking: m.thinking } : {}),
               fileChanges: [],
               plan: null,
               timestamp: m.timestamp ?? new Date().toISOString(),
