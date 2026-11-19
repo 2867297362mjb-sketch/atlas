@@ -151,6 +151,30 @@ const VERB_BY_TOOL_KIND: Record<string, string> = {
 const TARGET_KEYS = ["command", "cmd", "file_path", "filePath", "path", "url", "pattern", "query"];
 const DETAIL_MAX = 80;
 
+/**
+ * The fields a raw input may carry beside its command or target without the
+ * one line losing anything that decides what runs. A description is prose
+ * for the reader, which no tool executes; a time limit is a number, which can
+ * name no program, argument, path or input. Each only in that type: a
+ * "description" that is not a string, or a "timeout" that is, is not provably
+ * either. Everything else — `args`, `cwd`, `env`, `stdin`, a second command,
+ * an edit's text — can carry part of the request the line leaves out, and a
+ * name this list has never heard of is treated the same way.
+ */
+const HARMLESS_FIELDS = new Map<string, (value: unknown) => boolean>([
+  ["description", (v) => typeof v === "string"],
+  ["timeout", (v) => typeof v === "number"],
+  ["timeout_ms", (v) => typeof v === "number"],
+]);
+
+/** Whether `key` is the only field of `input` that could carry what runs. A
+ *  field set to null carries nothing. */
+function onlyHarmlessBeside(input: Record<string, unknown>, key: string): boolean {
+  return Object.entries(input).every(
+    ([k, v]) => k === key || v == null || HARMLESS_FIELDS.get(k)?.(v) === true,
+  );
+}
+
 const oneLine = (s: string) => {
   const t = s.replace(/\s+/g, " ").trim();
   return t.length > DETAIL_MAX ? `${t.slice(0, DETAIL_MAX - 1).trimEnd()}…` : t;
@@ -159,11 +183,15 @@ const oneLine = (s: string) => {
 /** A permission's one-line description and whether it shows the whole thing. */
 export interface PermissionDescription {
   text: string;
-  /** False when `text` is not the complete command/target: cut at the cap, a
-   *  multi-line command flattened to one line (newlines run commands apart, so
-   *  the flat form is not the same command), or no command/target found at all
-   *  (only the call's title). A banner must not offer Allow on such a request —
-   *  the user would approve what they cannot see. */
+  /** True only when `text` is provably the whole request: the command/target
+   *  came from the raw input, every other field there is harmless metadata
+   *  (`HARMLESS_FIELDS`), and it fits on the line as it is. False when it was
+   *  cut at the cap, is a multi-line command flattened to one line (newlines
+   *  run commands apart, so the flat form is not the same command), sits
+   *  beside other fields that carry part of what runs (`args`, `cwd`, …), or
+   *  is only the call's title, which is the agent's label for the call and
+   *  not the call. A banner must not offer Allow on such a request — the user
+   *  would approve what they cannot see. */
   complete: boolean;
 }
 
@@ -177,22 +205,35 @@ export function describePermissionDetail(
   const tc = (toolCall && typeof toolCall === "object" ? toolCall : {}) as Record<string, unknown>;
   const title = typeof tc.title === "string" ? tc.title : (fallbackTitle ?? "");
   const kind = typeof tc.kind === "string" ? tc.kind : "";
-  const input = (tc.rawInput ?? tc.raw_input) as Record<string, unknown> | undefined;
+  const raw = tc.rawInput ?? tc.raw_input;
+  const input =
+    raw && typeof raw === "object" && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>)
+      : undefined;
   let target = "";
-  if (input && typeof input === "object") {
+  let targetKey: string | null = null;
+  if (input) {
     for (const k of TARGET_KEYS) {
-      if (typeof input[k] === "string" && input[k]) {
-        target = input[k] as string;
+      const value = input[k];
+      if (typeof value === "string" && value) {
+        target = value;
+        targetKey = k;
         break;
       }
     }
   }
   const verb = VERB_BY_TOOL_KIND[kind];
-  // For shell calls the ACP title IS the command.
+  // A shell call with no command in its input is named by its title, which
+  // for most agents is the command line — but only as the agent chose to
+  // label it, so a line built from it is never the whole request.
   if (!target && kind === "execute") target = title;
   if (verb && target) {
     const text = oneLine(`${verb} ${target}`);
-    return { text, complete: !text.endsWith("…") && !/[\r\n]/.test(target.trim()) };
+    const whole = !!input && targetKey !== null && onlyHarmlessBeside(input, targetKey);
+    return {
+      text,
+      complete: whole && !text.endsWith("…") && !/[\r\n]/.test(target.trim()),
+    };
   }
   if (title) return { text: oneLine(title), complete: false };
   return { text: kind ? oneLine(kind) : "a tool", complete: false };

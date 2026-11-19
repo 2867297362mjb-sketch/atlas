@@ -42,6 +42,14 @@ export interface ToolCallRef {
   /** On a permission request: the tool's own name, kept when the title names
    *  the act instead (`permission_tool_call` in `atlas-agent-delta`). */
   toolName?: string;
+  /** On a permission request: the call's structured blocks, a proposed edit's
+   *  `diff` among them, in the tool row's shape (`ToolContentBlock`). Unknown
+   *  here because the wire carries the request as opaque JSON; read it through
+   *  `permissionDiffsOf`. */
+  contentBlocks?: unknown;
+  /** On a permission request: the places the call names, ACP's
+   *  `[{ path, line? }]`. Read it through `permissionLocationsOf`. */
+  locations?: unknown;
   [k: string]: unknown;
 }
 

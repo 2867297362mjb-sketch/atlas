@@ -564,11 +564,15 @@ async fn a_pending_permission_does_not_block_the_messages_behind_it() {
         .new_session(vec![std::env::temp_dir()])
         .await
         .expect("session/new failed");
-    let session_id = thread
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .session_id()
-        .clone();
+    let session_id = {
+        let mut thread = thread
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // The turn opens before the prompt goes out, as `AgentManager::send`
+        // opens it: a permission request is only ever raised inside one.
+        thread.begin_turn();
+        thread.session_id().clone()
+    };
 
     let prompt = tokio::spawn(connection.clone().prompt(acp::PromptRequest::new(
         session_id,
@@ -633,6 +637,150 @@ async fn a_pending_permission_does_not_block_the_messages_behind_it() {
         .expect("prompt task panicked")
         .expect("prompt failed");
     assert_eq!(response.stop_reason, acp::StopReason::EndTurn);
+}
+
+/// A fake agent whose permission request crosses the user's Stop on the wire:
+/// it announces a tool call, and asks permission for it only once the
+/// `session/cancel` has reached it — the request it had in flight when the
+/// client cancelled. It reports the answer it got as a text chunk, then ends
+/// the turn as cancelled.
+const LATE_PERMISSION_AGENT: &str = r#"
+import sys, json
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+def update(u):
+    send({"jsonrpc": "2.0", "method": "session/update",
+          "params": {"sessionId": "session-1", "update": u}})
+prompt_id = None
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    method = msg.get("method")
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": msg["id"], "result": {
+            "protocolVersion": 1, "agentCapabilities": {}, "authMethods": [],
+            "agentInfo": {"name": "fake-agent", "version": "9.9.9"}}})
+    elif method == "session/new":
+        send({"jsonrpc": "2.0", "id": msg["id"], "result": {"sessionId": "session-1"}})
+    elif method == "session/prompt":
+        prompt_id = msg["id"]
+        update({"sessionUpdate": "tool_call", "toolCallId": "call-1",
+                "title": "rm -rf build", "kind": "execute", "status": "pending"})
+    elif method == "session/cancel":
+        send({"jsonrpc": "2.0", "id": 100, "method": "session/request_permission",
+              "params": {"sessionId": "session-1",
+                         "toolCall": {"toolCallId": "call-1"},
+                         "options": [
+                             {"optionId": "allow", "name": "Allow", "kind": "allow_once"},
+                             {"optionId": "deny", "name": "Deny", "kind": "reject_once"}]}})
+    elif msg.get("id") == 100 and "result" in msg:
+        outcome = msg["result"]["outcome"]["outcome"]
+        update({"sessionUpdate": "agent_message_chunk",
+                "content": {"type": "text", "text": "permission answered: " + outcome}})
+        send({"jsonrpc": "2.0", "id": prompt_id, "result": {"stopReason": "cancelled"}})
+"#;
+
+/// #89. Stop cleared the turn and sent `session/cancel`, but a permission
+/// request the agent had already sent arrived after it and was raised like any
+/// other: a prompt for a turn that was over, which nobody was waiting on and a
+/// later click would answer. ACP: once the client cancels the turn it MUST
+/// answer every pending `session/request_permission` with `Cancelled` — so one
+/// that arrives with no turn running is answered that way at once, and never
+/// shown.
+#[tokio::test]
+async fn a_permission_request_crossing_stop_is_answered_cancelled_and_never_shown() {
+    use atlas_acp_thread::{AgentConnection as _, AgentThreadEntry, ToolCallStatus};
+
+    let Some(python) = python() else {
+        eprintln!("skipping: no python3 on this machine");
+        return;
+    };
+    let command = AgentServerCommand {
+        path: python,
+        args: vec!["-c".to_string(), LATE_PERMISSION_AGENT.to_string()],
+        env: Some(HashMap::new()),
+    };
+    let connection = Arc::new(connect(command).await.expect("handshake failed"));
+    let thread = connection
+        .clone()
+        .new_session(vec![std::env::temp_dir()])
+        .await
+        .expect("session/new failed");
+    let lock = || {
+        thread
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    };
+    let session_id = {
+        let mut thread = lock();
+        thread.begin_turn();
+        thread.session_id().clone()
+    };
+    let prompt = tokio::spawn(connection.clone().prompt(acp::PromptRequest::new(
+        session_id,
+        vec![acp::ContentBlock::from("clean up")],
+    )));
+
+    // Stop once the agent is working on the call.
+    let announced = |thread: &atlas_acp_thread::AcpThread| {
+        thread
+            .entries()
+            .iter()
+            .any(|entry| matches!(entry, AgentThreadEntry::ToolCall(_)))
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !announced(&lock()) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the tool call never arrived"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    lock().cancel();
+
+    let answer = |thread: &atlas_acp_thread::AcpThread| -> Option<String> {
+        thread.entries().iter().find_map(|entry| match entry {
+            AgentThreadEntry::AssistantMessage(message) => message
+                .chunks
+                .iter()
+                .map(|chunk| chunk.block().to_text().to_string())
+                .find(|text| text.contains("permission answered")),
+            _ => None,
+        })
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    let answered = loop {
+        {
+            let thread = lock();
+            assert!(
+                !thread.entries().iter().any(|entry| matches!(
+                    entry,
+                    AgentThreadEntry::ToolCall(call)
+                        if matches!(call.status, ToolCallStatus::WaitingForConfirmation { .. })
+                )),
+                "a request that crossed Stop must never be raised as a prompt"
+            );
+            if let Some(text) = answer(&thread) {
+                break text;
+            }
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the agent was never answered: its request is waiting on a prompt nobody sees"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    };
+    assert_eq!(answered, "permission answered: cancelled");
+
+    let response = tokio::time::timeout(std::time::Duration::from_secs(5), prompt)
+        .await
+        .expect("the turn must end")
+        .expect("prompt task panicked")
+        .expect("prompt failed");
+    assert_eq!(response.stop_reason, acp::StopReason::Cancelled);
 }
 
 /// A fake agent that runs its command ITSELF and embeds the terminal in

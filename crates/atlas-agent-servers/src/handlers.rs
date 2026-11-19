@@ -263,6 +263,24 @@ pub fn handle_request_permission(
     // exists and the drain can move on to whatever the agent said next.
     let waiter = {
         let mut thread = lock(&thread);
+        // No turn running: this request crossed the user's Stop on the wire
+        // (Stop clears the turn, then sends `session/cancel`), or came after
+        // the agent had already answered its prompt. Nobody is waiting on it,
+        // and raising it would pin a prompt for a turn that is over, answered
+        // by whoever clicks it later. ACP: having cancelled the turn, the client
+        // MUST answer every pending permission request `Cancelled` — so it is,
+        // here, before anything shows. Checked under the same lock as the
+        // registration, so a Stop cannot land between the two. A turn is
+        // always open before its `session/prompt` goes out
+        // (`AgentManager::send` calls `begin_turn` first), so no request the
+        // turn could raise arrives ahead of it.
+        if !thread.is_generating() {
+            drop(thread);
+            let _ = responder.respond(acp::RequestPermissionResponse::new(
+                RequestPermissionOutcome::Cancelled.into(),
+            ));
+            return;
+        }
         thread.request_tool_call_authorization(
             args.tool_call,
             PermissionOptions::Flat(args.options),

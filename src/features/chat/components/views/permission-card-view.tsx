@@ -12,6 +12,7 @@ import { AlertTriangle, CheckCircle2, XCircle } from "lucide-react";
 import { Button, Icon, Kbd, Spinner, Textarea } from "@tryatlas/design";
 import { cn } from "@/lib/utils";
 import { CONTENT_COLUMN } from "../../lib/row-metrics";
+import type { PermissionDiff } from "../../lib/permission-diff";
 import type {
   OutwardApproval,
   OutwardPreparing,
@@ -34,6 +35,8 @@ export type PermissionCardHeading =
 export function PermissionCardView({
   heading,
   preview,
+  diffs = [],
+  locations = [],
   options,
   queueNote,
   draft,
@@ -46,6 +49,11 @@ export function PermissionCardView({
   /** The tool call's input as formatted text, or null for none. Ignored on an
    *  outward card, which shows the words it will post instead. */
   preview: string | null;
+  /** The edits the request proposes, from its own diff blocks. Drawn on a
+   *  tool card only, above its input. */
+  diffs?: readonly PermissionDiff[];
+  /** The places the request names that no diff already shows. */
+  locations?: readonly string[];
   options: PermissionOptionItem[];
   queueNote: string | null;
   draft: string;
@@ -83,13 +91,25 @@ export function PermissionCardView({
 
         {heading.kind === "preparing" ? null : heading.kind === "outward" ? (
           <OutwardActionBody approval={heading.approval} />
-        ) : preview ? (
-          <div className="mx-3 mt-2 rounded-md border border-border bg-background px-3 py-2">
-            <pre className="max-h-32 overflow-auto whitespace-pre-wrap font-mono text-xs leading-snug text-secondary-foreground">
-              {preview}
-            </pre>
-          </div>
-        ) : null}
+        ) : (
+          <>
+            {locations.length > 0 && (
+              <div className="mx-3 mt-1 break-all font-mono text-xs text-secondary-foreground">
+                {locations.join(", ")}
+              </div>
+            )}
+            {diffs.map((diff, i) => (
+              <PermissionDiffView key={`${diff.path}:${i}`} diff={diff} />
+            ))}
+            {preview ? (
+              <div className="mx-3 mt-2 rounded-md border border-border bg-background px-3 py-2">
+                <pre className="max-h-32 overflow-auto whitespace-pre-wrap font-mono text-xs leading-snug text-secondary-foreground">
+                  {preview}
+                </pre>
+              </div>
+            ) : null}
+          </>
+        )}
 
         <div className="px-3 py-2.5">
           <PermissionOptionList options={options} onSelect={onSelect} />
@@ -199,6 +219,62 @@ export function OutwardPreparingHeading({ preparing }: { preparing: OutwardPrepa
         <span>{preparing.title}</span>
       </div>
       <div className="mt-0.5 text-xs text-secondary-foreground">{preparing.note}</div>
+    </div>
+  );
+}
+
+/**
+ * One proposed edit, in the tool-call preview's box: the file, its counts in
+ * the transcript's diff colours, and the changed lines with a little context.
+ * Every line is drawn as text; a file too long for the card says how many
+ * lines it left out rather than cutting silently.
+ */
+export function PermissionDiffView({ diff }: { diff: PermissionDiff }) {
+  return (
+    <div
+      data-testid="permission-diff"
+      className="mx-3 mt-2 overflow-hidden rounded-md border border-border bg-background"
+    >
+      <div className="flex items-start gap-2 border-b border-border px-3 py-1.5">
+        <span className="min-w-0 flex-1 break-all font-mono text-xs text-secondary-foreground">
+          {diff.path}
+        </span>
+        <span
+          role="group"
+          aria-label={`${diff.added} added, ${diff.removed} removed`}
+          className="inline-flex shrink-0 gap-1 font-mono text-xs tabular-nums"
+        >
+          <span aria-hidden className="text-[var(--diff-added-text)]">
+            +{diff.added}
+          </span>
+          <span aria-hidden className="text-[var(--diff-removed-text)]">
+            −{diff.removed}
+          </span>
+        </span>
+      </div>
+      <div className="max-h-48 overflow-auto py-1 font-mono text-xs leading-snug">
+        {diff.lines.map((line, i) => (
+          <div
+            key={i}
+            className={cn(
+              "whitespace-pre px-3",
+              line.sign === "+"
+                ? "text-[var(--diff-added-text)]"
+                : line.sign === "-"
+                  ? "text-[var(--diff-removed-text)]"
+                  : "text-secondary-foreground",
+            )}
+          >
+            {line.sign}
+            {line.text}
+          </div>
+        ))}
+        {diff.more > 0 && (
+          <div className="px-3 text-muted-foreground">
+            {diff.more} more {diff.more === 1 ? "line" : "lines"} not shown
+          </div>
+        )}
+      </div>
     </div>
   );
 }
