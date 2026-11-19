@@ -3066,3 +3066,25 @@ async fn an_outline_names_each_call_without_its_input_or_output() {
     assert!(calls[0].raw_output.is_none());
     assert!(outline.iter().any(|m| m.content == "searching"));
 }
+
+/// ACP: "A change in messageId indicates a new message has started". The
+/// thread kept a chunk per id, but the projection grouped neighbouring chunks
+/// by thought-or-not alone, so two messages read as one bubble, run together:
+/// "Checking the file.Here is the fix" (audit #18).
+#[test]
+fn a_changed_message_id_starts_a_new_message() {
+    let harness = Harness::start();
+    for (text, id) in [("Checking the file.", "a1"), ("Here is the fix", "a2")] {
+        harness.update(serde_json::json!({
+            "sessionUpdate": "agent_message_chunk",
+            "messageId": id,
+            "content": { "type": "text", "text": text },
+        }));
+    }
+
+    let thread = lock(&harness.thread);
+    let messages = atlas_agent_delta::project::snapshot_messages(&thread, None);
+    drop(thread);
+    let texts: Vec<&str> = messages.iter().map(|m| m.content.as_str()).collect();
+    assert_eq!(texts, ["Checking the file.", "Here is the fix"]);
+}

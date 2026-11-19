@@ -71,17 +71,39 @@ pub struct RunSpan {
 }
 
 /// Group an assistant entry's chunks into runs, without touching their text.
+///
+/// A run is one message as the reader sees it: it breaks where prose turns to
+/// thought or back, and where the agent's `messageId` changes, which ACP
+/// defines as a new message starting. Grouped on the first alone, two
+/// messages read as one bubble run together, "Checking the file.Here is the
+/// fix" (audit #18). Chunks without an id join their neighbours, as the
+/// thread does (`can_merge_message_chunks`).
 pub fn run_spans(chunks: &[AssistantMessageChunk]) -> Vec<RunSpan> {
     let mut spans: Vec<RunSpan> = Vec::new();
+    let mut span_id: Option<&acp::MessageId> = None;
     for (ix, chunk) in chunks.iter().enumerate() {
         let is_thought = chunk.is_thought();
+        let id = match chunk {
+            AssistantMessageChunk::Message { id, .. }
+            | AssistantMessageChunk::Thought { id, .. } => id.as_ref(),
+        };
+        let same_message = match (span_id, id) {
+            (Some(open), Some(incoming)) => open == incoming,
+            _ => true,
+        };
         match spans.last_mut() {
-            Some(span) if span.is_thought == is_thought => span.end = ix + 1,
-            _ => spans.push(RunSpan {
-                is_thought,
-                start: ix,
-                end: ix + 1,
-            }),
+            Some(span) if span.is_thought == is_thought && same_message => {
+                span.end = ix + 1;
+                span_id = span_id.or(id);
+            }
+            _ => {
+                spans.push(RunSpan {
+                    is_thought,
+                    start: ix,
+                    end: ix + 1,
+                });
+                span_id = id;
+            }
         }
     }
     spans
