@@ -29,6 +29,10 @@ pub struct FakeHttp {
     /// download that loses its connection errors mid-body, not up front, and
     /// a staged install has to be proven to discard what it had.
     fail_after: Mutex<HashMap<String, usize>>,
+    /// URL → how many times a stream actually delivered its cut. A test that
+    /// sets a cut should assert [`Self::cuts_delivered`], so it cannot pass on
+    /// a fault that never fired.
+    cuts: Arc<Mutex<HashMap<String, usize>>>,
 }
 
 impl FakeHttp {
@@ -37,10 +41,14 @@ impl FakeHttp {
     }
 
     pub fn with(self: &Arc<Self>, url: &str, status: u16, body: impl Into<Vec<u8>>) -> Arc<Self> {
+        let body = body.into();
+        if let Some(&cut) = self.fail_after.lock().unwrap().get(url) {
+            assert_cut_lands(url, cut, body.len());
+        }
         self.responses
             .lock()
             .unwrap()
-            .insert(url.to_string(), (status, body.into()));
+            .insert(url.to_string(), (status, body));
         self.clone()
     }
 
@@ -59,7 +67,19 @@ impl FakeHttp {
     /// Deliver `bytes` of `url`'s body, then fail the stream — a connection
     /// dropped mid-download. Combine with [`Self::chunked`] to decide where the
     /// cut lands relative to a chunk boundary.
+    ///
+    /// Register `url` with [`Self::with`] first. Panics when the cut cannot
+    /// land inside the body: a cut at or past the end would deliver the whole
+    /// body, and the test would run without the fault it is about.
     pub fn failing_after(self: &Arc<Self>, url: &str, bytes: usize) -> Arc<Self> {
+        let body_len = self
+            .responses
+            .lock()
+            .unwrap()
+            .get(url)
+            .map(|(_, body)| body.len())
+            .unwrap_or_else(|| panic!("failing_after({url}): register the URL with `with` first"));
+        assert_cut_lands(url, bytes, body_len);
         self.fail_after
             .lock()
             .unwrap()
@@ -71,6 +91,11 @@ impl FakeHttp {
     pub fn heal(self: &Arc<Self>, url: &str) -> Arc<Self> {
         self.fail_after.lock().unwrap().remove(url);
         self.clone()
+    }
+
+    /// How many times `url`'s stream delivered its cut.
+    pub fn cuts_delivered(&self, url: &str) -> usize {
+        self.cuts.lock().unwrap().get(url).copied().unwrap_or(0)
     }
 
     pub fn requests(&self) -> Vec<String> {
@@ -100,6 +125,8 @@ impl HttpClient for FakeHttp {
         let delay = *self.delay.lock().unwrap();
         let chunk_size = *self.chunk_size.lock().unwrap();
         let fail_after = self.fail_after.lock().unwrap().get(url).copied();
+        let cuts = self.cuts.clone();
+        let url = url.to_string();
         Box::pin(async move {
             if let Some(delay) = delay {
                 tokio::time::sleep(delay).await;
@@ -127,11 +154,31 @@ impl HttpClient for FakeHttp {
                         std::io::ErrorKind::ConnectionReset,
                         "connection reset by peer (fake)",
                     )));
-                    futures::stream::iter(kept).boxed()
+                    // Counted when the error is read, not when the response is
+                    // built: a cut nobody reached was not delivered.
+                    futures::stream::iter(kept)
+                        .inspect(move |item| {
+                            if item.is_err() {
+                                *cuts.lock().unwrap().entry(url.clone()).or_default() += 1;
+                            }
+                        })
+                        .boxed()
                 }
                 _ => futures::stream::iter(chunks.into_iter().map(Ok)).boxed(),
             };
             Ok(HttpResponse { status, body })
         })
     }
+}
+
+/// A cut at or past the end of the body delivers the whole body, so the test
+/// would run without the fault it is about. Checked on the test's own thread,
+/// at configuration time: a panic inside `get` would land on whatever task is
+/// downloading and come back as an ordinary error.
+fn assert_cut_lands(url: &str, cut: usize, body_len: usize) {
+    assert!(
+        cut < body_len,
+        "failing_after({url}): this cut can never fire — the body is {body_len} bytes and the \
+         cut is at {cut}. Place the cut relative to the body's length."
+    );
 }

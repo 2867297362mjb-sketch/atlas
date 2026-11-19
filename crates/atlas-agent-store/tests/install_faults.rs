@@ -419,10 +419,19 @@ async fn a_node_download_cut_mid_stream_leaves_nothing_and_the_retry_succeeds() 
         .with(&shasums_url, 200, listing.into_bytes())
         .with(&tarball_url, 200, tarball.clone())
         .chunked(4096)
-        .failing_after(&tarball_url, 1000);
+        // Halfway, whatever the fake tarball weighs on this machine: its size
+        // moves with tempdir paths and tar header fields, so a fixed offset
+        // can land past the end.
+        .failing_after(&tarball_url, tarball.len() / 2);
     let fx = Fixture::with_http("1.0.0", None, http.clone()).await;
 
-    let error = format!("{:#}", fx.connect().await.unwrap_err());
+    let result = fx.connect().await;
+    assert_eq!(
+        http.cuts_delivered(&tarball_url),
+        1,
+        "the download must have hit the cut once"
+    );
+    let error = format!("{:#}", result.unwrap_err());
     assert!(
         error.contains("connection reset") || error.contains("reading"),
         "the cut must surface as the network failure it was: {error}"
