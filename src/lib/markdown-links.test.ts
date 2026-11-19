@@ -157,3 +157,45 @@ describe("copying a shortened link", () => {
     expect(copyAll(render("See [the docs](https://example.com/docs).")).taken).toBe(false);
   });
 });
+
+describe("a link that is not a web address", () => {
+  // Only http(s) links were taken. Anything else fell through to the webview,
+  // which resolved `docs/guide` against the app's own origin and navigated
+  // the main window there: a reload, drafts and live state gone (audit #99).
+  function clickLink(href: string): MouseEvent {
+    const root = render(`[the guide](${href})`);
+    const anchor = root.querySelector("a")!;
+    const e = new MouseEvent("click", { bubbles: true, cancelable: true });
+    anchor.dispatchEvent(e);
+    return e;
+  }
+
+  it("a relative link never navigates the window", () => {
+    // (`./README.md` is drawn as a file chip, not a link: it opens the file.)
+    for (const href of ["docs/guide", "../up", "/absolute/path"]) {
+      expect(clickLink(href).defaultPrevented, href).toBe(true);
+    }
+    expect(openUrl).not.toHaveBeenCalled();
+  });
+
+  it("an in-page link scrolls to its heading instead of navigating", () => {
+    const target = document.createElement("h2");
+    target.id = "usage";
+    const scrolled = vi.fn();
+    target.scrollIntoView = scrolled;
+    const e = (() => {
+      const root = render("[usage](#usage)");
+      root.appendChild(target);
+      const ev = new MouseEvent("click", { bubbles: true, cancelable: true });
+      root.querySelector("a")!.dispatchEvent(ev);
+      return ev;
+    })();
+    expect(e.defaultPrevented).toBe(true);
+    expect(scrolled).toHaveBeenCalled();
+  });
+
+  it("a mail link goes to the system's mail app", async () => {
+    expect(clickLink("mailto:someone@example.com").defaultPrevented).toBe(true);
+    await vi.waitFor(() => expect(openUrl).toHaveBeenCalledWith("mailto:someone@example.com"));
+  });
+});

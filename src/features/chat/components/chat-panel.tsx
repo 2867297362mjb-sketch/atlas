@@ -46,6 +46,7 @@ import { useAuthStore } from "@/features/auth/stores/auth-store";
 import { useContextDock } from "@/features/session-context/lib/use-context-dock";
 import { createChatPanelHandlers, type ChatSendHandler } from "../lib/chat-panel-handlers";
 import { useAgentBind, type BindControl } from "../hooks/use-agent-bind";
+import { RenderBoundary } from "@/components/render-boundary";
 import { useStatusHeal } from "../hooks/use-status-heal";
 import { useTabSessionMirror } from "../hooks/use-tab-session-mirror";
 import { restorableSessionOfTab } from "../lib/chat-tab-session";
@@ -106,7 +107,27 @@ interface ChatPanelProps {
 // store's active-tab write and re-emits these elements), and each of those
 // walked its whole transcript's row list. Streaming re-renders still arrive
 // through this panel's own store subscription.
+/**
+ * The chat tab's panel. A render failure inside it costs this tab, not the
+ * window (`RenderBoundary`): the other tabs, the sidebar and the composer of
+ * every other chat keep working, and closing or reopening the tab redraws it.
+ */
 export const ChatPanel = memo(function ChatPanel({ tabId }: ChatPanelProps) {
+  return (
+    <RenderBoundary
+      name="chat-panel"
+      fallback={
+        <div className="flex h-full items-center justify-center p-6 text-sm text-muted-foreground">
+          This chat couldn't be shown. Its conversation is safe; reopen it from the sidebar.
+        </div>
+      }
+    >
+      <ChatPanelContent tabId={tabId} />
+    </RenderBoundary>
+  );
+});
+
+const ChatPanelContent = memo(function ChatPanelContent({ tabId }: ChatPanelProps) {
   // Subscribe to ONLY this tab's session. Streaming chunks on other tabs
   // shouldn't repaint this panel — immer preserves reference equality for
   // unchanged sub-paths, so `s.sessions[tabId]` only changes when this tab

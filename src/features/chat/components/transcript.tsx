@@ -39,6 +39,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ComponentProps,
   type ReactElement,
 } from "react";
 import { isBusyAgentStatus, type ChatMessage } from "@/types/agent";
@@ -63,6 +64,7 @@ import { TranscriptRowItem, TranscriptView } from "@tryatlas/design/session";
 import { DesktopTranscriptProvider } from "./transcript-rows";
 import { ResponseSelectionActions } from "./response-selection-actions";
 import { TurnRail } from "./turn-rail";
+import { RenderBoundary } from "@/components/render-boundary";
 
 /** Shared with the composer — see `switchableAgentOf`. */
 const switchable = switchableAgentOf;
@@ -74,7 +76,26 @@ const switchable = switchableAgentOf;
  * row is given only what concerns it: an unrelated row's props are identical
  * and React skips it.
  */
-const MountedRow = memo(TranscriptRowItem);
+const MountedRow = memo(function MountedRow(props: ComponentProps<typeof TranscriptRowItem>) {
+  // One row that cannot be drawn costs that row, not the window: what an agent
+  // sends is free-form, and a row that threw used to reach only the app's root
+  // boundary (audit #94). Keyed on the row object, which is replaced when its
+  // content changes, so the next delta to the row tries again. The fallback
+  // keeps the row's id, which scrolling and jumps find rows by.
+  return (
+    <RenderBoundary
+      name="transcript-row"
+      resetKey={props.row}
+      fallback={
+        <div data-row-id={props.row.id} className="px-3 py-1 text-xs text-muted-foreground">
+          Couldn't show this step.
+        </div>
+      }
+    >
+      <TranscriptRowItem {...props} />
+    </RenderBoundary>
+  );
+});
 
 /** The facts one row reads, narrowed to it. */
 function rowFacts(

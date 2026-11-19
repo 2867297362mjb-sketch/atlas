@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 import { describe, expect, it } from "vitest";
 import { parseMarkdown } from "./markdown-render";
 
@@ -66,5 +67,29 @@ describe("mention chips in rendered markdown", () => {
 
   it("does not chip an unclosed quote mid-stream", () => {
     expect(chipLabels(parseMarkdown('@file:"My Sh'))).toEqual([]);
+  });
+});
+
+describe("angle brackets in prose", () => {
+  // Raw HTML in a reply was dropped whole, so a type parameter vanished from
+  // the sentence: "Vec<T>" rendered as "Vec" (audit #101). It is text, drawn
+  // as written; it never becomes markup.
+  it("keeps them as text", () => {
+    for (const [src, shown] of [
+      ["Change it to Vec<T> and Option<String>.", "Change it to Vec<T> and Option<String>."],
+      ["if a<b>c then", "if a<b>c then"],
+      ["<details>block</details>", "<details>block</details>"],
+    ] as const) {
+      const el = document.createElement("div");
+      el.innerHTML = parseMarkdown(src, "");
+      expect(el.textContent?.trim(), src).toBe(shown);
+    }
+  });
+
+  it("never makes markup of them", () => {
+    const el = document.createElement("div");
+    el.innerHTML = parseMarkdown('Hi <script>alert(1)</script> <img src=x onerror="alert(2)">', "");
+    expect(el.querySelector("script, img")).toBeNull();
+    expect(el.textContent).toContain("<script>alert(1)</script>");
   });
 });
