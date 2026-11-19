@@ -1742,6 +1742,19 @@ export const useChatStore = create<ChatState & ChatActions>()(
         set((s) => {
           const session = s.sessions[tabId];
           if (!session) return;
+          // One agent session, one tab. Every delta goes to the FIRST tab
+          // holding the session (`findTabByAcpSession`), so a second holder
+          // never hears from it again: its status stays wherever it was, a
+          // "running" one forever, and the sidebar, which reads any holder,
+          // said "Working" for a turn that had long finished. The tab binding
+          // now is the one the user is looking at, so the old holder lets go
+          // and becomes a new chat. The agent session itself stays open: it is
+          // this tab's now.
+          for (const [otherId, other] of Object.entries(s.sessions)) {
+            if (otherId !== tabId && other.acpSessionId === acpSessionId) {
+              resetToNewChat(s, otherId);
+            }
+          }
           // A (re)bind points the tab at a DIFFERENT backend session — a
           // freshly spawned SessionActor whose `turn_seq` counter restarts at
           // 1 (turn_seq is not persisted; new / resumed / project-switched
