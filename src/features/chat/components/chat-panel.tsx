@@ -46,6 +46,7 @@ import { useAuthStore } from "@/features/auth/stores/auth-store";
 import { useContextDock } from "@/features/session-context/lib/use-context-dock";
 import { createChatPanelHandlers, type ChatSendHandler } from "../lib/chat-panel-handlers";
 import { useAgentBind, type BindControl } from "../hooks/use-agent-bind";
+import { useStatusHeal } from "../hooks/use-status-heal";
 import { useTabSessionMirror } from "../hooks/use-tab-session-mirror";
 import { restorableSessionOfTab } from "../lib/chat-tab-session";
 import { useLayoutStore } from "@/features/layout/stores/layout-store";
@@ -244,6 +245,7 @@ export const ChatPanel = memo(function ChatPanel({ tabId }: ChatPanelProps) {
   // pre-warm of agents the user has used — in that effect order.
   useAgentBind(tabId, session, bindControlRef);
   useTabSessionMirror(tabId, session);
+  useStatusHeal(tabId);
   useSessionBackfill(tabId, session);
   useChatPanelHotkeys(tabId, rootRef);
   useAcpPrewarm();
