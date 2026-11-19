@@ -1,6 +1,6 @@
 # ADR-0007: The native agent's model catalogue is fetched from the gateway and cached; nothing in code names a model
 
-**Status:** Accepted (2026-09-11). Revises spec decision D3 and resolved question 11 of `docs/archive/atlas-agent-codex-port-spec.md`.
+**Status:** Accepted (2026-09-11). Revises spec decision D3 and resolved question 11 of `docs/archive/atlas-agent-codex-port-spec.md (deleted; last in git at 9459428b)`.
 
 ## Context
 

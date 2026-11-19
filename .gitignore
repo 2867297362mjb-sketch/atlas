@@ -61,8 +61,6 @@ skills-lock.json
 # The map of docs/ itself.
 !docs/README.md
 !docs/adr/*.md
-!docs/archive/*.md
-!docs/archive/radix-to-base-ui/*.md
 !docs/research/*.md
 !docs/qa/*.md
 !docs/reference/*.md

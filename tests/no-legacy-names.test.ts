@@ -14,7 +14,7 @@ import { expectFloor } from "./support/floor";
  * - **The experimental SDK the native agent was once named after.** Nothing
  *   legitimate spells it any more. Banned everywhere, in any case, except the
  *   one migration that deletes rows recorded under it and the historical
- *   record (ADRs, archived docs, the rename spec).
+ *   record (the ADRs, the rename record in git history).
  *
  * - **The upstream product the engine was forked from.** Its name is also
  *   the name of a *different* product Atlas runs as a third-party ACP agent
@@ -58,7 +58,7 @@ const ENGINE_TERRITORY = [
   /^clippy\.toml$/,
   /^scripts\/(?!one-off\/)/,
   /^tests\/(?!no-legacy-names\.test\.ts$|vendor-licensing\.test\.ts$)/,
-  /^docs\/(?!adr\/|archive\/)/,
+  /^docs\/(?!adr\/)/,
 ];
 
 /** Files the retired SDK name may still appear in, each with its reason. */
@@ -68,7 +68,6 @@ const RETIRED_SDK_RESIDUE: [pattern: RegExp, reason: string][] = [
     "the V3 migration deletes the rows recorded under the retired id",
   ],
   [/^docs\/adr\//, "decision records are history"],
-  [/^docs\/archive\//, "archived specs and research predate the rename"],
   [/^tests\/no-legacy-names\.test\.ts$/, "this file"],
   [
     /^scripts\/one-off\/rename-engine\.py$/,
@@ -100,7 +99,6 @@ const UPSTREAM_RESIDUE: [pattern: RegExp, reason: string][] = [
     "the one-off sweep script; delete it once the rename has landed",
   ],
   [/^docs\/adr\//, "decision records are history"],
-  [/^docs\/archive\//, "archived specs and research predate the rename"],
 ];
 
 /** Lines that legitimately spell the upstream name wherever they appear. */

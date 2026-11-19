@@ -5,7 +5,7 @@ written so the other team can act on it without reading the desktop code: who it
 from and to, the date, the priority, then the problem and the change wanted.
 
 A request lives here while the desktop code or an ADR cites it, which is why this folder
-is committed. It moves to `docs/archive/` once the other team has shipped the change
+is committed. It is deleted once the other team has shipped the change
 and the desktop no longer waits on it.
 
 - `gateway-catalogue-metadata.md` - per-model metadata (context window and more) on `GET /v1/catalogue` (ADR-0007).
