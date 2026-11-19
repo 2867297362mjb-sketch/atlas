@@ -1182,6 +1182,23 @@ impl AgentHost {
         })
     }
 
+    /// Whether restarting `plugin_id` now would cost an open chat its
+    /// conversation: a session is open on it, and the agent can neither
+    /// replay one (`session/load`) nor continue one (`session/resume`). Such
+    /// a restart left the chat on screen with an agent that remembered none
+    /// of it, under a banner saying the conversation was safe (audit #70).
+    pub fn restart_would_lose_chats(&self, plugin_id: &str) -> bool {
+        let Ok(agent) = self.installed_agent(plugin_id) else {
+            return false;
+        };
+        let Some(connection) = self.manager.connected(&agent) else {
+            return false;
+        };
+        !self.sessions.sessions_of(&agent).is_empty()
+            && !connection.supports_load_session()
+            && !connection.supports_resume_session()
+    }
+
     /// Restart `plugin_id` so its next connect runs the version the registry
     /// now lists. The caller has waited for [`Self::agent_turn_running`] to
     /// clear — this never interrupts a reply.

@@ -480,6 +480,35 @@ async fn a_late_second_stop_leaves_the_agent_that_replaced_the_first_alone() {
     s.done();
 }
 
+/// An update restart waits while it would cost an open chat its
+/// conversation: a session is open, and the agent can neither reload nor
+/// resume one (audit #70). One that can reload is restarted as before.
+#[tokio::test]
+async fn an_update_waits_for_chats_an_agent_could_not_reopen() {
+    for can_reload in [false, true] {
+        let script = if can_reload {
+            script().supports_load()
+        } else {
+            script()
+        };
+        let (host, dir, _deltas, _ended, _watchdog, _fake) = observed_host(script);
+        let agent_id = host.spawn(ATLAS_AGENT_ID).await.expect("spawn").agent_id;
+        assert!(
+            !host.restart_would_lose_chats(ATLAS_AGENT_ID),
+            "no chat yet"
+        );
+        host.new_session(agent_id, dir.clone(), Vec::new())
+            .await
+            .expect("a session opens");
+        assert_eq!(
+            host.restart_would_lose_chats(ATLAS_AGENT_ID),
+            !can_reload,
+            "can_reload={can_reload}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 #[tokio::test]
 async fn an_update_restart_tells_the_chats_and_releases_the_process() {
     let s = open().await;

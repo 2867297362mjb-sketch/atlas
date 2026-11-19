@@ -3351,7 +3351,10 @@ impl PendingUpdates {
                 let version = this.version_of(&plugin_id);
                 emit_agent_update(&app, &plugin_id, &version, AgentUpdatePhase::Waiting);
             }
-            while host.agent_turn_running(&plugin_id) {
+            // Also wait out the chats a restart would cost their conversation
+            // (an agent that can neither reload nor resume a session): the
+            // update lands once they are closed, or at the next launch.
+            while host.agent_turn_running(&plugin_id) || host.restart_would_lose_chats(&plugin_id) {
                 tokio::time::sleep(Self::IDLE_POLL).await;
             }
             let Some(version) = this

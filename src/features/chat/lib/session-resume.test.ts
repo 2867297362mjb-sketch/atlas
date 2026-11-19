@@ -470,6 +470,49 @@ describe("rebind after the agent disconnects", () => {
     expect(session().acpSessionId).toBe(SESSION);
   });
 
+  it("an agent that can only resume: reopened through its thread, not started over", async () => {
+    // The restart called `session/load` and nothing else, and on any failure
+    // quietly opened a NEW session: the old transcript stayed on screen while
+    // the agent remembered none of it (audit #4). Through the thread the
+    // backend picks `session/load` or `session/resume`, whichever the agent
+    // advertised, as opening a history row does.
+    disconnectedTab();
+    tauri.handleRaw({
+      threads_history: () => [
+        {
+          threadId: "th-1",
+          sessionId: SESSION,
+          agentId: PLUGIN,
+          title: "t",
+          folderPaths: ["/proj"],
+        },
+      ],
+      threads_resume: () => ({ key: KEY, resumedWithoutHistory: true }),
+      agents_load_session: () =>
+        Promise.reject({ message: "this agent cannot load stored sessions" }),
+      agents_snapshot: () => snapshot({ messages: [] }),
+    });
+
+    expect(await rebindDisconnectedSession(TAB)).toBe(true);
+    expect(tauri.calls("threads_resume").map((c) => c.args)).toEqual([{ threadId: "th-1" }]);
+    expect(count("agents_new_session")).toBe(0);
+    expect(session().acpSessionId).toBe(SESSION);
+    expect(session().messages.map((m) => m.content)).toEqual(["hi", "hello"]);
+  });
+
+  it("a session the agent cannot reopen: the chat says it starts over", async () => {
+    disconnectedTab();
+    tauri.handleRaw({
+      threads_history: () => [],
+      agents_load_session: () => Promise.reject({ message: "no such session" }),
+    });
+
+    expect(await rebindDisconnectedSession(TAB)).toBe(true);
+    expect(session().acpSessionId).toBe("sess-fresh");
+    const last = session().messages[session().messages.length - 1]!;
+    expect(last.content).toMatch(/could not reopen this conversation/);
+  });
+
   it("keeps what is on screen when the agent resumed without replaying", async () => {
     disconnectedTab();
     tauri.handleRaw({ agents_snapshot: () => snapshot({ messages: [] }) });
@@ -500,9 +543,15 @@ describe("rebind after the agent disconnects", () => {
     await expect(rebindDisconnectedSession(TAB)).resolves.toBe(true);
     expect(session().acpSessionId).toBe("sess-fresh");
     expect(session().disconnected).toBeFalsy();
-    // Nothing was replayed, so nothing is repainted.
+    // Nothing was replayed, so nothing is repainted; what is on screen stays,
+    // with a line saying the agent no longer has it (audit #4).
     expect(count("agents_snapshot")).toBe(0);
-    expect(session().messages).toHaveLength(2);
+    expect(
+      session()
+        .messages.map((m) => m.content)
+        .slice(0, 2),
+    ).toEqual(["hi", "hello"]);
+    expect(session().messages).toHaveLength(3);
   });
 
   it("starts a fresh session for a tab that died before it ever bound", async () => {
