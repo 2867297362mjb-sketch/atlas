@@ -451,6 +451,13 @@ pub fn handle_read_text_file(
     });
 }
 
+/// The most a single `fs/read_text_file` hands back: a whole-file read of
+/// anything bigger is refused with a pointer to `line`/`limit`, and a window
+/// stops here. The whole answer is one JSON-RPC message, copied several times
+/// on its way (serialised, logged by the debug tap, parsed by the agent), so a
+/// multi-gigabyte log asked for whole cost Atlas several times its size.
+const MAX_READ_BYTES: u64 = 32 * 1024 * 1024;
+
 /// `line` is 1-based and `limit` counts lines, matching the ACP field docs.
 fn read_text_file(
     path: &Path,
@@ -459,7 +466,26 @@ fn read_text_file(
     roots: &[PathBuf],
 ) -> anyhow::Result<String> {
     let path = resolve_within_roots(path, roots)?;
+    // What the path is, before it is opened: opening a FIFO blocks until a
+    // writer appears, which parked a blocking-pool thread for good (cancelling
+    // the request drops the future, not the read), and a device never ends.
+    // Only a regular file is a text file to read (#90).
+    let meta = std::fs::metadata(&path)?;
+    if meta.is_dir() {
+        return Err(std::io::Error::from(std::io::ErrorKind::IsADirectory).into());
+    }
+    if !meta.is_file() {
+        anyhow::bail!("{} is not a regular file", path.display());
+    }
     if line.is_none() && limit.is_none() {
+        if meta.len() > MAX_READ_BYTES {
+            anyhow::bail!(
+                "{} is {} MB, more than the {} MB one read returns; read it in parts with `line` and `limit`",
+                path.display(),
+                meta.len() / (1024 * 1024),
+                MAX_READ_BYTES / (1024 * 1024),
+            );
+        }
         return Ok(std::fs::read_to_string(&path)?);
     }
 
@@ -471,22 +497,38 @@ fn read_text_file(
     let skip = line.unwrap_or(1).saturating_sub(1) as usize;
     let take = limit.map(|limit| limit as usize).unwrap_or(usize::MAX);
 
-    let file = std::fs::File::open(&path)?;
-    // `read_to_string` used to be what rejected a directory. Opening one
-    // succeeds on unix and only the *read* fails — which a `limit: 0` window
-    // never performs, so without this an unreadable path would answer with a
-    // confident empty string instead of an error.
-    if file.metadata()?.is_dir() {
-        return Err(std::io::Error::from(std::io::ErrorKind::IsADirectory).into());
-    }
+    // The lines' own bytes, endings included. Splitting into lines and joining
+    // them with "\n" turned CRLF into LF and dropped the last newline, so a
+    // window and a whole read of the same lines disagreed, and an edit built
+    // from one failed to match the other (#32).
+    let mut reader = std::io::BufReader::new(std::fs::File::open(&path)?);
     let mut selected = Vec::new();
-    for line in std::io::BufRead::lines(std::io::BufReader::new(file))
-        .skip(skip)
-        .take(take)
-    {
-        selected.push(line?);
+    let mut line_bytes = Vec::new();
+    let (mut seen, mut taken) = (0usize, 0usize);
+    while taken < take {
+        line_bytes.clear();
+        if std::io::BufRead::read_until(&mut reader, b'\n', &mut line_bytes)? == 0 {
+            break;
+        }
+        if seen >= skip {
+            if (selected.len() + line_bytes.len()) as u64 > MAX_READ_BYTES {
+                anyhow::bail!(
+                    "the lines asked for are more than the {} MB one read returns; ask for fewer",
+                    MAX_READ_BYTES / (1024 * 1024),
+                );
+            }
+            selected.extend_from_slice(&line_bytes);
+            taken += 1;
+        }
+        seen += 1;
     }
-    Ok(selected.join("\n"))
+    String::from_utf8(selected).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "stream did not contain valid UTF-8",
+        )
+        .into()
+    })
 }
 
 /// Reject a path outside every root in `roots`, before it ever reaches
@@ -730,7 +772,7 @@ mod fs_bound_tests {
 
         let out = read_text_file(&path, Some(1), Some(1), std::slice::from_ref(&root))
             .expect("a windowed read must not decode past its window");
-        assert_eq!(out, "the line that was asked for");
+        assert_eq!(out, "the line that was asked for\n");
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -751,21 +793,75 @@ mod fs_bound_tests {
         );
         assert_eq!(
             read_text_file(&path, Some(2), Some(2), roots).expect("window"),
-            "two\nthree"
+            "two\nthree\n"
         );
         assert_eq!(
             read_text_file(&path, Some(1), None, roots).expect("from the top"),
-            "one\ntwo\nthree\nfour\nfive"
+            "one\ntwo\nthree\nfour\nfive\n"
         );
         assert_eq!(
             read_text_file(&path, None, Some(1), roots).expect("first line only"),
-            "one"
+            "one\n"
         );
         assert_eq!(
             read_text_file(&path, Some(99), Some(3), roots).expect("past the end"),
             "",
             "a window past the end is empty, not an error"
         );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A window is the lines' own bytes: a CRLF file read in parts reads the
+    /// same as read whole, so an edit built from one matches the other (#32).
+    #[test]
+    fn a_window_keeps_the_lines_own_endings() {
+        let root = test_root();
+        let path = root.join("crlf.txt");
+        std::fs::write(&path, "one\r\ntwo\r\nthree").expect("write fixture");
+        let roots = std::slice::from_ref(&root);
+
+        assert_eq!(
+            read_text_file(&path, Some(1), Some(2), roots).expect("window"),
+            "one\r\ntwo\r\n"
+        );
+        assert_eq!(
+            read_text_file(&path, Some(3), Some(1), roots).expect("last, unterminated"),
+            "three"
+        );
+        let whole = read_text_file(&path, None, None, roots).expect("whole");
+        let parts = read_text_file(&path, Some(1), None, roots).expect("from the top");
+        assert_eq!(whole, parts);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Only a regular file is read, and a whole read has a ceiling (#90). A
+    /// FIFO is the sharp case: opening one blocks until a writer appears, so
+    /// it must be refused before anything opens it — this test would hang,
+    /// not fail, if it were not.
+    #[cfg(unix)]
+    #[test]
+    fn a_read_is_of_a_regular_file_of_bounded_size() {
+        let root = test_root();
+        let roots = std::slice::from_ref(&root);
+        let fifo = root.join("pipe");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .expect("run mkfifo");
+        assert!(made.success(), "mkfifo failed");
+        for (line, limit) in [(None, None), (Some(1), Some(1))] {
+            let err = read_text_file(&fifo, line, limit, roots).expect_err("a FIFO is not read");
+            assert!(err.to_string().contains("not a regular file"), "{err}");
+        }
+
+        let big = root.join("big.log");
+        let file = std::fs::File::create(&big).expect("create");
+        // Sparse: as long as the ceiling without writing it.
+        file.set_len(MAX_READ_BYTES + 1).expect("grow");
+        let err = read_text_file(&big, None, None, roots).expect_err("too big to read whole");
+        assert!(err.to_string().contains("`line` and `limit`"), "{err}");
 
         let _ = std::fs::remove_dir_all(&root);
     }
