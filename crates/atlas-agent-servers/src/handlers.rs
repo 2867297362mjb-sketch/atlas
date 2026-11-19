@@ -821,6 +821,45 @@ mod fs_bound_tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// #29's decision table: a command runs in a directory that exists inside
+    /// the session's folders — the session's own when none is named — or the
+    /// agent is told why not. `$HOME` is never the answer.
+    #[test]
+    fn a_terminal_cwd_is_an_existing_directory_inside_the_roots() {
+        let root = test_root();
+        let canon = root.canonicalize().expect("canonicalize the root");
+        let sub = root.join("sub");
+        std::fs::create_dir_all(&sub).expect("create a subdirectory");
+        let file = root.join("file.txt");
+        std::fs::write(&file, "not a directory\n").expect("write fixture");
+        let outside = test_root();
+        let roots = std::slice::from_ref(&root);
+        let invalid = |err: acp::Error| err.code == acp::ErrorCode::InvalidParams;
+
+        assert_eq!(
+            terminal_cwd(None, Some(&root), roots).expect("the session's folder"),
+            canon
+        );
+        assert_eq!(
+            terminal_cwd(Some(&sub), Some(&root), roots).expect("a folder inside it"),
+            canon.join("sub")
+        );
+        assert!(invalid(
+            terminal_cwd(Some(Path::new("sub")), Some(&root), roots).expect_err("relative")
+        ));
+        assert!(invalid(
+            terminal_cwd(Some(&root.join("missing")), Some(&root), roots).expect_err("missing")
+        ));
+        assert!(invalid(
+            terminal_cwd(Some(&file), Some(&root), roots).expect_err("a file")
+        ));
+        assert!(terminal_cwd(Some(&outside), Some(&root), roots).is_err());
+        assert!(terminal_cwd(None, None, roots).is_err());
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
     /// The containment check has to run before the file is opened, not after.
     #[test]
     fn a_read_outside_the_roots_is_refused() {
@@ -992,6 +1031,48 @@ fn env_is_denied(name: &str) -> bool {
     name.starts_with("DYLD_") || name.starts_with("LD_")
 }
 
+/// Where a `terminal/create` runs: the directory the agent named, or the
+/// session's own folder when it named none (#29).
+///
+/// Never `$HOME`, which is where portable-pty starts a command it is given no
+/// directory for, or a directory that does not exist — so leaving `cwd` out,
+/// or naming a folder that is not there, ran the command in the user's home,
+/// outside everything the session was granted. A relative path is refused
+/// too: ACP says `cwd` "must be an absolute path", and one that is not would
+/// resolve against Atlas's own working directory, which means nothing to the
+/// agent. Those are the agent's mistakes, so they are answered as invalid
+/// params.
+///
+/// Returns the directory in the resolved form [`resolve_within_roots`]
+/// compared, so the command starts in the directory that was checked rather
+/// than wherever a symlink points by the time it spawns.
+fn terminal_cwd(
+    requested: Option<&Path>,
+    session_cwd: Option<&Path>,
+    roots: &[PathBuf],
+) -> Result<PathBuf, acp::Error> {
+    let dir = match (requested, session_cwd) {
+        (Some(dir), _) if !dir.is_absolute() => {
+            return Err(acp::Error::invalid_params().data(format!(
+                "terminal cwd must be an absolute path, got {}",
+                dir.display()
+            )))
+        }
+        (Some(dir), _) | (None, Some(dir)) => dir,
+        (None, None) => {
+            return Err(acp::Error::internal_error()
+                .data("no terminal cwd given, and this session has no folder to run in"))
+        }
+    };
+    let resolved = resolve_within_roots(dir, roots)
+        .map_err(|err| acp::Error::internal_error().data(format!("terminal cwd refused: {err}")))?;
+    if !resolved.is_dir() {
+        return Err(acp::Error::invalid_params()
+            .data(format!("terminal cwd {} is not a directory", dir.display())));
+    }
+    Ok(resolved)
+}
+
 pub fn handle_create_terminal(
     args: acp::CreateTerminalRequest,
     responder: Responder<acp::CreateTerminalResponse>,
@@ -1015,7 +1096,6 @@ pub fn handle_create_terminal(
         .filter(|env| !env_is_denied(&env.name))
         .map(|env| (env.name, env.value))
         .collect();
-    let cwd: Option<PathBuf> = args.cwd.clone();
     let byte_limit = args.output_byte_limit.unwrap_or(DEFAULT_OUTPUT_BYTE_LIMIT);
 
     // The cwd is held to the same rule as fs reads/writes: inside a granted
@@ -1023,15 +1103,14 @@ pub fn handle_create_terminal(
     // a legal request. Writable roots, not readable ones: a command can
     // write wherever it runs, so a read-only attached project is no place to
     // start one.
-    let roots = lock(&thread).writable_roots();
-    if let Some(dir) = cwd.as_deref() {
-        if let Err(err) = resolve_within_roots(dir, &roots) {
-            return respond_err(
-                responder,
-                acp::Error::internal_error().data(format!("terminal cwd refused: {err}")),
-            );
-        }
-    }
+    let (roots, session_cwd) = {
+        let thread = lock(&thread);
+        (thread.writable_roots(), thread.work_dirs().first().cloned())
+    };
+    let cwd = match terminal_cwd(args.cwd.as_deref(), session_cwd.as_deref(), &roots) {
+        Ok(cwd) => cwd,
+        Err(err) => return respond_err(responder, err),
+    };
 
     // The gate. `terminal/create` used to spawn with agent-chosen argv/env/
     // cwd and no question asked — which made the fs-handler path bind above
@@ -1041,7 +1120,7 @@ pub fn handle_create_terminal(
     let tool_call_id = acp::ToolCallId::new(format!("terminal-{}", uuid::Uuid::new_v4()));
     let mut fields = acp::ToolCallUpdateFields::default();
     fields.kind = Some(acp::ToolKind::Execute);
-    fields.title = Some(if let Some(dir) = cwd.as_deref() {
+    fields.title = Some(if let Some(dir) = args.cwd.as_deref() {
         format!("Run `{label}` in {}", dir.display())
     } else {
         format!("Run `{label}`")
@@ -1101,7 +1180,7 @@ pub fn handle_create_terminal(
 
         // Register-before-respond still holds: the agent cannot name this
         // terminal until the response below hands it the id.
-        let spawned = CommandTerminal::spawn(&command, &cmd_args, &env, cwd.as_deref(), byte_limit);
+        let spawned = CommandTerminal::spawn(&command, &cmd_args, &env, Some(&cwd), byte_limit);
         let terminal = match spawned {
             Ok(terminal) => Arc::new(terminal),
             Err(err) => {
@@ -1117,7 +1196,7 @@ pub fn handle_create_terminal(
         lock(&thread).on_terminal_provider_event(TerminalProviderEvent::Created {
             terminal_id: terminal_id.clone(),
             label,
-            cwd,
+            cwd: Some(cwd),
             output_byte_limit,
             terminal: Some(terminal.clone()),
         });
