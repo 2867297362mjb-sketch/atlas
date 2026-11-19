@@ -2476,6 +2476,22 @@ function applyDeltaToDraft(
       session.disconnected = true;
       session.stopping = undefined;
       session.retryStatus = undefined;
+      // A process that EXITED had its turn failed first, but one Atlas killed
+      // (another tab's Stop pressed twice, Restart, a start that never
+      // finished) sends no terminal before this notice: its connection, and
+      // with it the turn, is simply gone. End the turn here, or the tab stays
+      // "Working" with a Stop button for a process that no longer exists
+      // (audit #74).
+      if (isBusyAgentStatus(session.status)) {
+        for (const msg of session.messages) {
+          for (const tc of msg.toolCalls) {
+            if (tc.status === "pending" || tc.status === "running") tc.status = "failed";
+          }
+        }
+        session.status = "error";
+        session.inflightToolIds = undefined;
+        delete s.pendingPermissions[env.session_id];
+      }
       recordInterruption(session, "disconnected");
       return;
     }

@@ -10,6 +10,7 @@
 // call this correctly, which `hooks/send-wiring.test.tsx` pins.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
 
 vi.mock("@tauri-apps/api/core", () => import("@/test/tauri-core"));
 vi.mock("@tauri-apps/api/event", () => import("@/test/tauri-event"));
@@ -339,9 +340,23 @@ describe("sends while a turn runs", () => {
     send.stop(TAB);
     send.stop(TAB);
     expect(fake.calls("cancel")).toHaveLength(1);
-    expect(fake.calls("kill")).toEqual([[KEY.agent_id]]);
+    expect(fake.calls("kill")).toEqual([[KEY.agent_id, KEY.session_id]]);
     expect(session().stopping).toBeUndefined();
     expect(session().disconnected).toBe(true);
+  });
+
+  it("a second Stop says when other chats on the agent stopped with it", async () => {
+    const info = vi.spyOn(toast, "info").mockImplementation(() => "");
+    useChatStore.setState((s) => {
+      s.sessions["other-tab"] = {
+        ...s.sessions[TAB]!,
+        acpSessionId: "other-session",
+      };
+    });
+    send.stop(TAB);
+    send.stop(TAB);
+    expect(info).toHaveBeenCalledTimes(1);
+    expect(info.mock.calls[0]![0]).toMatch(/1 other chat using it stopped too/);
   });
 
   it("Stop clears a permission that was waiting on the turn", () => {

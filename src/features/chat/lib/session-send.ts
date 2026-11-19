@@ -39,6 +39,7 @@
  * `createSessionSend` returns, for as long as that instance does: the app has
  * one (`sessionSend`), a test makes its own.
  */
+import { toast } from "sonner";
 import { logEvent } from "@/features/log/lib/log";
 import { noteSessionSent } from "@/features/tips/lib/session-sent";
 import { pluginIdForAgent, type ChatSession, type PendingSend } from "@/types/agent";
@@ -511,7 +512,11 @@ export function createSessionSend(deps: SessionSendDeps): SessionSend {
         actions.noteAgentKilled(tabId);
         clearQueued(tabId);
         actions.clearPermissionsForSession(s.acpSessionId);
-        deps.agents.kill(s.acpAgentId).catch(() => {});
+        deps.agents.kill(s.acpAgentId, s.acpSessionId).catch(() => {});
+        // One process serves every chat on the agent, and they all stop with
+        // it. Say so: those chats show a Restart banner the user did not
+        // cause from there.
+        noteOthersStopped(sessions, tabId, s.acpAgentId);
         return;
       case "cancel":
         if (!s.acpAgentId || !s.acpSessionId) return;
@@ -661,3 +666,18 @@ export const sessionSend = createSessionSend({
     composeWirePrompt(acpSessionId, content, mentions),
   queuedPrompt: (text) => queuedWirePrompt(text),
 });
+
+/** Tell the user how many other chats a kill of `agentId` stopped. */
+function noteOthersStopped(
+  sessions: Record<string, ChatSession>,
+  tabId: string,
+  agentId: string,
+): void {
+  const others = Object.entries(sessions).filter(
+    ([id, other]) => id !== tabId && other.acpAgentId === agentId && !!other.acpSessionId,
+  ).length;
+  if (others === 0) return;
+  toast.info(
+    `Stopped the agent. ${others} other chat${others === 1 ? "" : "s"} using it stopped too; their next message restarts it.`,
+  );
+}

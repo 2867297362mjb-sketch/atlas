@@ -70,3 +70,67 @@ describe("force-stopping a wedged agent", () => {
     expect(() => useChatStore.getState().actions.noteAgentKilled("no-such-tab")).not.toThrow();
   });
 });
+
+describe("another tab's agent is killed under it", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useChatStore.setState({ sessions: {}, activeSessionId: null, pendingPermissions: {} });
+  });
+
+  it("a turn running in this tab ends: the tab is not left Working", () => {
+    // One process serves every tab on an agent. Another tab's Stop (twice),
+    // Restart, or a start that never finished kills it, and Rust now tells
+    // every session on it with `agent_disconnected` (audit #74). A kill sends
+    // no turn terminal first, so the notice itself must end the turn here.
+    const session = boundSession();
+    const { actions } = useChatStore.getState();
+    actions.updateSessionStatus(TAB, "running");
+    actions.applyAgentDelta({
+      kind: "tool_call_upserted",
+      agent_id: "agent-1",
+      session_id: ACP_SESSION,
+      seq: 0,
+      message_id: "m-1",
+      tool_call: {
+        id: "t-1",
+        tool_name: "Bash",
+        title: null,
+        kind: "execute",
+        status: "running",
+        arguments: {},
+        result: null,
+        locations: [],
+      },
+    } as never);
+
+    actions.applyAgentDelta({
+      kind: "agent_disconnected",
+      agent_id: "agent-1",
+      session_id: ACP_SESSION,
+      seq: 0,
+      reason: "the agent was stopped; the next message restarts it",
+    } as never);
+
+    expect(session().disconnected).toBe(true);
+    expect(isBusyAgentStatus(session().status)).toBe(false);
+    expect(session().inflightToolIds).toBeUndefined();
+    const tool = session()
+      .messages.flatMap((m) => m.toolCalls)
+      .find((t) => t.id === "t-1");
+    expect(tool?.status).not.toBe("running");
+  });
+
+  it("an idle tab only learns it must restart: its status is left alone", () => {
+    const session = boundSession();
+    const { actions } = useChatStore.getState();
+    actions.applyAgentDelta({
+      kind: "agent_disconnected",
+      agent_id: "agent-1",
+      session_id: ACP_SESSION,
+      seq: 0,
+      reason: "the agent was stopped; the next message restarts it",
+    } as never);
+    expect(session().disconnected).toBe(true);
+    expect(session().status).toBe("idle");
+  });
+});

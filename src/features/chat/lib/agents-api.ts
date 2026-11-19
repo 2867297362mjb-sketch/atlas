@@ -100,7 +100,11 @@ export const agents = {
   refreshCatalog: (force = true) => invoke<AgentCatalog>("agents_catalog_refresh", { force }),
   listRunning: () => invoke<AgentInfo[]>("agents_list_running"),
   spawn: (pluginId: string) => invoke<AgentInfo>("agents_spawn", { pluginId }),
-  kill: (agentId: AgentId) => invoke<void>("agents_kill", { agentId }),
+  /** Kill an agent's process. With `sessionId` (a Stop pressed on that
+   *  session), only while that session is still open on it: a late kill
+   *  cannot take down the process that replaced the one it meant. */
+  kill: (agentId: AgentId, sessionId?: AcpSessionId) =>
+    invoke<void>("agents_kill", { agentId, sessionId }),
   /** Kill by PLUGIN id — the way out of a connect that never finished. A
    *  session-less bind (spawn / `session/new` still in flight) has no
    *  `agent_id` to hand `kill`, so this drops whatever connection the manager

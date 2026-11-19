@@ -1730,8 +1730,18 @@ pub async fn agents_spawn(
 }
 
 #[tauri::command]
-pub fn agents_kill(agent_id: AgentId, host: State<'_, Arc<AgentHost>>) -> Result<(), String> {
-    host.kill(agent_id).map_err(|e| e.to_string())
+pub fn agents_kill(
+    agent_id: AgentId,
+    session_id: Option<String>,
+    host: State<'_, Arc<AgentHost>>,
+) -> Result<(), String> {
+    // A Stop names the session it was pressed for, so a late one cannot kill
+    // the process that replaced the one it meant (`kill_session_agent`).
+    match session_id {
+        Some(session_id) => host.kill_session_agent(agent_id, &session_id),
+        None => host.kill(agent_id),
+    }
+    .map_err(|e| e.to_string())
 }
 
 /// [`agents_kill`] by plugin id, for a tab whose connect never handed back a
