@@ -34,6 +34,7 @@ import {
   readChatTabSession,
   restorableSessionOfTab,
 } from "../lib/chat-tab-session";
+import { openNewAgentChat } from "../lib/open-agent-session";
 import { tabShowingSession } from "../lib/open-thread";
 import { sessionBind } from "../lib/session-bind";
 import { sessionSend } from "../lib/session-send";
@@ -425,6 +426,44 @@ describe("a tab saved with a conversation", () => {
 
     expect(count("threads_resume")).toBe(0);
     expect(count("agents_new_session")).toBe(1);
+  });
+
+  it("New chat while it is still loading: no skeleton left behind, and the new chat hears its agent", async () => {
+    // The load the restore started is still waiting on the agent when the
+    // user gives up on it. A cleared tab still marked loading showed the
+    // skeleton forever, and held back every delta of the session it bound
+    // next, so the new chat's replies never rendered (audit #3).
+    let answer!: (v: unknown) => void;
+    tauri.handleRaw({
+      threads_resume: () => new Promise((resolve) => (answer = resolve)),
+    });
+    savedTab(TAB);
+    mountPanel();
+    await settle();
+    expect(session().transcriptLoading).toBe(true);
+
+    act(() => void openNewAgentChat());
+    await settle();
+
+    expect(session().transcriptLoading).toBeFalsy();
+    expect(session().acpSessionId).toBe("sess-1");
+    act(() =>
+      store().actions.applyAgentDelta({
+        kind: "status",
+        agent_id: AGENT.agent_id,
+        session_id: "sess-1",
+        seq: 1,
+        status: "running",
+        turn_seq: 1,
+      } as never),
+    );
+    expect(session().status).toBe("running");
+
+    // The abandoned load answering late changes nothing.
+    answer({ key: { agent_id: AGENT.agent_id, session_id: OLD }, resumedWithoutHistory: false });
+    await settle();
+    expect(session().acpSessionId).toBe("sess-1");
+    expect(session().messages).toEqual([]);
   });
 
   it("counts as the tab showing its session, so the sidebar focuses it", () => {

@@ -47,6 +47,7 @@ import {
 import { loadCachedAcpModels, saveCachedAcpModels } from "../lib/acp-models-cache";
 import { resolveModelLabel } from "../lib/model-label";
 import { agentForNewSession } from "../lib/default-agent";
+import { invalidateLoad } from "../lib/load-tokens";
 import { loadCachedContextUsage, saveCachedContextUsage } from "../lib/context-usage-cache";
 import { saveNativeEffort } from "../lib/native-model-pref";
 import { invoke } from "@tauri-apps/api/core";
@@ -2121,9 +2122,35 @@ function resetToNewChat(s: ChatDraft, tabId: string): void {
     session.pendingSend = undefined;
     session.unrestoredModeId = undefined;
     session.bindCwd = undefined;
+    // A load the tab was waiting on belongs to the conversation being
+    // dropped, and the load superseded by this reset bails without clearing
+    // it. Left set, the fresh chat sat on the skeleton forever, and every
+    // delta of the session it bound next was held for a paint that would
+    // never come (audit #3).
+    session.transcriptLoading = false;
+    // What the dropped session's agent last said about itself, and the
+    // per-turn state of that session. Kept, a fresh chat wore the dead
+    // agent's Restart banner, and its first send respawned the agent to
+    // reload a session the new chat never had (audit #51).
+    session.disconnected = undefined;
+    session.updatedTo = undefined;
+    session.bindError = undefined;
+    session.stopping = undefined;
+    session.held = undefined;
+    session.retryStatus = undefined;
+    session.sleptMidTurn = undefined;
+    session.compacting = undefined;
+    session.pendingElicitation = undefined;
+    session.justSentMessageId = undefined;
   }
   delete s.queues[tabId];
   delete s.queueIds[tabId];
+  forgetHeld(tabId);
+  // Whatever load was on its way into the tab is the old conversation's: it
+  // must not paint or bind over the new chat. Covers a session taken by
+  // another tab (`setAcpBinding`), whose own load would otherwise take the
+  // session back when it lands (audit #47).
+  invalidateLoad(tabId);
 }
 
 function isStaleTurn(session: ChatSession, turnSeq: number | undefined): boolean {
