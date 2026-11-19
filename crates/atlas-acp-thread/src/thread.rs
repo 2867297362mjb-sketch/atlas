@@ -162,6 +162,10 @@ pub struct UserMessage {
     pub content: ContentBlock,
     pub chunks: Vec<acp::ContentBlock>,
     pub indented: bool,
+    /// How much of this (optimistic) prompt the agent has echoed back so far,
+    /// as text: an echo streamed in pieces is matched against the prompt
+    /// piece by piece, not only as one whole chunk.
+    pub echoed: String,
 }
 
 impl UserMessage {
@@ -1491,6 +1495,11 @@ impl AcpThread {
                 // called. Some ACP servers echo user chunks back over updates;
                 // skip an echoed chunk only when it matches the local optimistic
                 // message, or the prompt renders twice.
+                //
+                // The prompt is optimistic for every agent, not only one that
+                // takes client message ids (`push_user_content_block`), and an
+                // echo may come in pieces: each piece is taken while the echo
+                // so far is still the start of the prompt's text.
                 let already_in_user_message = self
                     .entries
                     .last_mut()
@@ -1499,16 +1508,38 @@ impl AcpThread {
                         _ => None,
                     })
                     .is_some_and(|message| {
-                        let already_in_user_message = message.is_optimistic
-                            && message.chunks.contains(&content)
-                            && can_merge_message_chunks(
+                        if !message.is_optimistic
+                            || !can_merge_message_chunks(
                                 message.protocol_id.as_ref(),
                                 message_id.as_ref(),
-                            );
-                        if already_in_user_message && message.protocol_id.is_none() {
+                            )
+                        {
+                            return false;
+                        }
+                        let echoed = if message.chunks.contains(&content) {
+                            true
+                        } else if let acp::ContentBlock::Text(piece) = &content {
+                            let so_far = format!("{}{}", message.echoed, piece.text);
+                            let typed: String = message
+                                .chunks
+                                .iter()
+                                .filter_map(|chunk| match chunk {
+                                    acp::ContentBlock::Text(text) => Some(text.text.as_str()),
+                                    _ => None,
+                                })
+                                .collect();
+                            let continues = !piece.text.is_empty() && typed.starts_with(&so_far);
+                            if continues {
+                                message.echoed = so_far;
+                            }
+                            continues
+                        } else {
+                            false
+                        };
+                        if echoed && message.protocol_id.is_none() {
                             message.protocol_id = message_id.clone();
                         }
-                        already_in_user_message
+                        echoed
                     });
                 if !already_in_user_message {
                     self.push_user_content_block_from_agent(message_id, content);
@@ -1608,8 +1639,34 @@ impl AcpThread {
     ) {
         // The user speaking now ends any replay: this message is timed.
         self.replaying = false;
-        let is_optimistic = client_id.is_some();
-        self.push_user_content_block_with_protocol_id(client_id, is_optimistic, None, chunk, false)
+        // Optimistic for every agent: what the user typed is on the thread
+        // before the agent hears it, whether or not the agent takes client
+        // message ids. Keyed on the id, an agent without them (every external
+        // one) had its echo of the prompt appended to it (audit #5).
+        self.push_user_content_block_with_protocol_id(client_id, true, None, chunk, false, false)
+    }
+
+    /// A prompt the user sent, block by block, as a message of its own.
+    ///
+    /// Its first block never joins an earlier message: a turn may end without
+    /// any output, which left the last entry a user message, and the next
+    /// prompt was glued onto it ("first promptsecond prompt", audit #24).
+    pub fn push_user_prompt(
+        &mut self,
+        client_id: Option<ClientUserMessageId>,
+        blocks: impl IntoIterator<Item = acp::ContentBlock>,
+    ) {
+        self.replaying = false;
+        for (ix, block) in blocks.into_iter().enumerate() {
+            self.push_user_content_block_with_protocol_id(
+                client_id.clone(),
+                true,
+                None,
+                block,
+                false,
+                ix == 0,
+            );
+        }
     }
 
     fn push_user_content_block_from_agent(
@@ -1617,7 +1674,7 @@ impl AcpThread {
         id: Option<acp::MessageId>,
         chunk: acp::ContentBlock,
     ) {
-        self.push_user_content_block_with_protocol_id(None, false, id, chunk, false)
+        self.push_user_content_block_with_protocol_id(None, false, id, chunk, false, false)
     }
 
     fn push_user_content_block_with_protocol_id(
@@ -1627,6 +1684,7 @@ impl AcpThread {
         protocol_id: Option<acp::MessageId>,
         chunk: acp::ContentBlock,
         indented: bool,
+        starts_message: bool,
     ) {
         let entries_len = self.entries.len();
 
@@ -1637,7 +1695,8 @@ impl AcpThread {
             chunks,
             is_optimistic: existing_is_optimistic,
             indented: existing_indented,
-        })) = self.entries.last_mut()
+            ..
+        })) = self.entries.last_mut().filter(|_| !starts_message)
         {
             // The last clause is the one that is easy to lose: a protocol chunk
             // arriving for an optimistic message that has no protocol id yet is
@@ -1673,6 +1732,7 @@ impl AcpThread {
             content,
             chunks: vec![chunk],
             indented,
+            echoed: String::new(),
         }));
     }
 
