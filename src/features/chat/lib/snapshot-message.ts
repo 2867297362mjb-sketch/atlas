@@ -63,6 +63,7 @@ export function snapshotMessageToWire(m: SessionMessage) {
 export function snapshotLive(snapshot: SessionSnapshot): SnapshotLive {
   return {
     agentId: snapshot.agent_id,
+    turnSeq: snapshot.turn_seq,
     pendingPermissions: snapshot.pending_permissions,
     pendingElicitation: snapshot.pending_elicitation,
     queue: snapshot.queue,

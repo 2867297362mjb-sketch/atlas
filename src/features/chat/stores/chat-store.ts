@@ -590,6 +590,8 @@ interface ChatActions {
 /** The live state a session snapshot carries beyond its transcript. */
 export interface SnapshotLive {
   agentId?: string;
+  /** The turn the session is on in Rust (`SessionSnapshot.turn_seq`). */
+  turnSeq?: number;
   pendingPermissions?: PendingPermissionWire[];
   pendingElicitation?: PendingElicitationWire | null;
   queue?: QueuedPrompt[];
@@ -1769,15 +1771,23 @@ export const useChatStore = create<ChatState & ChatActions>()(
           // composer 'running' forever. Reset the high-water mark (and the
           // previous session's live per-turn scratch) whenever the bound
           // session identity changes.
+          //
+          // The SAME session id gets a fresh counter too: Rust gives every
+          // bind its own record, starting at 0 (`SessionRegistry::bind`), and
+          // a rebind after the agent died or was updated keeps the id. Reset
+          // only on a changed id, the restarted agent's turns (1, 2, ...) all
+          // read as stale behind the old mark, and the tab said "Working"
+          // forever (audit #2). A snapshot read after the bind sets the exact
+          // value back (`hydrateLive`).
+          session.currentTurnSeq = 0;
+          session.turnScratch = undefined;
           if (session.acpSessionId !== acpSessionId) {
-            session.currentTurnSeq = 0;
             session.livePlan = undefined;
             // Per backend session, like the plan: the snapshot for the
             // session being bound re-seeds them (`hydrateSessionSnapshot`),
             // and without this a resumed chat would show the previous
             // binding's children until its own first delta.
             session.subagents = undefined;
-            session.turnScratch = undefined;
             // Usage is per backend session; a different one starts from
             // nothing (its cached context gauge is restored by
             // `replaceMessages`, keyed on the new id).
@@ -2907,6 +2917,9 @@ function applyUserMessage(
 function hydrateLive(s: ChatDraft, tabId: string, live: SnapshotLive): void {
   const session = s.sessions[tabId];
   if (!session) return;
+  // The turn Rust is on, exactly: a live turn's deltas carry it, and a late
+  // terminal of an earlier turn is still refused as stale.
+  if (live.turnSeq !== undefined) session.currentTurnSeq = live.turnSeq;
   if (live.held !== undefined) session.held = live.held || undefined;
   if (live.queue) mirrorQueue(s, tabId, live.queue);
   const acp = session.acpSessionId;

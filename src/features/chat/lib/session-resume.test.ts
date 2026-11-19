@@ -425,6 +425,39 @@ describe("openAgentSession", () => {
 });
 
 describe("rebind after the agent disconnects", () => {
+  it("hears the restarted agent's turns, which Rust numbers from 1 again", async () => {
+    // Every bind gives the session a fresh turn counter in Rust
+    // (`SessionRegistry::bind`), and a rebind keeps the session id. The tab
+    // kept its old high-water mark, so every status and terminal of the
+    // restarted agent's turns (1, 2, ...) read as stale and was dropped: the
+    // tab said "Working" forever (audit #2).
+    disconnectedTab();
+    const delta = (status: string, turnSeq: number) =>
+      store().actions.applyAgentDelta({
+        kind: "status",
+        agent_id: AGENT.agent_id,
+        session_id: SESSION,
+        seq: 0,
+        status,
+        turn_seq: turnSeq,
+      } as never);
+    // Three turns ran before the agent died.
+    delta("running", 3);
+    delta("idle", 3);
+
+    await rebindDisconnectedSession(TAB);
+    delta("running", 1);
+    expect(session().status).toBe("running");
+    delta("idle", 1);
+    expect(session().status).toBe("idle");
+  });
+
+  it("a snapshot's turn number is adopted, so an older turn's late terminal is still refused", async () => {
+    tauri.handleRaw({ agents_snapshot: () => snapshot({ status: "running", turn_seq: 4 }) });
+    await openThread(THREAD);
+    expect(session().currentTurnSeq).toBe(4);
+  });
+
   it("resumes the same session and repaints it once, not on top of what is shown", async () => {
     disconnectedTab();
     await rebindDisconnectedSession(TAB);

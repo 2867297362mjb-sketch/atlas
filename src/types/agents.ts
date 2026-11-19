@@ -121,6 +121,9 @@ export interface SessionSnapshot {
   queue?: QueuedPrompt[];
   /** A hold keeps this session running without its tab (Universal RC). */
   held?: boolean;
+  /** The turn the session is on: what the turn-scoped deltas of its live (or
+   *  last) turn carry as `turn_seq`. Starts at 0 on every bind. */
+  turn_seq?: number;
 }
 
 /** A still-open permission prompt on a snapshot — the `permission_request`

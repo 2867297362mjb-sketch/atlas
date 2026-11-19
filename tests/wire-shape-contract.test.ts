@@ -893,7 +893,14 @@ describe("Universal RC groundwork: user prompts, the queue, holds and the snapsh
 
   it("the snapshot's live fields are on the frontend's SessionSnapshot", () => {
     const rustFields = rustStructFields(rustItem(host, "struct", "SessionSnapshot").body);
-    const live = ["as_of_seq", "pending_permissions", "pending_elicitation", "queue", "held"];
+    const live = [
+      "as_of_seq",
+      "pending_permissions",
+      "pending_elicitation",
+      "queue",
+      "held",
+      "turn_seq",
+    ];
     expect(rustFields).toEqual(expect.arrayContaining(live));
     expect(tsInterfaceProps(wireTs, "SessionSnapshot")).toEqual(expect.arrayContaining(live));
     expect(rustStructFields(rustItem(steering, "struct", "PendingPermissionWire").body)).toEqual(

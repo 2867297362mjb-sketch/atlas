@@ -226,6 +226,12 @@ pub struct SessionSnapshot {
     /// Whether a hold keeps this session running without its tab.
     #[serde(default)]
     pub held: bool,
+    /// The turn the session is on (`SessionRegistry::next_turn_seq`): what
+    /// the turn-scoped deltas of its live or last turn carry. A client that
+    /// binds adopts it, so the turns of a session bound again after its agent
+    /// restarted (numbered from 1 again) are not refused as stale.
+    #[serde(default)]
+    pub turn_seq: u64,
 }
 
 /// Frontend-friendly permission outcome. Struct variant, not tuple: serde's
@@ -1614,6 +1620,7 @@ impl AgentHost {
             .ok_or_else(HostError::unknown_session)?;
         let (plugin_id, cwd, current_model) = (info.plugin_id, info.cwd, info.current_model);
         let created_at = DateTime::<Utc>::from(info.created_at);
+        let turn_seq = info.turn_seq;
         let handle = self.thread(&key.session_id)?;
         let session_id = acp::SessionId::new(key.session_id.as_str());
         let connection = lock_thread(&handle).connection().clone();
@@ -1763,6 +1770,7 @@ impl AgentHost {
                 .map(PendingElicitationWire::from),
             queue,
             held,
+            turn_seq,
         };
         Ok(snapshot)
     }
