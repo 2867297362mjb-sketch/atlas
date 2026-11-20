@@ -14,6 +14,10 @@ import { memo, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useChatStore } from "../stores/chat-store";
 import { respondAndPopPermission, type PermissionAnswer } from "../lib/respond-permission";
+import { isChatTabShown } from "../lib/chat-tab-session";
+import { permissionDiffsOf, permissionLocationsOf } from "../lib/permission-diff";
+import { useLayoutStore } from "@/features/layout/stores/layout-store";
+import { deepActiveElement } from "@/lib/deep-active-element";
 import { Markdown } from "@/lib/markdown";
 import { extractPlanMarkdown } from "../lib/plans";
 import { exitPlanOffersBypass } from "../lib/exit-plan-modes";
@@ -26,7 +30,6 @@ import type { PendingPermission } from "@/types/acp";
 import { agentMeta } from "@/features/agents/lib/agent-meta";
 import { isRecordingShortcut } from "@/features/keybindings/lib/recording";
 import {
-  isOutwardCall,
   keyMayPick,
   outwardApprovalOf,
   outwardPreparingOf,
@@ -37,6 +40,39 @@ function isAllow(kind: string) {
 }
 function isReject(kind: string) {
   return kind === "reject_once" || kind === "reject_always";
+}
+
+/** Focus there means a key is text for that element, not an answer. */
+function takesTyping(el: Element): boolean {
+  return (
+    (el instanceof HTMLElement && el.isContentEditable) ||
+    el.tagName === "INPUT" ||
+    el.tagName === "TEXTAREA" ||
+    el.tagName === "SELECT"
+  );
+}
+
+/**
+ * Whether a key may answer the card drawn at `anchor`: an approval is only
+ * ever given by someone looking at it.
+ *
+ * Every chat tab's panel stays mounted behind the one on screen, and each
+ * card listens on the whole window, so without this Enter typed in one tab
+ * approved the command waiting in another, unseen. The tab has to be the one
+ * shown (`tabId`), nothing may cover the card (a hidden tab, a destination
+ * and Settings all mark what they hide `inert`), the window has to have focus,
+ * and focus may not be in something else that takes typing — an editor or a
+ * terminal beside the chat. The composer stacked under the card is not
+ * "something else": it keeps focus while the card is up (the card takes none),
+ * and the keys typed there are the card's.
+ */
+function keyReachesCard(tabId: string, anchor: HTMLElement | null): boolean {
+  if (!isChatTabShown(useLayoutStore.getState(), tabId)) return false;
+  if (!anchor || anchor.closest("[inert]")) return false;
+  if (!document.hasFocus()) return false;
+  const focused = deepActiveElement();
+  if (!focused || !takesTyping(focused)) return true;
+  return (anchor.closest("[data-chat-composer-stack]") ?? anchor).contains(focused);
 }
 
 // Some agents bake their own brand into permission-option labels (e.g.
@@ -88,9 +124,13 @@ function PermissionModalImpl({ tabId, onSendMessage }: PermissionModalProps) {
   );
   const agentType = useChatStore((s) => s.sessions[tabId]?.agentType ?? "atlas-agent");
   const { applyExitPlanSelection } = useChatStore((s) => s.actions);
+  const shown = useLayoutStore((s) => isChatTabShown(s, tabId));
 
   const [draft, setDraft] = useState("");
   const textRef = useRef<HTMLTextAreaElement>(null);
+  // Where the card sits in the page, for `keyReachesCard`: which composer
+  // stack is its own, and whether anything covers it.
+  const anchorRef = useRef<HTMLDivElement>(null);
 
   // Reset the free-text field whenever the active request changes.
   const reqId = current?.requestId;
@@ -98,10 +138,13 @@ function PermissionModalImpl({ tabId, onSendMessage }: PermissionModalProps) {
     setDraft("");
   }, [reqId]);
 
-  // The option Enter picks, and the one drawn as primary. None on an outward
-  // action's card: its Allow is a click (`keyMayPick`).
+  // The option Enter picks, and the one drawn as primary: an `allow_once`,
+  // never an `allow_always` — an agent may list "Always allow" first, and one
+  // Enter would then approve every later call of its kind. None on a card
+  // without one, and none on an outward action's card: its Allow is a click
+  // (`keyMayPick`).
   const primaryId = current?.options.find(
-    (o) => isAllow(o.kind) && keyMayPick(current.toolCall, o.kind),
+    (o) => o.kind === "allow_once" && keyMayPick(current.toolCall, o.kind),
   )?.optionId;
 
   // Keyboard: digits 1–9 select, Enter = primary, Esc = cancel — except while
@@ -123,6 +166,10 @@ function PermissionModalImpl({ tabId, onSendMessage }: PermissionModalProps) {
     const onKey = (e: KeyboardEvent) => {
       // A chord being recorded in Settings → Keybindings is not an answer.
       if (isRecordingShortcut()) return;
+      // Nor is a key from someone not looking at this card. Read per key, not
+      // per render: a tab switch must not leave a listener answering for the
+      // tab it hid until the effect catches up.
+      if (!keyReachesCard(tabId, anchorRef.current)) return;
       const inText = document.activeElement === textRef.current;
       if (e.key === "Escape") {
         e.preventDefault();
@@ -153,14 +200,11 @@ function PermissionModalImpl({ tabId, onSendMessage }: PermissionModalProps) {
           focused.closest('[role="dialog"], [role="alertdialog"]')
         )
           return;
-        if (primaryId) {
-          consume();
-          send({ kind: "selected", option_id: primaryId });
-        } else if (isOutwardCall(current.toolCall)) {
-          // An outward action's Allow is a click. Its Enter does nothing —
-          // it neither posts nor stops the turn under the card.
-          consume();
-        }
+        // Taken even with nothing to pick — an outward action's card, or one
+        // that offers no `allow_once`: it neither approves nor reaches the
+        // composer under the card, where Enter on an empty field is Stop.
+        consume();
+        if (primaryId) send({ kind: "selected", option_id: primaryId });
         return;
       }
       const n = parseInt(e.key, 10);
@@ -241,6 +285,10 @@ function PermissionModalImpl({ tabId, onSendMessage }: PermissionModalProps) {
   const outward = outwardApprovalOf(current.toolCall);
   const preparing = outward ? null : outwardPreparingOf(current.toolCall, current.options);
   const queueNote = queueLength > 1 ? `${queueLength - 1} more pending after this` : null;
+  // What the request changes and where, beside its input: an edit sent as a
+  // diff block alone has nothing in `rawInput` to show.
+  const diffs = permissionDiffsOf(current.toolCall);
+  const locations = permissionLocationsOf(current.toolCall, diffs);
 
   // The options as the views draw them — wire order, relabelled, one primary
   // at most. Shared by the inline card and the plan review.
@@ -268,57 +316,63 @@ function PermissionModalImpl({ tabId, onSendMessage }: PermissionModalProps) {
         current.options.find((o) => isAllow(o.kind))?.optionId ??
         null)
       : null;
-  if (planMarkdown) {
-    return (
-      <PlanReviewView
-        plan={<Markdown>{planMarkdown}</Markdown>}
-        options={optionItems}
-        bypassOptionId={bypassOptionId}
-        queueNote={queueNote}
-        onSelect={resolve}
-        onCancel={cancel}
-      />
-    );
-  }
+  // The plan review is a modal, portalled over the whole window: drawn for a
+  // tab that is not on screen, it would cover the one that is and take its
+  // focus, and the next Enter or Esc meant for that tab would answer it. It
+  // opens when its own tab is shown.
+  if (planMarkdown && !shown) return null;
 
-  // AskUserQuestion — the stepper card (one question per step, radio /
-  // checkbox options, free text, progress dots). All questions are answered,
-  // not just the first. Submit either resolves a matching ACP option (single
-  // single-select answer) or cancels the request and sends the composed
-  // answers as a user message — see the card's own header for the contract.
-  // Esc still backs out via this modal's keyboard handler.
-  if (questions) {
-    return (
-      <ComposerDrawer>
-        <ApprovalCardView
-          key={current.requestId}
-          questions={questions}
-          queueNote={queueNote}
-          onSubmit={submitQuestionAnswers}
-        />
-      </ComposerDrawer>
-    );
-  }
-
-  // Standard case — inline card above the composer.
+  // In a `contents` box, so the anchor adds no layout of its own.
   return (
-    <PermissionCardView
-      heading={
-        preparing
-          ? { kind: "preparing", preparing }
-          : outward
-            ? { kind: "outward", approval: outward }
-            : { kind: "tool", title }
-      }
-      preview={outward || preparing ? null : previewOf(current.toolCall)}
-      options={optionItems}
-      queueNote={queueNote}
-      draft={draft}
-      onDraftChange={setDraft}
-      onSubmitDraft={submitText}
-      draftRef={textRef}
-      onSelect={(optionId) => resolve(optionId)}
-    />
+    <div ref={anchorRef} className="contents">
+      {planMarkdown ? (
+        <PlanReviewView
+          plan={<Markdown>{planMarkdown}</Markdown>}
+          options={optionItems}
+          bypassOptionId={bypassOptionId}
+          queueNote={queueNote}
+          onSelect={resolve}
+          onCancel={cancel}
+        />
+      ) : questions ? (
+        // AskUserQuestion — the stepper card (one question per step, radio /
+        // checkbox options, free text, progress dots). All questions are
+        // answered, not just the first. Submit either resolves a matching ACP
+        // option (single single-select answer) or cancels the request and sends
+        // the composed answers as a user message — see the card's own header
+        // for the contract. Esc still backs out via this modal's keyboard
+        // handler.
+        <ComposerDrawer>
+          <ApprovalCardView
+            key={current.requestId}
+            questions={questions}
+            queueNote={queueNote}
+            onSubmit={submitQuestionAnswers}
+          />
+        </ComposerDrawer>
+      ) : (
+        // Standard case — inline card above the composer.
+        <PermissionCardView
+          heading={
+            preparing
+              ? { kind: "preparing", preparing }
+              : outward
+                ? { kind: "outward", approval: outward }
+                : { kind: "tool", title }
+          }
+          preview={outward || preparing ? null : previewOf(current.toolCall)}
+          diffs={diffs}
+          locations={locations}
+          options={optionItems}
+          queueNote={queueNote}
+          draft={draft}
+          onDraftChange={setDraft}
+          onSubmitDraft={submitText}
+          draftRef={textRef}
+          onSelect={(optionId) => resolve(optionId)}
+        />
+      )}
+    </div>
   );
 }
 

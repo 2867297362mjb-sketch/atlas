@@ -57,6 +57,15 @@ pub trait ExternalAgentServer: Send + Sync {
     fn update_pending(&self) -> BoxFuture<'static, bool> {
         Box::pin(async { false })
     }
+
+    /// Whether this agent's last start ran an earlier copy than
+    /// [`Self::version`] because the update was still downloading when it
+    /// was asked for. Such an agent wants an idle restart once the download
+    /// lands; [`Self::update_pending`] cannot see it, since by then the copy
+    /// on disk is current. The default never starts behind.
+    fn running_behind(&self) -> bool {
+        false
+    }
 }
 
 /// What a connect attempt is given: the resolver for this agent, plus the

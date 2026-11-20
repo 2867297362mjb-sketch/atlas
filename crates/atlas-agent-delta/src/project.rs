@@ -71,17 +71,39 @@ pub struct RunSpan {
 }
 
 /// Group an assistant entry's chunks into runs, without touching their text.
+///
+/// A run is one message as the reader sees it: it breaks where prose turns to
+/// thought or back, and where the agent's `messageId` changes, which ACP
+/// defines as a new message starting. Grouped on the first alone, two
+/// messages read as one bubble run together, "Checking the file.Here is the
+/// fix" (audit #18). Chunks without an id join their neighbours, as the
+/// thread does (`can_merge_message_chunks`).
 pub fn run_spans(chunks: &[AssistantMessageChunk]) -> Vec<RunSpan> {
     let mut spans: Vec<RunSpan> = Vec::new();
+    let mut span_id: Option<&acp::MessageId> = None;
     for (ix, chunk) in chunks.iter().enumerate() {
         let is_thought = chunk.is_thought();
+        let id = match chunk {
+            AssistantMessageChunk::Message { id, .. }
+            | AssistantMessageChunk::Thought { id, .. } => id.as_ref(),
+        };
+        let same_message = match (span_id, id) {
+            (Some(open), Some(incoming)) => open == incoming,
+            _ => true,
+        };
         match spans.last_mut() {
-            Some(span) if span.is_thought == is_thought => span.end = ix + 1,
-            _ => spans.push(RunSpan {
-                is_thought,
-                start: ix,
-                end: ix + 1,
-            }),
+            Some(span) if span.is_thought == is_thought && same_message => {
+                span.end = ix + 1;
+                span_id = span_id.or(id);
+            }
+            _ => {
+                spans.push(RunSpan {
+                    is_thought,
+                    start: ix,
+                    end: ix + 1,
+                });
+                span_id = id;
+            }
         }
     }
     spans
@@ -266,6 +288,7 @@ pub fn tool_call(call: &ThreadToolCall, thread: &atlas_acp_thread::AcpThread) ->
 pub fn tool_call_meta(call: &ThreadToolCall) -> ToolCall {
     let title = call.label.clone();
     let kind = tool_kind_token(call.kind).to_string();
+    let (raw_output, raw_output_omitted_bytes) = wire_raw_output(call);
     ToolCall {
         id: call.id.to_string(),
         tool_name: call
@@ -289,7 +312,8 @@ pub fn tool_call_meta(call: &ThreadToolCall) -> ToolCall {
             .iter()
             .map(|location| serde_json::to_value(location).unwrap_or(serde_json::Value::Null))
             .collect(),
-        raw_output: call.raw_output.clone(),
+        raw_output,
+        raw_output_omitted_bytes,
         content_blocks: content_blocks(&call.content),
         parent_tool_call_id: call
             .parent_tool_call_id
@@ -297,6 +321,111 @@ pub fn tool_call_meta(call: &ThreadToolCall) -> ToolCall {
             .map(std::string::ToString::to_string),
         started_at_ms: Some(call.started_at.timestamp_millis()),
         ended_at_ms: call.ended_at.map(|at| at.timestamp_millis()),
+    }
+}
+
+/// A tool call reduced to what names it: id, name, title, kind, status, its
+/// parent and its times. No input, result, output or blocks, which are what
+/// grow with a call's work.
+pub fn tool_call_outline(call: &ToolCall) -> ToolCall {
+    ToolCall {
+        id: call.id.clone(),
+        tool_name: call.tool_name.clone(),
+        title: call.title.clone(),
+        kind: call.kind.clone(),
+        status: call.status,
+        arguments: serde_json::Value::Null,
+        result: None,
+        locations: Vec::new(),
+        raw_output: None,
+        raw_output_omitted_bytes: None,
+        content_blocks: Vec::new(),
+        parent_tool_call_id: call.parent_tool_call_id.clone(),
+        started_at_ms: call.started_at_ms,
+        ended_at_ms: call.ended_at_ms,
+    }
+}
+
+/// Largest `rawOutput` the wire carries for a call whose `content` already
+/// says what happened, in bytes of JSON. A few kilobytes keeps every
+/// structured status and small result an agent sends, and nothing the size of
+/// a file read, a command's output or an image.
+pub const RAW_OUTPUT_WIRE_LIMIT: usize = 8 * 1024;
+
+/// Largest `rawOutput` the wire carries for a call nothing else describes: one
+/// that failed, or whose content has no text and no structured block (codex-acp
+/// puts an MCP tool's whole result in `rawOutput` alone). Still bounded,
+/// because an image-only result (a screenshot) is exactly that shape, and its
+/// base64 is what made a long session's reopen ship ~93 MB nobody read.
+pub const RAW_OUTPUT_SOLE_LIMIT: usize = 64 * 1024;
+
+/// The `rawOutput` to put on the wire, and the size of one left off.
+///
+/// See [`ToolCall::raw_output`] for the rule. Measured, not serialized: the
+/// walk sums string lengths, so a call that streams output pays a pass over
+/// its result per chunk rather than a deep clone of it, which is what carrying
+/// the field verbatim cost.
+pub fn wire_raw_output(call: &ThreadToolCall) -> (Option<serde_json::Value>, Option<u64>) {
+    let Some(raw) = call.raw_output.as_ref() else {
+        return (None, None);
+    };
+    let size = json_len(raw);
+    let limit = if raw_output_is_sole_account(call) {
+        RAW_OUTPUT_SOLE_LIMIT
+    } else {
+        RAW_OUTPUT_WIRE_LIMIT
+    };
+    if size <= limit {
+        (Some(raw.clone()), None)
+    } else {
+        (None, Some(size as u64))
+    }
+}
+
+/// Whether `rawOutput` is the only account of this call's outcome on the wire.
+fn raw_output_is_sole_account(call: &ThreadToolCall) -> bool {
+    let failed = matches!(
+        call.status,
+        ThreadToolCallStatus::Failed
+            | ThreadToolCallStatus::Rejected
+            | ThreadToolCallStatus::Canceled
+    );
+    failed
+        || call.content.iter().all(|block| match block {
+            ToolCallContent::ContentBlock(block) => block_str(block).is_empty(),
+            ToolCallContent::Diff(_) | ToolCallContent::Terminal(_) => false,
+        })
+}
+
+/// About how many bytes `value` serializes to as JSON. Exact for strings
+/// without escapes; numbers count as their typical width. Good enough to
+/// compare against a limit and to tell a reader how much was left off.
+pub fn json_len(value: &serde_json::Value) -> usize {
+    match value {
+        serde_json::Value::Null => 4,
+        serde_json::Value::Bool(true) => 4,
+        serde_json::Value::Bool(false) => 5,
+        serde_json::Value::Number(number) => {
+            if number.is_f64() {
+                12
+            } else {
+                // Digits, plus a sign; an i64 needs at most 20.
+                number
+                    .as_u64()
+                    .map_or(20, |n| n.checked_ilog10().map_or(1, |d| d as usize + 1))
+            }
+        }
+        serde_json::Value::String(text) => text.len() + 2,
+        serde_json::Value::Array(items) => {
+            2 + items.len().saturating_sub(1) + items.iter().map(json_len).sum::<usize>()
+        }
+        serde_json::Value::Object(fields) => {
+            2 + fields.len().saturating_sub(1)
+                + fields
+                    .iter()
+                    .map(|(key, value)| key.len() + 3 + json_len(value))
+                    .sum::<usize>()
+        }
     }
 }
 
@@ -466,6 +595,15 @@ pub fn permission_options(options: &PermissionOptions) -> serde_json::Value {
 /// comment") still says which tool it is. `content` is the call's text, one
 /// string per block, when it has any: what an outward action's card shows as
 /// the recipient and the full body (ADR-0014). Neither is shortened here.
+///
+/// `contentBlocks` and `locations` are the call's structured content and the
+/// places it names, in the tool row's own shapes ([`content_blocks`],
+/// `ToolCall::locations`), each only when there is one. An agent may send a
+/// proposed edit as a `diff` block alone, with nothing in `rawInput`, and a
+/// card drawn from `rawInput` asked for approval of a change it never showed.
+/// Additive keys of a value the wire carries as opaque JSON (`tool_call` of
+/// `SessionDelta::PermissionRequest`): a client that does not read them is
+/// unchanged.
 pub fn permission_tool_call(call: &ThreadToolCall) -> serde_json::Value {
     let tool_name = call.tool_name.as_ref().map_or_else(
         || {
@@ -495,6 +633,17 @@ pub fn permission_tool_call(call: &ThreadToolCall) -> serde_json::Value {
         .collect();
     if !content.is_empty() {
         out["content"] = serde_json::json!(content);
+    }
+    let blocks = content_blocks(&call.content);
+    if !blocks.is_empty() {
+        out["contentBlocks"] = serde_json::to_value(blocks).unwrap_or(serde_json::Value::Null);
+    }
+    if !call.locations.is_empty() {
+        out["locations"] = call
+            .locations
+            .iter()
+            .map(|location| serde_json::to_value(location).unwrap_or(serde_json::Value::Null))
+            .collect();
     }
     out
 }
@@ -887,6 +1036,38 @@ mod permission_tests {
             "falls back to the title, as a row does"
         );
         assert!(wire.get("content").is_none(), "no text, no content");
+        assert!(wire.get("contentBlocks").is_none(), "no diff, no blocks");
+        assert!(wire.get("locations").is_none(), "no locations, no key");
+    }
+
+    /// #33: the card showed only `rawInput`, and an agent that sends its edit
+    /// as a `diff` block (with nothing in `rawInput`) asked for approval of a
+    /// change the card never drew. The request's own diff and where it lands
+    /// travel with it, in the tool row's shapes.
+    #[test]
+    fn a_proposed_edits_card_carries_its_diff_and_where_it_lands() {
+        let wire = permission_tool_call(&call(
+            acp::ToolCall::new("call-1", "Edit src/auth.ts")
+                .kind(acp::ToolKind::Edit)
+                .content(vec![acp::ToolCallContent::Diff(
+                    acp::Diff::new("/repo/src/auth.ts", "let a = 2;\n").old_text("let a = 1;\n"),
+                )])
+                .locations(vec![acp::ToolCallLocation::new("/repo/src/auth.ts").line(3)]),
+        ));
+        assert_eq!(
+            wire["contentBlocks"],
+            serde_json::json!([{
+                "type": "diff",
+                "path": "/repo/src/auth.ts",
+                "oldText": "let a = 1;\n",
+                "newText": "let a = 2;\n",
+            }])
+        );
+        assert_eq!(
+            wire["locations"],
+            serde_json::json!([{ "path": "/repo/src/auth.ts", "line": 3 }])
+        );
+        assert!(wire.get("content").is_none(), "a diff is not text");
     }
 
     #[test]

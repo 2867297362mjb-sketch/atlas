@@ -101,7 +101,7 @@ impl TauriDeltaSink {
     pub fn new(app: AppHandle, sleep: Arc<crate::sleep_watch::SleepWatch>) -> Self {
         let pipeline = OutboundPipeline::new()
             // Broadcast first so the UI updates before any heavier work.
-            .with(Arc::new(BroadcastMiddleware { app: app.clone() }))
+            .with(Arc::new(BroadcastMiddleware::new(app.clone())))
             .with(Arc::new(AnalyticsMiddleware { app: app.clone() }))
             .with(Arc::new(KeepAwakeMiddleware { app: app.clone() }))
             // Session capture is a stage here rather than a subscriber to a
@@ -220,16 +220,85 @@ impl DeltaSink for TauriDeltaSink {
     }
 }
 
-/// Fan every delta to the single `atlas:agents` window event channel.
+/// Fan every delta to the single `atlas:agents` window event channel, at
+/// most one event a frame.
+///
+/// Each Tauri event is a script the webview evaluates, and a streaming turn
+/// produces a delta per token and per output chunk: hundreds a second, each
+/// one main-thread work in the window, on the thread the transcript scrolls
+/// on. The window applies them a frame at a time anyway
+/// (`agent-delta-batch.ts`). So a delta goes out on its own only when the
+/// channel has been quiet for a frame; one that follows sooner waits for the
+/// frame's end and goes with the others as one array. Order is kept: every
+/// send happens under one lock, and a batch is everything pending.
 struct BroadcastMiddleware {
     app: AppHandle,
+    batch: Arc<parking_lot::Mutex<BroadcastBatch>>,
+}
+
+/// How long the channel holds deltas after one has gone out.
+const BROADCAST_FRAME: Duration = Duration::from_millis(16);
+
+#[derive(Default)]
+struct BroadcastBatch {
+    pending: Vec<SessionDeltaEnvelope>,
+    /// A flush is scheduled.
+    armed: bool,
+    /// When the last event went out.
+    last: Option<std::time::Instant>,
+}
+
+impl BroadcastMiddleware {
+    fn new(app: AppHandle) -> Self {
+        Self {
+            app,
+            batch: Arc::new(parking_lot::Mutex::new(BroadcastBatch::default())),
+        }
+    }
+
+    fn send<T: Serialize + ?Sized>(app: &AppHandle, payload: &T) {
+        if let Err(e) = app.emit("atlas:agents", payload) {
+            tracing::error!(target: "atlas_agents::emit", "failed to emit atlas:agents event: {e}");
+        }
+    }
+
+    /// Send everything pending, as one event.
+    fn flush(app: &AppHandle, batch: &parking_lot::Mutex<BroadcastBatch>) {
+        let mut state = batch.lock();
+        state.armed = false;
+        let pending = std::mem::take(&mut state.pending);
+        match pending.as_slice() {
+            [] => return,
+            [one] => Self::send(app, one),
+            many => Self::send(app, many),
+        }
+        state.last = Some(std::time::Instant::now());
+    }
 }
 
 impl OutboundMiddleware<SessionDeltaEnvelope> for BroadcastMiddleware {
     fn on_event(&self, envelope: &SessionDeltaEnvelope) {
-        if let Err(e) = self.app.emit("atlas:agents", envelope) {
-            tracing::error!(target: "atlas_agents::emit", "failed to emit atlas:agents event: {e}");
+        let mut state = self.batch.lock();
+        let quiet = state
+            .last
+            .is_none_or(|last| last.elapsed() >= BROADCAST_FRAME);
+        if !state.armed && state.pending.is_empty() && quiet {
+            Self::send(&self.app, envelope);
+            state.last = Some(std::time::Instant::now());
+            return;
         }
+        state.pending.push(envelope.clone());
+        if state.armed {
+            return;
+        }
+        state.armed = true;
+        let wait = BROADCAST_FRAME
+            .saturating_sub(state.last.map_or(Duration::ZERO, |last| last.elapsed()));
+        let (app, batch) = (self.app.clone(), self.batch.clone());
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(wait).await;
+            Self::flush(&app, &batch);
+        });
     }
 }
 
@@ -634,7 +703,11 @@ impl OutboundMiddleware<SessionDeltaEnvelope> for MemoryIngestMiddleware {
                         agent_id,
                         session_id: session_id.clone(),
                     };
-                    let Ok(snapshot) = app.state::<Arc<AgentHost>>().snapshot(&key) else {
+                    // The outline, not the snapshot: the turns need each
+                    // message's text and its calls' names, and a full snapshot
+                    // copied every call's output, every turn.
+                    let Ok(messages) = app.state::<Arc<AgentHost>>().conversation_outline(&key)
+                    else {
                         return;
                     };
                     let job = super::memory_indexer::Job::ExtractSession {
@@ -643,7 +716,7 @@ impl OutboundMiddleware<SessionDeltaEnvelope> for MemoryIngestMiddleware {
                             agent: meta.agent,
                             session_id,
                         },
-                        turns: super::memory_extract::transcript_turns(&snapshot.messages),
+                        turns: super::memory_extract::transcript_turns(&messages),
                     };
                     if let Err(e) = app.state::<Arc<MemoryRegistry>>().enqueue(job) {
                         tracing::debug!(target: "atlas::shared_memory", "turn extraction not queued: {e}");
@@ -1365,7 +1438,14 @@ pub fn install_manager(app: &AppHandle) {
                         .and_then(|entry| entry.version)
                         .map(|version| version.to_string())
                         .unwrap_or_default();
-                    emit_agent_update(&app, id.as_str(), &version, AgentUpdatePhase::Ready);
+                    // Started while this download ran, so on the copy before
+                    // it (rather than waiting minutes on the download): it
+                    // moves to the new one at its next idle moment.
+                    if running(&host, id) && host.store().running_behind(id) {
+                        updates.schedule(&app, &host, id.to_string(), version);
+                    } else {
+                        emit_agent_update(&app, id.as_str(), &version, AgentUpdatePhase::Ready);
+                    }
                 }
                 if !updated.is_empty() {
                     super::catalog::emit_catalog_changed(&app, "update");
@@ -1650,8 +1730,18 @@ pub async fn agents_spawn(
 }
 
 #[tauri::command]
-pub fn agents_kill(agent_id: AgentId, host: State<'_, Arc<AgentHost>>) -> Result<(), String> {
-    host.kill(agent_id).map_err(|e| e.to_string())
+pub fn agents_kill(
+    agent_id: AgentId,
+    session_id: Option<String>,
+    host: State<'_, Arc<AgentHost>>,
+) -> Result<(), String> {
+    // A Stop names the session it was pressed for, so a late one cannot kill
+    // the process that replaced the one it meant (`kill_session_agent`).
+    match session_id {
+        Some(session_id) => host.kill_session_agent(agent_id, &session_id),
+        None => host.kill(agent_id),
+    }
+    .map_err(|e| e.to_string())
 }
 
 /// [`agents_kill`] by plugin id, for a tab whose connect never handed back a
@@ -3261,7 +3351,10 @@ impl PendingUpdates {
                 let version = this.version_of(&plugin_id);
                 emit_agent_update(&app, &plugin_id, &version, AgentUpdatePhase::Waiting);
             }
-            while host.agent_turn_running(&plugin_id) {
+            // Also wait out the chats a restart would cost their conversation
+            // (an agent that can neither reload nor resume a session): the
+            // update lands once they are closed, or at the next launch.
+            while host.agent_turn_running(&plugin_id) || host.restart_would_lose_chats(&plugin_id) {
                 tokio::time::sleep(Self::IDLE_POLL).await;
             }
             let Some(version) = this
@@ -3281,6 +3374,19 @@ impl PendingUpdates {
             emit_agent_update(&app, &plugin_id, &version, AgentUpdatePhase::Installing);
             let id = atlas_acp_thread::AgentId::new(plugin_id.as_str());
             match host.store().prefetch_update(&id).await {
+                // A message sent during the install reconnected the agent on
+                // the copy before it rather than wait: one more idle restart
+                // moves it across. The next pass finds the install done, so
+                // this happens at most once per update.
+                Ok(true)
+                    if host
+                        .manager()
+                        .entry(&atlas_agent_manager::Agent::Custom { id: id.clone() })
+                        .is_some()
+                        && host.store().running_behind(&id) =>
+                {
+                    this.schedule(&app, &host, plugin_id.clone(), version.clone());
+                }
                 Ok(_) => emit_agent_update(&app, &plugin_id, &version, AgentUpdatePhase::Ready),
                 Err(error) => {
                     let error = format!("{error:#}");

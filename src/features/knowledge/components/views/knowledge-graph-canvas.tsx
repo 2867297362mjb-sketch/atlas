@@ -3,6 +3,7 @@ import { GraphNodeList } from "@/components/graph-node-list";
 import { Application } from "pixi.js";
 import { destroyPixiApp, registerPixiApp } from "@/lib/pixi-app";
 import { canvasResolution } from "@/lib/ui-zoom";
+import { GraphInitError } from "@/components/graph-init-error";
 import { GraphRuler, type Viewport } from "@/components/graph-ruler";
 import { graphPalette } from "@/components/graph-palette";
 import { onThemeApplied, themeBase } from "@/features/theme/theme-values";
@@ -36,6 +37,7 @@ export function KnowledgeGraphCanvas({
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState<Viewport>({ x: 0, y: 0, scale: 1 });
+  const [initError, setInitError] = useState<string | null>(null);
   const vpRef = useRef<Viewport>({ x: 0, y: 0, scale: 1 });
   const vpRafRef = useRef(false);
   // Selection state is pushed in via a ref so it doesn't force a Pixi
@@ -117,6 +119,7 @@ export function KnowledgeGraphCanvas({
           }
           return;
         }
+        setInitError(null);
         const pushViewport = (v: Viewport) => {
           vpRef.current = v;
           if (!vpRafRef.current) {
@@ -140,8 +143,11 @@ export function KnowledgeGraphCanvas({
           labelFontFamily: themeBase("font-sans") || "system-ui, sans-serif",
         });
       })
-      .catch(() => {
-        // Disposal cleanup below handles the fallout.
+      .catch((e: unknown) => {
+        // A scene torn down mid-init fails for that reason, and the cleanup
+        // below handles it. Any other failure is shown: a renderer that never
+        // started otherwise reads as a graph with nothing in it.
+        if (!disposed) setInitError(e instanceof Error ? e.message : String(e));
       });
 
     return () => {
@@ -173,7 +179,11 @@ export function KnowledgeGraphCanvas({
   return (
     <div className="relative h-full w-full">
       <div ref={hostRef} className="h-full w-full" />
-      <GraphRuler width={width} height={height} viewport={viewport} />
+      {initError ? (
+        <GraphInitError message={initError} source="Knowledge: drawing the graph" />
+      ) : (
+        <GraphRuler width={width} height={height} viewport={viewport} />
+      )}
       <GraphNodeList
         label="Pages in the graph"
         nodes={graph.nodes}

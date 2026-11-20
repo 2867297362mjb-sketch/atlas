@@ -227,7 +227,7 @@ usage events of any kind.
 
 | Event        | When                                                                            | Properties                                                                                                                                                |
 | ------------ | ------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `$exception` | A React render error, uncaught `window.onerror`, or unhandled promise rejection | The error message and stack, plus `type` (`react_error_boundary` / `uncaught_error` / `unhandled_rejection`), `source`, and a truncated `component_stack` |
+| `$exception` | A React render error, uncaught `window.onerror`, or unhandled promise rejection | The error message and stack, plus `type` (`react_error_boundary` / `react_render_boundary` / `uncaught_error` / `unhandled_rejection`), `source`, a truncated `component_stack`, and for `react_render_boundary` which part of the window failed (`boundary`: a fixed name such as `transcript-row`, never content) |
 
 A short list of known-benign, non-actionable errors is dropped before it reaches
 PostHog. Note that a JavaScript stack trace can contain bundled file names; it does not

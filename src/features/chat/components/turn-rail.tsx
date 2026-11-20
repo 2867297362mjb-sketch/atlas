@@ -57,8 +57,12 @@ export interface TurnRailProps {
   /** Height of the floating header over the top of the scroller. A prompt
    *  under it is not in view. */
   topInset: number;
-  /** The first mounted row. A change mounts rows the observer has not seen. */
-  windowStart: number;
+  /** Changes whenever the mounted rows do (`useTranscriptWindow`): a change
+   *  mounts rows the observer has not seen. */
+  windowKey: string;
+  /** The rows a swapped-out run of turns stands for, by its spacer's
+   *  `data-gap`. Its prompts are wherever the spacer is. */
+  rowsInGap?: (gapKey: string) => readonly string[];
   /** The raw prompt and reply for a turn, read when its card opens. */
   getPreview: (item: TurnRailItem) => TurnRailPreview | null;
   onSelect: (item: TurnRailItem) => void;
@@ -97,7 +101,8 @@ function TurnRailView({
   scrollRef,
   contentRef,
   topInset,
-  windowStart,
+  windowKey,
+  rowsInGap,
   getPreview,
   onSelect,
 }: TurnRailProps) {
@@ -143,21 +148,37 @@ function TurnRailView({
     for (const strip of stripMap.values()) {
       if (strip.dataset.inView !== "false") strip.dataset.inView = "false";
     }
+    // A prompt behind a gap is wherever its spacer is: above or below, never
+    // "in" (a spacer in view is about to be rows again, which report then).
+    const promptsByGap = new Map<string, number[]>();
+    const place = (index: number, placement: TurnRailPlacement) => {
+      placements[index] = placement;
+      const strip = stripMap.get(items[index].id);
+      const inView = placement === "in" ? "true" : "false";
+      if (strip && strip.dataset.inView !== inView) strip.dataset.inView = inView;
+    };
     const observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
-          const id = (entry.target as HTMLElement).dataset.rowId;
+          const target = entry.target as HTMLElement;
+          const rootTop = entry.rootBounds?.top ?? 0;
+          const gap = target.dataset.gap;
+          if (gap !== undefined) {
+            const side = entry.boundingClientRect.top < rootTop ? "above" : "below";
+            for (const index of promptsByGap.get(gap) ?? []) place(index, side);
+            continue;
+          }
+          const id = target.dataset.rowId;
           const index = id === undefined ? undefined : indexById.get(id);
           if (index === undefined) continue;
-          const rootTop = entry.rootBounds?.top ?? 0;
-          placements[index] = entry.isIntersecting
-            ? "in"
-            : entry.boundingClientRect.top < rootTop
-              ? "above"
-              : "below";
-          const strip = stripMap.get(items[index].id);
-          const inView = placements[index] === "in" ? "true" : "false";
-          if (strip && strip.dataset.inView !== inView) strip.dataset.inView = inView;
+          place(
+            index,
+            entry.isIntersecting
+              ? "in"
+              : entry.boundingClientRect.top < rootTop
+                ? "above"
+                : "below",
+          );
         }
         const next = resolveTurnRailCurrentIndex(placements);
         setCurrentIndex((current) => (current === next ? current : next));
@@ -165,11 +186,23 @@ function TurnRailView({
       { root: scroller, rootMargin: `-${topInset}px 0px 0px 0px` },
     );
     for (const child of content.children) {
-      const id = (child as HTMLElement).dataset?.rowId;
+      if (!(child instanceof HTMLElement)) continue;
+      const gap = child.dataset.gap;
+      if (gap !== undefined && rowsInGap) {
+        const prompts = rowsInGap(gap)
+          .map((id) => indexById.get(id))
+          .filter((index): index is number => index !== undefined);
+        if (prompts.length > 0) {
+          promptsByGap.set(gap, prompts);
+          observer.observe(child);
+        }
+        continue;
+      }
+      const id = child.dataset.rowId;
       if (id !== undefined && indexById.has(id)) observer.observe(child);
     }
     return () => observer.disconnect();
-  }, [items, windowStart, topInset, scrollRef, contentRef, stripMap]);
+  }, [items, windowKey, rowsInGap, topInset, scrollRef, contentRef, stripMap]);
 
   // ── Wheel ─────────────────────────────────────────────────────────────
   useEffect(() => {

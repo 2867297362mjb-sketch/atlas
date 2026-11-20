@@ -1,5 +1,5 @@
 import type { SessionMessage, SessionSnapshot } from "@/types/agents";
-import type { SnapshotLive } from "../stores/chat-store";
+import { toolLocations, type SnapshotLive } from "../stores/chat-store";
 
 /**
  * Map an atlas-agents `SessionMessage` (the rich Rust snapshot state returned by
@@ -22,6 +22,9 @@ import type { SnapshotLive } from "../stores/chat-store";
  */
 export function snapshotMessageToWire(m: SessionMessage) {
   return {
+    // Positional (`msg-{entry}`) and stable for the session, so a repaint of
+    // the same conversation keeps every unchanged row's key.
+    id: m.id,
     role: m.role === "system" ? ("system" as const) : m.role,
     content: m.content,
     timestamp: m.timestamp,
@@ -37,6 +40,10 @@ export function snapshotMessageToWire(m: SessionMessage) {
     ...(m.images?.length
       ? { attachments: m.images.map((i) => ({ mimeType: i.mime_type, dataBase64: i.data })) }
       : {}),
+    // How the message reads, and a thought's text: without them a thought
+    // reopened as an empty reply (audit #6).
+    mode: m.mode,
+    ...(m.thinking ? { thinking: m.thinking } : {}),
     toolCalls: m.tool_calls.map((tc) => ({
       id: tc.id,
       toolName: tc.tool_name,
@@ -46,6 +53,11 @@ export function snapshotMessageToWire(m: SessionMessage) {
       status: tc.status,
       ...(tc.started_at_ms !== undefined ? { startedAt: tc.started_at_ms } : {}),
       ...(tc.ended_at_ms !== undefined ? { endedAt: tc.ended_at_ms } : {}),
+      // As the live path reads them (`toChatToolCall`): the diff and terminal
+      // blocks, the paths, and the subagent launch it belongs to (audit #97).
+      contentBlocks: tc.content_blocks,
+      locations: toolLocations(tc.locations),
+      parentToolCallId: tc.parent_tool_call_id ?? undefined,
     })),
   };
 }
@@ -60,6 +72,7 @@ export function snapshotMessageToWire(m: SessionMessage) {
 export function snapshotLive(snapshot: SessionSnapshot): SnapshotLive {
   return {
     agentId: snapshot.agent_id,
+    turnSeq: snapshot.turn_seq,
     pendingPermissions: snapshot.pending_permissions,
     pendingElicitation: snapshot.pending_elicitation,
     queue: snapshot.queue,

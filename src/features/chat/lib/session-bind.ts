@@ -4,8 +4,8 @@
  * binding (which is what releases a held first message).
  *
  * The panel's hook (`hooks/use-agent-bind.ts`) is a thin caller: it attaches
- * while its tab has no session, kicks, and detaches. Everything a test needs is
- * a parameter (`SessionBindDeps`).
+ * while its tab has no session, kicks once the tab is on screen or sent to,
+ * and detaches. Everything a test needs is a parameter (`SessionBindDeps`).
  *
  * What a tab+agent pair has already been through (a failure reported, the one
  * silent retry spent, sign-in offered) outlives any one mount of the panel, so
@@ -17,7 +17,9 @@
  * EXISTING session back and do not come through here: `openThread`
  * (`open-thread.ts`), `openAgentSession` (`open-agent-session.ts`) and
  * `rebindDisconnectedSession` (`agent-rebind.ts`). They differ in what they
- * hydrate; `session-resume.test.ts` holds the table.
+ * hydrate; `session-resume.test.ts` holds the table. A tab saved with a
+ * conversation gets it back through `openThread`'s own load
+ * (`restore-tab-session.ts`), so it is not a fifth.
  */
 import { toast } from "sonner";
 import { agentMeta } from "@/features/agents/lib/agent-meta";
@@ -28,6 +30,7 @@ import type { AgentInfo } from "@/types/acp";
 import { agentTypeFromPluginId, CLAUDE_PERMISSION_MODES, pluginIdForAgent } from "@/types/agent";
 import { sessionConfiguration, useChatStore } from "../stores/chat-store";
 import { bindFailureAction, errInfo, promptSignIn } from "./agent-signin";
+import { promptAtlasSignIn } from "./atlas-sign-in-prompt";
 import { agents, ensureAgent, resetAgent } from "./agents-api";
 import { KNOBS, type SessionConfiguration } from "./session-configuration";
 import { projectPathForTab } from "./tab-project";
@@ -84,6 +87,8 @@ export interface SessionBindDeps {
     signIn: typeof promptSignIn;
     /** The same offer as a banner, for a user who is looking elsewhere. */
     signInBanner: (tabId: string, agentType: string) => void;
+    /** Offer Atlas's own sign-in (`promptAtlasSignIn`). */
+    atlasSignIn: () => void;
   };
 }
 
@@ -520,6 +525,12 @@ export function createSessionBind(deps: SessionBindDeps): SessionBind {
               });
               // The dialog is up; if the user is away it is also a banner.
               deps.report.signInBanner(tabId, at);
+            } else if (action === "atlas-sign-in") {
+              // Signed out of Atlas: the native agent cannot fetch its model
+              // list without an Atlas token. Not an error — an automatic bind
+              // (opening a tab, focus) says nothing; a send that is now stuck
+              // in the queue gets the one thing that unblocks it.
+              if (waiting) deps.report.atlasSignIn();
             } else if (action === "silent") {
               // The composer is already showing why (`AiGrantBar`, and "No
               // models" in the picker). A toast would be a third copy of a
@@ -607,5 +618,6 @@ export const sessionBind = createSessionBind({
     error: (message) => void toast.error(message),
     signIn: (agentType, opts) => promptSignIn(agentType, opts),
     signInBanner: (tabId, agentType) => notifyAgentSignInRequired(tabId, agentType),
+    atlasSignIn: () => promptAtlasSignIn(),
   },
 });

@@ -46,6 +46,11 @@ import { useAuthStore } from "@/features/auth/stores/auth-store";
 import { useContextDock } from "@/features/session-context/lib/use-context-dock";
 import { createChatPanelHandlers, type ChatSendHandler } from "../lib/chat-panel-handlers";
 import { useAgentBind, type BindControl } from "../hooks/use-agent-bind";
+import { RenderBoundary } from "@/components/render-boundary";
+import { useStatusHeal } from "../hooks/use-status-heal";
+import { useTabSessionMirror } from "../hooks/use-tab-session-mirror";
+import { restorableSessionOfTab } from "../lib/chat-tab-session";
+import { useLayoutStore } from "@/features/layout/stores/layout-store";
 import { useSessionBackfill } from "../hooks/use-session-backfill";
 import { useChatPanelHotkeys } from "../hooks/use-chat-panel-hotkeys";
 import { useAcpPrewarm } from "../hooks/use-acp-prewarm";
@@ -102,7 +107,27 @@ interface ChatPanelProps {
 // store's active-tab write and re-emits these elements), and each of those
 // walked its whole transcript's row list. Streaming re-renders still arrive
 // through this panel's own store subscription.
+/**
+ * The chat tab's panel. A render failure inside it costs this tab, not the
+ * window (`RenderBoundary`): the other tabs, the sidebar and the composer of
+ * every other chat keep working, and closing or reopening the tab redraws it.
+ */
 export const ChatPanel = memo(function ChatPanel({ tabId }: ChatPanelProps) {
+  return (
+    <RenderBoundary
+      name="chat-panel"
+      fallback={
+        <div className="flex h-full items-center justify-center p-6 text-sm text-muted-foreground">
+          This chat couldn't be shown. Its conversation is safe; reopen it from the sidebar.
+        </div>
+      }
+    >
+      <ChatPanelContent tabId={tabId} />
+    </RenderBoundary>
+  );
+});
+
+const ChatPanelContent = memo(function ChatPanelContent({ tabId }: ChatPanelProps) {
   // Subscribe to ONLY this tab's session. Streaming chunks on other tabs
   // shouldn't repaint this panel — immer preserves reference equality for
   // unchanged sub-paths, so `s.sessions[tabId]` only changes when this tab
@@ -226,14 +251,22 @@ export const ChatPanel = memo(function ChatPanel({ tabId }: ChatPanelProps) {
   // A fresh chat starts on the native agent and starts immediately: the
   // default needs no probe, so there is no window in which the tab has to sit
   // session-less waiting to find out which agent it is.
+  //
+  // A tab saved with a conversation (a restart) starts holding that
+  // conversation's id instead, and loads it when first shown.
   useEffect(() => {
-    if (!session) createSession(tabId);
+    if (session) return;
+    const saved = restorableSessionOfTab(useLayoutStore.getState(), tabId);
+    createSession(tabId, undefined, saved ?? undefined);
   }, [tabId, session, createSession]);
 
-  // Eager bind on mount (and on agent switch), the backfill for sessions
+  // The bind, once the tab is on screen or sent to (and on agent switch), the
+  // tab's saved session kept in step with it, the backfill for sessions
   // bound before this mount, the panel's chords, and the once-per-app
   // pre-warm of agents the user has used — in that effect order.
   useAgentBind(tabId, session, bindControlRef);
+  useTabSessionMirror(tabId, session);
+  useStatusHeal(tabId);
   useSessionBackfill(tabId, session);
   useChatPanelHotkeys(tabId, rootRef);
   useAcpPrewarm();
@@ -347,7 +380,15 @@ export const ChatPanel = memo(function ChatPanel({ tabId }: ChatPanelProps) {
         </>
       }
       isEmpty={session.messages.length === 0}
-      emptyStage={session.transcriptLoading ? <LoadingTranscriptState /> : <WelcomeState />}
+      emptyStage={
+        // A tab still waiting for its saved conversation is loading one, not
+        // offering a new chat.
+        session.transcriptLoading || session.pendingRestore ? (
+          <LoadingTranscriptState />
+        ) : (
+          <WelcomeState />
+        )
+      }
       transcript={
         <Suspense fallback={<LoadingTranscriptState />}>
           <Transcript

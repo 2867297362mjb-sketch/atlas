@@ -8,6 +8,40 @@ import type { SessionKey, SessionMessage, SessionSnapshot } from "@/types/agents
 type WireMessage = ReturnType<typeof snapshotMessageToWire>;
 
 /**
+ * Where a reopen's time goes, as User Timing entries (`atlas:reopen:*`, in the
+ * Web Inspector's timeline) and one console line: the agent loading the
+ * session, the snapshot crossing IPC, and the paint. Opening a long session is
+ * the cost this is for; the stages are where to look first, and each is
+ * measured where it happens rather than guessed from outside.
+ */
+function reopenTimer(sessionId: string) {
+  const id = sessionId.slice(0, 8);
+  const start = performance.now();
+  let last = start;
+  const stages: string[] = [];
+  return {
+    stage(name: string, note = "") {
+      const now = performance.now();
+      performance.measure(`atlas:reopen:${name}`, { start: last, end: now, detail: { sessionId } });
+      stages.push(`${name} ${Math.round(now - last)} ms${note}`);
+      last = now;
+    },
+    /** Close with the render: React's commit, layout and the first paint
+     *  after it, which land a frame later than the store write. */
+    done() {
+      requestAnimationFrame(() =>
+        setTimeout(() => {
+          this.stage("render");
+          console.info(
+            `[reopen ${id}] ${stages.join(" · ")} · total ${Math.round(performance.now() - start)} ms`,
+          );
+        }, 0),
+      );
+    },
+  };
+}
+
+/**
  * Session resume, shared by every "open a past chat" path
  * (`openThread` in `open-thread.ts`, `openAgentSession`).
  *
@@ -34,10 +68,17 @@ type WireMessage = ReturnType<typeof snapshotMessageToWire>;
  */
 export interface ResumeCallbacks {
   /** Paint messages into the thread. Called exactly ONCE, after the session is
-   *  loaded and its full transcript is known. */
-  paint: (messages: WireMessage[]) => void;
+   *  loaded and its full transcript is known. `asOfSeq` is the snapshot's: a
+   *  delta held while the tab loaded at or below it is already painted. */
+  paint: (messages: WireMessage[], asOfSeq: number) => void;
   /** Drop the skeleton. Fired with the paint. */
   onPainted: () => void;
+  /** The agent has the session open, under `key`; nothing is painted yet.
+   *  The tab binds here, not after the paint: the transcript keys its scroll
+   *  state on the bound session id, so a paint landing before the bind is
+   *  laid out twice, once unbound and again when the id arrives, and the
+   *  reader sees it jump. Only `resumeThreadFast` calls it. */
+  onOpened?: (key: SessionKey) => void;
   /** True when a newer click/open has superseded this one — polled before every
    *  mutation so a superseded resume never repaints a tab the user has already
    *  navigated away from (mirrors the sidebar's load-token guard). */
@@ -117,6 +158,7 @@ export async function resumeSessionFast(opts: {
   cb: ResumeCallbacks;
 }): Promise<ResumeResult> {
   const { sessionId, cwd, ensure, cb } = opts;
+  const timer = reopenTimer(sessionId);
 
   let agent: AgentInfo;
   try {
@@ -124,6 +166,7 @@ export async function resumeSessionFast(opts: {
   } catch (err) {
     throw new ResumeError("spawn", err);
   }
+  timer.stage("agent");
 
   let key: SessionKey;
   try {
@@ -133,6 +176,7 @@ export async function resumeSessionFast(opts: {
   } catch (err) {
     throw new ResumeError("load", err);
   }
+  timer.stage("load");
 
   let snapshot: SessionSnapshot;
   try {
@@ -140,11 +184,14 @@ export async function resumeSessionFast(opts: {
   } catch (err) {
     throw new ResumeError("snapshot", err);
   }
+  timer.stage("snapshot", ` (${snapshot.messages.length} messages)`);
 
   const messages = await paintableMessages(snapshot, sessionId, cwd);
   if (!cb.isStale()) {
-    cb.paint(messages.map(snapshotMessageToWire));
+    cb.paint(messages.map(snapshotMessageToWire), snapshot.as_of_seq ?? 0);
     cb.onPainted();
+    timer.stage("paint");
+    timer.done();
   }
 
   return { agent, key, snapshot };
@@ -182,6 +229,7 @@ export async function resumeThreadFast(opts: {
   cb: ResumeCallbacks;
 }): Promise<ResumedThreadResult> {
   const { threadId, cwd, sessionId, cb } = opts;
+  const timer = reopenTimer(sessionId ?? threadId);
 
   let resumed: Awaited<ReturnType<typeof resumeThread>>;
   try {
@@ -189,6 +237,8 @@ export async function resumeThreadFast(opts: {
   } catch (err) {
     throw new ResumeError("resume", err);
   }
+  timer.stage("load");
+  if (!cb.isStale()) cb.onOpened?.(resumed.key);
 
   let snapshot: SessionSnapshot;
   try {
@@ -196,13 +246,16 @@ export async function resumeThreadFast(opts: {
   } catch (err) {
     throw new ResumeError("snapshot", err);
   }
+  timer.stage("snapshot", ` (${snapshot.messages.length} messages)`);
 
   const messages = sessionId
     ? await paintableMessages(snapshot, sessionId, cwd)
     : snapshot.messages;
   if (!cb.isStale()) {
-    cb.paint(messages.map(snapshotMessageToWire));
+    cb.paint(messages.map(snapshotMessageToWire), snapshot.as_of_seq ?? 0);
     cb.onPainted();
+    timer.stage("paint");
+    timer.done();
   }
 
   return {

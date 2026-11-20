@@ -214,6 +214,59 @@ describe("incremental projection", () => {
     step(messages, opts(), prev);
   });
 
+  it("re-projects only the live turn of a delegating session", () => {
+    const child = (status: string) =>
+      ({
+        name: "helper",
+        status,
+        prompt: "",
+        result: null,
+        toolCallCount: 1,
+      }) as unknown as NonNullable<ProjectOptions["subagents"]>[string];
+    const launched = child("completed");
+    const history = [
+      user("u1", "delegate"),
+      assistant("a1", { toolCalls: [call("launch")], mode: "tool" }),
+      // The child's own call, in a later message than its launch.
+      assistant("a1b", {
+        toolCalls: [{ ...call("childcall"), parentToolCallId: "launch" }],
+        mode: "tool",
+      }),
+      assistant("a1p", { content: "delegated" }),
+      ...[2, 3, 4].flatMap(exchange),
+    ];
+    let messages = [...history, user("u9", "go"), assistant("a9", { content: "" })];
+    let subagents = { launch: launched };
+    const o = () => opts({ streaming: true, turnInProgress: true, subagents });
+    let prev = step(messages, o(), null);
+    const settled = prev.segments.slice(0, -1);
+
+    // Streaming the live turn: every settled turn comes back as itself.
+    for (let k = 0; k < 5; k++) {
+      messages = [...messages.slice(0, -1), { ...messages[messages.length - 1], content: `t${k}` }];
+      prev = step(messages, o(), prev);
+    }
+    prev.segments.slice(0, -1).forEach((s, k) => expect(s).toBe(settled[k]));
+
+    // The child's call changing, two messages after its launch, re-projects
+    // the turn that shows it — and only that one.
+    messages = messages.map((m) =>
+      m.id === "a1b"
+        ? { ...m, toolCalls: [{ ...call("childcall", "failed"), parentToolCallId: "launch" }] }
+        : m,
+    );
+    prev = step(messages, o(), prev);
+    expect(prev.segments[1]).not.toBe(settled[1]);
+    prev.segments.slice(2, -1).forEach((s, k) => expect(s).toBe(settled[k + 2]));
+
+    // So does the child itself changing.
+    const before = prev.segments.slice(0, -1);
+    subagents = { launch: child("failed") };
+    prev = step(messages, o(), prev);
+    expect(prev.segments[1]).not.toBe(before[1]);
+    expect(prev.segments[2]).toBe(before[2]);
+  });
+
   it("handles a rewind that drops the last turn", () => {
     const messages = [...exchange(1), ...exchange(2)];
     const prev = step(messages, opts(), null);

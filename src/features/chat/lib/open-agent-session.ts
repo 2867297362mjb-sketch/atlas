@@ -12,8 +12,9 @@ import {
   type AgentType,
   type SwitchableAgent,
 } from "@/types/agent";
-import { invalidateLoad } from "./load-tokens";
+import { bumpLoadToken, invalidateLoad, isLoadStale } from "./load-tokens";
 import { snapshotLive } from "./snapshot-message";
+import { clearKeepingUnsent } from "./unsent-text";
 import { ResumeError, resumeSessionFast } from "./resume-session";
 import { applyModeOnResume, holdUnrestoredMode } from "./resume-mode";
 import { emitWindowEvent } from "@/lib/window-events";
@@ -88,10 +89,14 @@ export async function openAgentSession({
   //    must skip sessions whose tab no longer exists — otherwise `setActiveTab`
   //    can't find the dead tab and bounces to tab[0], "jumping" to an unrelated
   //    chat instead of loading the clicked session.
+  //    A tab saved with this session and not shown since (`pendingRestore`)
+  //    counts too: loading it into a second tab left two holders, and the
+  //    saved one took the session back the first time it was shown.
   if (acpSessionId) {
     const openTabIds = new Set(layout.tabs.map((t) => t.id));
     for (const [tid, s] of Object.entries(chat.sessions)) {
-      if (s.acpSessionId === acpSessionId && openTabIds.has(tid)) {
+      const holds = s.acpSessionId === acpSessionId || s.pendingRestore === acpSessionId;
+      if (holds && openTabIds.has(tid)) {
         setActiveTab(tid);
         return;
       }
@@ -148,6 +153,11 @@ export async function openAgentSession({
   // the session (see `ChatSession.resumePending`).
   setResumePending(targetTabId, true);
   setTranscriptLoading(targetTabId, true);
+  // The tab can be given something else while this loads (New chat, a sidebar
+  // click, another tab taking the session): each of them supersedes the load,
+  // and nothing below may then paint or bind over what the tab shows now.
+  const token = bumpLoadToken(targetTabId);
+  const isStale = () => isLoadStale(targetTabId, token);
   try {
     // One paint, once the session is loaded and complete. See
     // `resumeSessionFast` for why the old paint-from-disk-first stage went.
@@ -156,11 +166,12 @@ export async function openAgentSession({
       cwd,
       ensure: () => ensureAgent(pluginId),
       cb: {
-        paint: (msgs) => replaceMessages(targetTabId, msgs),
+        paint: (msgs, asOfSeq) => replaceMessages(targetTabId, msgs, asOfSeq),
         onPainted: () => setTranscriptLoading(targetTabId, false),
-        isStale: () => false,
+        isStale,
       },
     });
+    if (isStale()) return;
     setAcpBinding(targetTabId, agent.agent_id, acpSessionId, cwd);
     // Restore live status + docked plan AFTER the bind (which clears the plan).
     hydrateSessionSnapshot(
@@ -179,17 +190,31 @@ export async function openAgentSession({
       { agent_id: agent.agent_id, session_id: acpSessionId },
       snapshot,
     );
+    if (isStale()) return;
     setTranscriptLoading(targetTabId, false);
     setResumePending(targetTabId, false);
   } catch (err) {
-    setTranscriptLoading(targetTabId, false);
-    // The session is open but its mode was never applied: hold sends until a
-    // pick, before the gate below opens.
-    if (err instanceof ResumeError && err.stage === "snapshot") holdUnrestoredMode(targetTabId);
-    setResumePending(targetTabId, false);
+    if (isStale()) return;
     // `errInfo`: the spawn/load commands in this path reject with a structured
     // `{message, kind}` that would render as "[object Object]".
-    toast.error(`Couldn't open session: ${errInfo(err).message}`);
+    const message = errInfo(err).message;
+    if (err instanceof ResumeError && err.stage === "snapshot") {
+      // The session is open but its mode was never applied: hold sends until
+      // a pick, before the gate below opens.
+      setTranscriptLoading(targetTabId, false);
+      holdUnrestoredMode(targetTabId);
+      setResumePending(targetTabId, false);
+      toast.error(`Couldn't open session: ${message}`);
+      return;
+    }
+    // The agent never opened it. A tab left bound to it (the optimistic bind
+    // above) is stranded: its bind effect skips a bound tab, and every send
+    // goes to a session the agent does not have. Same rollback as a history
+    // open (`loadThreadIntoTab`), keeping what the user sent meanwhile.
+    const kept = clearKeepingUnsent(targetTabId);
+    toast.error(
+      `Couldn't open session: ${message}` + (kept ? " What you sent is back in the composer." : ""),
+    );
   }
 }
 

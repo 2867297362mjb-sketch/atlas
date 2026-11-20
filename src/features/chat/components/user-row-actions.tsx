@@ -62,8 +62,8 @@
 // The hover itself is still not free: `group-hover:` compiles to
 // `:is(:where(.group):hover *)`, so each row the pointer crosses invalidates
 // style for its whole subtree. That is what the transcript's fling
-// hover-suspension is for (`use-transcript-scroll.ts`, `data-scroll-hot`) —
-// it makes the content inert for the duration of a gesture so none of this
+// hover-suspension is for (`use-transcript-scroll.ts`, the hover shield) —
+// it covers the content for the duration of a gesture so none of this
 // fires while scrolling. Keep the two together; neither is sufficient alone.
 //
 // # Why the copy button jittered

@@ -32,6 +32,7 @@ import { useAppStore } from "@/features/app/stores/app-store";
 import { startAppBoot } from "@/features/app/lib/start-app-boot";
 import { useChatStore } from "@/features/chat/stores/chat-store";
 import { cycleChatAgent } from "@/features/chat/lib/switch-agent";
+import { readChatTabSession } from "@/features/chat/lib/chat-tab-session";
 import { HintOverlay } from "@/features/hint-nav/components/hint-overlay";
 import { NavigationHints } from "@/features/keybindings/components/navigation-hints";
 import { BrowserOverlayWatcher } from "@/features/browser/components/browser-overlay-watcher";
@@ -573,7 +574,13 @@ export function App() {
 
   // Auto-save editor state when tabs change. Keyed on the tabs' order, not
   // just their count, so a tab dragged to a new place in its strip is saved.
-  const tabOrder = useMemo(() => tabs.map((t) => t.id).join("\n"), [tabs]);
+  // And on the session a chat tab shows (`data.sessionId`): that is all a
+  // restart has to put the conversation back, and it changes with no tab
+  // opening, closing or moving.
+  const tabOrder = useMemo(
+    () => tabs.map((t) => `${t.id} ${readChatTabSession(t.data) ?? ""}`).join("\n"),
+    [tabs],
+  );
   const saveTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => {
     if (!currentProject) return;

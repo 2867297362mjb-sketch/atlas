@@ -16,8 +16,9 @@ name: Release
 #    than triggered by the tag because a tag created with GITHUB_TOKEN starts
 #    no workflow either.
 #
-# Still by hand after the installers are attached: the PostHog remote-config
-# keys that tell installed apps an update exists (CONTRIBUTING.md lists them).
+# 4. After the installers are attached and someone approves the `release`
+#    environment, `announce` sets the PostHog remote-config keys that tell
+#    installed apps an update exists (CONTRIBUTING.md lists them).
 
 on:
   push:
@@ -189,3 +190,82 @@ jobs:
       - name: Attach the MSI to the release
         shell: bash
         run: gh release upload "$TAG" target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi --clobber
+
+  # Tells installed apps the release exists: sets the PostHog feature-flag
+  # payloads the updater reads (`telemetry::fetch_remote_config`): `version`,
+  # and one installer URL per platform (`telemetry::update_uri_flag`). A
+  # platform's key moves only when its build succeeded, so a skipped or failed
+  # macOS/Windows job never announces a file that isn't on the release.
+  #
+  # Waits on the `release` environment's approval, so someone can install the
+  # new build from the GitHub release before any user is offered it. Off until
+  # the POSTHOG_PERSONAL_API_KEY secret (scope: feature_flag:write) and the
+  # POSTHOG_PROJECT_ID variable exist. POSTHOG_API_HOST is the app host
+  # (https://us.posthog.com or https://eu.posthog.com), not the ingest host.
+  announce:
+    name: Announce the update (PostHog)
+    needs: [release-please, linux, macos, windows]
+    if: >-
+      always() && needs.release-please.outputs.release_created == 'true' &&
+      needs.linux.result == 'success' && vars.POSTHOG_PROJECT_ID != ''
+    runs-on: ubuntu-24.04-arm
+    environment: release
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ needs.release-please.outputs.tag }}
+      VERSION: ${{ needs.release-please.outputs.version }}
+      MACOS_OK: ${{ needs.macos.result == 'success' }}
+      WINDOWS_OK: ${{ needs.windows.result == 'success' }}
+      PH_KEY: ${{ secrets.POSTHOG_PERSONAL_API_KEY }}
+      PH_PROJECT: ${{ vars.POSTHOG_PROJECT_ID }}
+      PH_HOST: ${{ vars.POSTHOG_API_HOST || 'https://us.posthog.com' }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Set the update flags
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$PH_KEY" || { echo "::error::POSTHOG_PERSONAL_API_KEY is not set"; exit 1; }
+          repo="$GITHUB_REPOSITORY"
+          page="https://github.com/$repo/releases/tag/$TAG"
+          assets="$(gh release view "$TAG" --repo "$repo" --json assets --jq '.assets[].name')"
+          asset_url() { # first asset matching a pattern, as a download URL
+            local name; name="$(grep -E "$1" <<<"$assets" | head -1 || true)"
+            [ -n "$name" ] || { echo "::error::no release asset matches $1" >&2; return 1; }
+            echo "https://github.com/$repo/releases/download/$TAG/$name"
+          }
+
+          # The URLs first, the version last: an app that sees the new version
+          # must already find a URL for it.
+          declare -a keys=() values=()
+          keys+=(uri_linux_x86_64 uri_linux_aarch64); values+=("$page" "$page")
+          if [ "$MACOS_OK" = true ]; then
+            keys+=(uri_mac_arm uri_mac_intel)
+            values+=("$(asset_url '_aarch64\.dmg$')" "$(asset_url '_(x64|x86_64)\.dmg$')")
+          fi
+          if [ "$WINDOWS_OK" = true ]; then
+            keys+=(uri_win_intel); values+=("$(asset_url '\.msi$')")
+          fi
+          keys+=(version); values+=("$VERSION")
+
+          api="$PH_HOST/api/projects/$PH_PROJECT/feature_flags"
+          auth=(-H "Authorization: Bearer $PH_KEY" -H "Content-Type: application/json")
+          for i in "${!keys[@]}"; do
+            key="${keys[$i]}"; value="${values[$i]}"
+            flag="$(curl -fsS "${auth[@]}" "$api/?search=$key&limit=100" \
+              | jq -c --arg k "$key" '[.results[] | select(.key == $k)][0] // empty')"
+            [ -n "$flag" ] || { echo "::error::PostHog has no feature flag named $key"; exit 1; }
+            id="$(jq -r .id <<<"$flag")"
+            # A boolean flag keeps its payload under filters.payloads."true",
+            # stored as a JSON-encoded string.
+            body="$(jq -c --arg v "$value" '{filters: (.filters | .payloads = ((.payloads // {}) + {"true": ($v | tojson)}))}' <<<"$flag")"
+            curl -fsS -X PATCH "${auth[@]}" "$api/$id/" -d "$body" >/dev/null
+            echo "$key = $value"
+          done
+          {
+            echo "### Update announced: $VERSION"
+            for i in "${!keys[@]}"; do echo "- \`${keys[$i]}\`: ${values[$i]}"; done
+            [ "$MACOS_OK" = true ] || echo "- macOS not announced (its build didn't succeed)"
+            [ "$WINDOWS_OK" = true ] || echo "- Windows not announced (its build didn't succeed)"
+          } >> "$GITHUB_STEP_SUMMARY"

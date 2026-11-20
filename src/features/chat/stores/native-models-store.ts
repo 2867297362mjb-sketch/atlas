@@ -11,7 +11,8 @@ import { create } from "zustand";
 import { useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { agents } from "../lib/agents-api";
-import { errInfo } from "../lib/agent-signin";
+import { errInfo, isAtlasSignedOut } from "../lib/agent-signin";
+import { promptAtlasSignIn } from "../lib/atlas-sign-in-prompt";
 import { useActiveGatewayOrgId } from "./ai-grant-store";
 import { useChatStore } from "./chat-store";
 
@@ -54,6 +55,12 @@ export const useNativeModelsStore = create<NativeModelsState>()((set) => ({
           }
           return true;
         } catch (err) {
+          // Signed out of Atlas there is no list to fetch and nothing broken
+          // to fix: offer the sign-in instead of an error.
+          if (isAtlasSignedOut(err)) {
+            if (!opts?.silent) promptAtlasSignIn();
+            return false;
+          }
           // Titled, with the cause under it, so "Fix with agent" offers.
           if (!opts?.silent) {
             toast.error("Couldn't refresh the model list", {

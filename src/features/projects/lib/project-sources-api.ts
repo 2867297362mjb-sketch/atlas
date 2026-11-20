@@ -27,6 +27,16 @@ export interface BrowseListing {
   directories: string[];
 }
 
+export type LocationKind = "home" | "root" | "drive" | "removable" | "network" | "optical";
+
+/** A place the folder browser can start from: home, `/`, a drive or volume. */
+export interface BrowseLocation {
+  name: string;
+  /** Absolute, ending in a separator. */
+  path: string;
+  kind: LocationKind;
+}
+
 /** A new project: its folder, and why publishing it failed when it did (the
  *  folder and its repository stand either way). */
 export interface CreatedProject {
@@ -37,6 +47,7 @@ export interface CreatedProject {
 export const projectSources = {
   info: () => invoke<ProjectSourcesInfo>("project_sources_info"),
   browse: (path: string) => invoke<BrowseListing>("project_browse", { path }),
+  locations: () => invoke<BrowseLocation[]>("project_locations"),
   create: (name: string, githubPrivate: boolean) =>
     invoke<CreatedProject>("project_create", { name, githubPrivate }),
   clone: (url: string, github: boolean) => invoke<string>("project_clone", { url, github }),

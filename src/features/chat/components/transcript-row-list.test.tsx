@@ -86,7 +86,10 @@ const projected = (messages: ChatMessage[]) => projection(messages).rows;
 function mounted(container: HTMLElement) {
   const content = container.querySelector('[data-testid="content"]')!;
   // Direct children: the window's anchor search walks `content.children`.
-  return Array.from(content.children) as HTMLElement[];
+  // The fling hover shield is the one child that is not a row.
+  return (Array.from(content.children) as HTMLElement[]).filter(
+    (el) => !el.classList.contains("atlas-scroll-shield"),
+  );
 }
 
 const view = (messages: ChatMessage[], isStreaming = false) => (
@@ -150,11 +153,13 @@ describe("Transcript row list", () => {
     const settledIds = projected(live).map((row) => row.id);
     expect(settledIds.length).toBeGreaterThan(0);
     for (const id of settledIds) expect(renders.get(id)).toBe(before.get(id));
-    // And the live turn did move.
+    // And the live turn did move: its turn was rebuilt, and the row whose text
+    // grew rendered. Each row is memoised on what concerns it (`MountedRow`),
+    // so the live turn's other rows, unchanged, need not.
     const liveIds = mounted(container)
       .map((el) => el.dataset.rowId!)
       .filter((id) => !settledIds.includes(id));
     expect(liveIds.length).toBeGreaterThan(0);
-    for (const id of liveIds) expect(renders.get(id)).toBeGreaterThan(before.get(id) ?? 0);
+    expect(liveIds.some((id) => (renders.get(id) ?? 0) > (before.get(id) ?? 0))).toBe(true);
   });
 });

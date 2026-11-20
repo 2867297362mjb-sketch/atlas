@@ -6,6 +6,8 @@
 //   - an http(s) link opens in the system browser, rather than navigating the
 //     WKWebView away from Atlas — except a pull request's, which opens in
 //     its tab (`open-pull-request-link.ts`);
+//   - any other link is swallowed, so it can never navigate the window
+//     (`#fragment` scrolls, `mailto:` opens the mail app);
 //   - a copy keeps a shortened link's full address (`onMarkdownCopy`).
 
 /** A pull request's address: the cheap check before loading its opener. */
@@ -41,7 +43,12 @@ export function onMarkdownClick(e: MouseEvent): boolean {
     return true;
   }
   const anchor = (e.target as HTMLElement | null)?.closest?.("a");
-  if (anchor instanceof HTMLAnchorElement && anchor.href && /^https?:/i.test(anchor.href)) {
+  // The link as written, not `anchor.href`: that one is resolved against the
+  // page, and where the app itself is served over http (Windows' webview,
+  // `http://tauri.localhost`) every relative link resolves to an http address
+  // and would be handed to the browser.
+  const written = anchor instanceof HTMLAnchorElement ? (anchor.getAttribute("href") ?? "") : "";
+  if (anchor instanceof HTMLAnchorElement && /^https?:/i.test(written)) {
     e.preventDefault();
     const href = anchor.href;
     const openExternally = () =>
@@ -58,6 +65,22 @@ export function onMarkdownClick(e: MouseEvent): boolean {
       return true;
     }
     openExternally();
+    return true;
+  }
+  // Every other link is taken too. Left to the webview, `[guide](docs/guide)`
+  // resolved against the app's own origin and navigated the main window
+  // there: a reload, with every draft and live state gone (audit #99). An
+  // in-page `#fragment` scrolls to its target; a mail link goes to the mail
+  // app; anything else does nothing, since there is nowhere in Atlas it could
+  // mean.
+  if (anchor instanceof HTMLAnchorElement && anchor.getAttribute("href") != null) {
+    e.preventDefault();
+    const raw = written;
+    if (raw.startsWith("#") && raw.length > 1) {
+      document.getElementById(decodeURIComponent(raw.slice(1)))?.scrollIntoView({ block: "start" });
+    } else if (/^mailto:/i.test(raw)) {
+      void import("@tauri-apps/plugin-opener").then((m) => m.openUrl(raw)).catch(() => {});
+    }
     return true;
   }
   return false;

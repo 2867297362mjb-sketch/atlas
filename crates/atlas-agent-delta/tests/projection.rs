@@ -1026,6 +1026,51 @@ async fn growing_terminal_output_re_projects_the_tool_call() {
     );
 }
 
+/// #27. The agent releases a terminal once it has what it needs from it, and
+/// ACP says the tool calls showing it keep showing its output. Release dropped
+/// the terminal, so the next projection of the call (its status flipping to
+/// completed) carried `result: null` — and the UI, which takes a tool call
+/// whole, blanked the output the user had been reading.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_released_terminal_keeps_its_output_on_the_wire() {
+    let harness = Harness::start();
+
+    create_terminal(&harness, "term-released", &["still here after release"]).await;
+    harness.update(terminal_tool_call("call-released", "term-released"));
+    harness.expect(1);
+
+    // What `terminal/release` does to the thread.
+    assert!(lock(&harness.thread).release_terminal(&acp::TerminalId::new("term-released")));
+    harness.update(serde_json::json!({
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call-released",
+        "status": "completed",
+    }));
+
+    let last = harness
+        .recorder
+        .deltas()
+        .into_iter()
+        .filter_map(|d| match d {
+            SessionDelta::ToolCallUpserted { tool_call, .. } => Some(tool_call),
+            _ => None,
+        })
+        .next_back()
+        .expect("the tool call reached the wire");
+    assert_eq!(
+        last.status,
+        atlas_agent_delta::ToolCallStatus::Completed,
+        "the update after the release is the one under test"
+    );
+    assert!(
+        last.result
+            .as_deref()
+            .is_some_and(|result| result.contains("still here after release")),
+        "the release blanked the tool call's output: {:?}",
+        last.result
+    );
+}
+
 /// #30 — the projection must be a function of the EVENT STREAM, not of live
 /// state re-read at drain time. The drain lags the thread: an agent that gives
 /// up on its own request (a cancelled turn ends the call) can move the status
@@ -2805,4 +2850,241 @@ async fn the_announced_snapshot_carries_turn_timing_like_the_thread_built_one() 
     let last = announced.last().expect("the reply is a message");
     assert!(last.worked_ms.unwrap() >= 5, "{last:?}");
     assert_eq!(last.stop_reason.as_deref(), Some("end_turn"));
+}
+
+// ------------------------------------------------------ reopened sessions
+
+/// A thread mutation that is not drained: what `session/load` leaves in the
+/// channel while the agent replays, before the projection exists to apply it.
+fn replay(harness: &Harness, update: serde_json::Value) {
+    let update: acp::SessionUpdate =
+        serde_json::from_value(update).expect("a session update this schema understands");
+    lock(&harness.thread)
+        .handle_session_update(update)
+        .expect("the thread accepts it");
+}
+
+/// A reopened session's history reaches every reader through a snapshot, so
+/// the stream must not announce it as well: that delivered it twice, and a
+/// tab already bound to the session painted the deltas half-loaded first.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_adopted_history_is_in_the_snapshot_and_never_on_the_stream() {
+    let harness = Harness::start();
+
+    lock(&harness.thread).begin_replay();
+    replay(
+        &harness,
+        serde_json::json!({
+            "sessionUpdate": "user_message_chunk",
+            "content": { "type": "text", "text": "fix the bug" },
+        }),
+    );
+    replay(&harness, text_chunk("found it"));
+    replay(
+        &harness,
+        serde_json::json!({
+            "sessionUpdate": "tool_call",
+            "toolCallId": "call-1",
+            "title": "Edit main.rs",
+            "kind": "edit",
+            "status": "completed",
+            "rawInput": { "path": "main.rs" },
+        }),
+    );
+    replay(&harness, text_chunk("done"));
+
+    harness.projector.adopt(&harness.session_id);
+    // The backlog of the replay, drained as `attach_settled`'s task would.
+    harness.pump();
+    let announced: Vec<String> = harness
+        .recorder
+        .kinds()
+        .into_iter()
+        .filter(|kind| kind == "message_appended" || kind == "tool_call_upserted")
+        .collect();
+    assert!(
+        announced.is_empty(),
+        "the replay was announced: {announced:?}"
+    );
+
+    let snapshot = harness
+        .projector
+        .snapshot(&harness.session_id, true, None)
+        .expect("the session is projected");
+    let contents: Vec<String> = snapshot
+        .messages
+        .iter()
+        .map(|m| match m.tool_calls.first() {
+            Some(call) => call.id.clone(),
+            None => m.content.clone(),
+        })
+        .collect();
+    assert_eq!(contents, ["fix the bug", "found it", "call-1", "done"]);
+    assert_eq!(snapshot.as_of_seq, harness.recorder.len() as u64);
+
+    // What happens after the reopen is live, and is announced.
+    lock(&harness.thread).push_user_content_block(
+        None,
+        acp::ContentBlock::Text(acp::TextContent::new("and the test".to_string())),
+    );
+    harness.update(text_chunk("added"));
+    assert!(
+        harness
+            .recorder
+            .deltas()
+            .iter()
+            .any(|delta| matches!(delta, SessionDelta::MessageAppended { message } if message.content == "added")),
+        "the live reply was not announced: {:?}",
+        harness.recorder.kinds()
+    );
+}
+
+/// The tool's own result travels when it is small or the only account of the
+/// call, and otherwise is left off with its size: claude-agent-acp sends every
+/// result twice, and the second copy of each screenshot was most of a long
+/// session's reopen.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_large_raw_output_is_left_off_the_wire_with_its_size() {
+    let harness = Harness::start();
+    let big = "x".repeat(100 * 1024);
+    let tool_call = |id: &str, status: &str, content: serde_json::Value, raw: serde_json::Value| {
+        serde_json::json!({
+            "sessionUpdate": "tool_call",
+            "toolCallId": id,
+            "title": "Run",
+            "kind": "execute",
+            "status": status,
+            "content": content,
+            "rawOutput": raw,
+        })
+    };
+    let text = |body: &str| serde_json::json!([{ "type": "content", "content": { "type": "text", "text": body } }]);
+    let image = serde_json::json!([{ "type": "content", "content": { "type": "image", "data": "AAAA", "mimeType": "image/png" } }]);
+
+    // Its text is in `content` already: a large copy stays home.
+    harness.update(tool_call(
+        "big",
+        "completed",
+        text("output"),
+        serde_json::json!(big),
+    ));
+    // Small: travels.
+    harness.update(tool_call(
+        "small",
+        "completed",
+        text("output"),
+        serde_json::json!({ "exit": 0 }),
+    ));
+    // Failed, and under the larger bound: travels, as the account of the failure.
+    harness.update(tool_call(
+        "failed",
+        "failed",
+        text("boom"),
+        serde_json::json!("y".repeat(20 * 1024)),
+    ));
+    // An image-only result: nothing else describes it, but a screenshot is too big.
+    harness.update(tool_call(
+        "shot",
+        "completed",
+        image,
+        serde_json::json!([{ "data": "z".repeat(300 * 1024) }]),
+    ));
+
+    let calls: std::collections::HashMap<String, atlas_agent_delta::ToolCall> = harness
+        .recorder
+        .deltas()
+        .into_iter()
+        .filter_map(|delta| match delta {
+            SessionDelta::ToolCallUpserted { tool_call, .. } => {
+                Some((tool_call.id.clone(), tool_call))
+            }
+            _ => None,
+        })
+        .collect();
+
+    assert!(calls["big"].raw_output.is_none());
+    assert!(calls["big"].raw_output_omitted_bytes.unwrap() >= 100 * 1024);
+    assert_eq!(
+        calls["small"].raw_output,
+        Some(serde_json::json!({ "exit": 0 }))
+    );
+    assert!(calls["small"].raw_output_omitted_bytes.is_none());
+    assert!(calls["failed"].raw_output.is_some());
+    assert!(calls["shot"].raw_output.is_none());
+    assert!(calls["shot"].raw_output_omitted_bytes.unwrap() >= 300 * 1024);
+
+    // The snapshot is built from the same projection.
+    let snapshot = harness
+        .projector
+        .snapshot(&harness.session_id, true, None)
+        .expect("the session is projected");
+    let shot = snapshot
+        .messages
+        .iter()
+        .flat_map(|m| m.tool_calls.iter())
+        .find(|call| call.id == "shot")
+        .expect("the screenshot call is in the snapshot");
+    assert!(shot.raw_output.is_none());
+}
+
+/// The memory extractor reads a session's shape every finished turn; the
+/// outline gives it the messages and each call's name without copying what
+/// the calls produced.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_outline_names_each_call_without_its_input_or_output() {
+    let harness = Harness::start();
+    lock(&harness.thread).push_user_content_block(
+        None,
+        acp::ContentBlock::Text(acp::TextContent::new("look it up".to_string())),
+    );
+    harness.update(text_chunk("searching"));
+    harness.update(serde_json::json!({
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call-1",
+        "title": "WebFetch https://example.com",
+        "kind": "fetch",
+        "status": "completed",
+        "rawInput": { "url": "https://example.com" },
+        "content": [{ "type": "content", "content": { "type": "text", "text": "a long page" } }],
+        "rawOutput": { "body": "a long page" },
+    }));
+
+    let outline = harness
+        .projector
+        .outline(&harness.session_id)
+        .expect("the session is projected");
+    let calls: Vec<&atlas_agent_delta::ToolCall> =
+        outline.iter().flat_map(|m| m.tool_calls.iter()).collect();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].kind.as_deref(), Some("fetch"));
+    assert_eq!(
+        calls[0].title.as_deref(),
+        Some("WebFetch https://example.com")
+    );
+    assert!(calls[0].result.is_none());
+    assert!(calls[0].arguments.is_null());
+    assert!(calls[0].raw_output.is_none());
+    assert!(outline.iter().any(|m| m.content == "searching"));
+}
+
+/// ACP: "A change in messageId indicates a new message has started". The
+/// thread kept a chunk per id, but the projection grouped neighbouring chunks
+/// by thought-or-not alone, so two messages read as one bubble, run together:
+/// "Checking the file.Here is the fix" (audit #18).
+#[test]
+fn a_changed_message_id_starts_a_new_message() {
+    let harness = Harness::start();
+    for (text, id) in [("Checking the file.", "a1"), ("Here is the fix", "a2")] {
+        harness.update(serde_json::json!({
+            "sessionUpdate": "agent_message_chunk",
+            "messageId": id,
+            "content": { "type": "text", "text": text },
+        }));
+    }
+
+    let thread = lock(&harness.thread);
+    let messages = atlas_agent_delta::project::snapshot_messages(&thread, None);
+    drop(thread);
+    let texts: Vec<&str> = messages.iter().map(|m| m.content.as_str()).collect();
+    assert_eq!(texts, ["Checking the file.", "Here is the fix"]);
 }

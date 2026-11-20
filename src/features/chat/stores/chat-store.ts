@@ -2,7 +2,9 @@ import { create } from "zustand";
 import { agents } from "../lib/agents-api";
 import type { InjectedPrompt } from "../lib/injected-prompt";
 import { isDraft, original } from "immer";
-import { immer } from "zustand/middleware/immer";
+// Without auto-freeze: a long session's `messages` is frozen whole per update
+// otherwise, which costs JavaScriptCore milliseconds a batch (see the file).
+import { immerUnfrozen as immer } from "@/lib/immer-unfrozen";
 import type {
   ChatSession,
   ChatMessage,
@@ -45,6 +47,7 @@ import {
 import { loadCachedAcpModels, saveCachedAcpModels } from "../lib/acp-models-cache";
 import { resolveModelLabel } from "../lib/model-label";
 import { agentForNewSession } from "../lib/default-agent";
+import { invalidateLoad } from "../lib/load-tokens";
 import { loadCachedContextUsage, saveCachedContextUsage } from "../lib/context-usage-cache";
 import { saveNativeEffort } from "../lib/native-model-pref";
 import { invoke } from "@tauri-apps/api/core";
@@ -159,7 +162,7 @@ function applyPersistedModePref(sess: ChatSession, agentType: AgentType): void {
 /** The paths in a wire call's ACP `locations` (`[{ path, line? }]`), or
  *  undefined when it carried none — the field stays absent rather than an
  *  empty array, like the other optional tool-call fields. */
-function toolLocations(raw: unknown): string[] | undefined {
+export function toolLocations(raw: unknown): string[] | undefined {
   if (!Array.isArray(raw) || raw.length === 0) return undefined;
   const paths: string[] = [];
   for (const l of raw) {
@@ -247,7 +250,10 @@ interface ChatState {
 
 interface ChatActions {
   actions: {
-    createSession: (tabId: string, agentType?: SwitchableAgent) => void;
+    /** `pendingRestore`: the agent session the tab is saved as showing, to be
+     *  loaded when the tab is first shown (`ChatSession.pendingRestore`). */
+    createSession: (tabId: string, agentType?: SwitchableAgent, pendingRestore?: string) => void;
+    setPendingRestore: (tabId: string, sessionId: string | undefined) => void;
     /** Re-bind a fresh (message-less) chat to a different agent. Clears the ACP
      *  binding so the chat panel re-creates a session with the new agent. */
     switchChatAgent: (tabId: string, agentType: SwitchableAgent) => void;
@@ -388,6 +394,10 @@ interface ChatActions {
     replaceMessages: (
       sessionId: string,
       messages: Array<{
+        /** The snapshot's own id. Kept, so painting the same conversation
+         *  again (a rebind's repaint) keys every unchanged row the same and
+         *  React keeps it mounted. Absent only for a path that has none. */
+        id?: string;
         role: MessageRole;
         content: string;
         timestamp?: string;
@@ -402,6 +412,10 @@ interface ChatActions {
          *  ends it (snapshot `worked_ms` / `stop_reason`). */
         workedMs?: number;
         stopReason?: string;
+        /** How the message reads (a thought, prose, tool work), and a
+         *  thought's text, as the live stream gave them. */
+        mode?: ChatMessage["mode"];
+        thinking?: string;
         toolCalls?: Array<{
           /** The agent's own tool call id, when the caller has it. Optional
            *  only because not every paint path carries one; a caller that has
@@ -418,8 +432,17 @@ interface ChatActions {
            *  stamped them. */
           startedAt?: number;
           endedAt?: number;
+          /** The diff and terminal blocks, the paths it touched, and the
+           *  subagent launch it belongs to, as the live stream gave them. */
+          contentBlocks?: ChatMessage["toolCalls"][number]["contentBlocks"];
+          locations?: string[];
+          parentToolCallId?: string | null;
         }>;
       }>,
+      /** The painting snapshot's `as_of_seq`. A delta held while the
+       *  transcript loaded (see `setTranscriptLoading`) at or below it is
+       *  already in these messages, and is dropped instead of applied. */
+      asOfSeq?: number,
     ) => void;
     /** Restore live (non-transcript) session state from a `session/load`
      *  snapshot: the backend's current status and the current turn's live plan.
@@ -576,6 +599,8 @@ interface ChatActions {
 /** The live state a session snapshot carries beyond its transcript. */
 export interface SnapshotLive {
   agentId?: string;
+  /** The turn the session is on in Rust (`SessionSnapshot.turn_seq`). */
+  turnSeq?: number;
   pendingPermissions?: PendingPermissionWire[];
   pendingElicitation?: PendingElicitationWire | null;
   queue?: QueuedPrompt[];
@@ -603,6 +628,36 @@ function mirrorQueue(s: ChatState, tabId: string, queue: QueuedPrompt[]): void {
   }
   s.queues[tabId] = nextTexts;
   s.queueIds[tabId] = [...queue.map((q) => q.id), ...local.map(() => null)];
+}
+
+/**
+ * Deltas for a tab whose transcript is still loading, by tab id, in arrival
+ * order. A resume binds the tab before the agent has replayed the session
+ * (`open-thread.ts`), so anything announced in that window used to land on a
+ * tab still showing its skeleton: a half-built transcript that spent the
+ * window's one-time settle (`use-transcript-window.ts`) before the real paint
+ * arrived, and was then replaced wholesale by it. They wait here instead, and
+ * `setTranscriptLoading(tab, false)` applies the ones the painting snapshot
+ * had not seen. Module state, not store state: nothing renders from it.
+ */
+const heldForPaint = new Map<string, AgentDelta[]>();
+/** The `as_of_seq` of the snapshot that painted a loading tab (see
+ *  `replaceMessages`), until its held deltas are released. */
+const paintedThrough = new Map<string, number>();
+
+function forgetHeld(tabId: string): void {
+  heldForPaint.delete(tabId);
+  paintedThrough.delete(tabId);
+}
+
+/** Hold `env` if its tab is still loading its transcript. */
+function holdForPaint(s: ChatState, env: AgentDelta): boolean {
+  const tid = findTabByAcpSession(s.sessions, env.session_id);
+  if (!tid || !s.sessions[tid].transcriptLoading) return false;
+  const held = heldForPaint.get(tid);
+  if (held) held.push(env);
+  else heldForPaint.set(tid, [env]);
+  return true;
 }
 
 /** The chat tab running `acpSessionId`, or null. */
@@ -751,6 +806,15 @@ function isNewToolCall(session: ChatSession, toolCallId: string, added?: Set<str
   return !before.messages.some((m) => m.toolCalls.some((t) => t.id === toolCallId));
 }
 
+/** ACP's `StopReason` values: each ends a turn normally. */
+const NORMAL_STOP_REASONS = new Set([
+  "end_turn",
+  "cancelled",
+  "max_tokens",
+  "max_turn_requests",
+  "refusal",
+]);
+
 /** Human-readable end-of-turn notice for a stop reason, or null when the
  *  outcome speaks for itself (P2.4).
  *
@@ -763,7 +827,9 @@ export function stopReasonNotice(stopReason: string): string | null {
     case "max_turn_requests":
       return "(the agent stopped — it hit the maximum number of model requests for one turn)";
     case "refusal":
-      return "(the agent declined to continue this request)";
+      // ACP: the refused prompt and everything after it are left out of the
+      // next prompt, and the client should show that (audit #21).
+      return "(the agent declined this request — it, and anything after it in this turn, won't be in what the agent sees next)";
     // `end_turn` is a normal finish; `cancelled` already renders its own UI.
     // Anything unknown is left alone rather than guessed at — inventing a
     // description for a stop reason a future adapter added would be worse than
@@ -825,7 +891,7 @@ export const useChatStore = create<ChatState & ChatActions>()(
       // `defaultAgent` setting, else Atlas Agent (`agentForNewSession`).
       // Never hard-code an ACP agent here: on a fresh install that produces
       // a permanently disabled composer with no way to reach another agent.
-      createSession: (tabId, agentType = agentForNewSession()) =>
+      createSession: (tabId, agentType = agentForNewSession(), pendingRestore) =>
         set((s) => {
           if (s.sessions[tabId]) return;
           s.sessions[tabId] = {
@@ -844,6 +910,7 @@ export const useChatStore = create<ChatState & ChatActions>()(
             claudePermissionMode: agentType === "claude-code" ? "default" : undefined,
             claudePermissionModeExplicit: false,
             acpModeExplicit: false,
+            ...(pendingRestore ? { pendingRestore } : {}),
             // Optimistically pre-fill a non-Claude agent's mode picker from the
             // persisted cache so switching feels instant; mark pending until the
             // real session confirms (the picker shows a loading state).
@@ -1152,65 +1219,40 @@ export const useChatStore = create<ChatState & ChatActions>()(
           const session = s.sessions[sessionId];
           if (session) session.title = title;
         }),
-      setTranscriptLoading: (sessionId, loading) =>
+      setTranscriptLoading: (sessionId, loading) => {
+        // Whatever was held belongs to the load this ends (or to one a new
+        // load supersedes, which starts over).
+        const held = heldForPaint.get(sessionId);
+        const floor = paintedThrough.get(sessionId);
+        heldForPaint.delete(sessionId);
+        paintedThrough.delete(sessionId);
+        const advertised: AdvertisedOptions[] = [];
         set((s) => {
           const session = s.sessions[sessionId];
-          if (session) session.transcriptLoading = loading;
-        }),
+          if (!session) return;
+          session.transcriptLoading = loading;
+          if (loading || !held) return;
+          // In arrival order, after the paint: only what the snapshot that
+          // painted had not seen yet.
+          const added = new Set<string>();
+          for (const env of held) {
+            if (floor !== undefined && env.seq <= floor) continue;
+            applyDeltaToDraft(s, env, added, advertised);
+          }
+        });
+        advertised.forEach(cacheAdvertisedOptions);
+      },
       setResumePending: (sessionId, pending) =>
         set((s) => {
           const session = s.sessions[sessionId];
           if (session) session.resumePending = pending;
         }),
-      clearSession: (sessionId) =>
+      setPendingRestore: (tabId, sessionId) =>
         set((s) => {
-          const session = s.sessions[sessionId];
-          if (session) {
-            session.messages = [];
-            session.tasks = [];
-            session.status = "idle";
-            session.inflightToolIds = undefined;
-            session.acpAgentId = undefined;
-            session.acpSessionId = undefined;
-            forgetSessionUsage(session);
-            session.title = UNTITLED_SESSION;
-            session.firstUserContent = undefined;
-            session.userMessageCount = 0;
-            // Reset the turn-identity high-water mark + live per-turn scratch
-            // so the next bound session's fresh turn_seq (which restarts at 1)
-            // isn't rejected as stale by `isStaleTurn` (see `setAcpBinding`).
-            session.currentTurnSeq = 0;
-            session.livePlan = undefined;
-            // The transcript these belonged to is gone with `messages`;
-            // leaving them would hang the old chat's children off the new
-            // one's first message.
-            session.subagents = undefined;
-            session.turnScratch = undefined;
-            // Commands belong to the ACP session being dropped; the next
-            // binding re-advertises its own list.
-            session.availableCommands = undefined;
-            // The advertised knobs go with it, for the same reason. Reseeded
-            // from this agent's cache rather than blanked, so the Options pill
-            // keeps rendering the right list across a clear instead of
-            // dropping to a spinner for something we already know.
-            session.acpConfigOptions = loadCachedAcpConfigOptions(session.agentType) ?? undefined;
-            // The tab no longer points at the session being resumed, so the
-            // send gate must drop with it. A resume that gets superseded
-            // (New chat / another sidebar click) bails WITHOUT clearing its own
-            // flag — deliberately, so it can't un-gate the resume that replaced
-            // it — which makes this the single place the flag is guaranteed to
-            // reset. Leaving it set would silently queue every future send in
-            // this tab forever.
-            session.resumePending = false;
-            // A first message still waiting on the old bind belongs to the
-            // conversation being dropped, exactly like the queue below.
-            session.pendingSend = undefined;
-            session.unrestoredModeId = undefined;
-            session.bindCwd = undefined;
-          }
-          delete s.queues[sessionId];
-          delete s.queueIds[sessionId];
+          const session = s.sessions[tabId];
+          if (session) session.pendingRestore = sessionId;
         }),
+      clearSession: (sessionId) => set((s) => resetToNewChat(s, sessionId)),
       setBindCwd: (tabId, cwd) =>
         set((s) => {
           const session = s.sessions[tabId];
@@ -1421,14 +1463,16 @@ export const useChatStore = create<ChatState & ChatActions>()(
         void sessionConfiguration.pick(sessionId, KNOBS.model, modelId),
       setNativeEffort: (sessionId, effort) =>
         void sessionConfiguration.pick(sessionId, KNOBS.effort, effort),
-      replaceMessages: (sessionId, messages) =>
+      replaceMessages: (sessionId, messages, asOfSeq) =>
         set((s) => {
           const session = s.sessions[sessionId];
           if (!session) return;
+          if (asOfSeq !== undefined) paintedThrough.set(sessionId, asOfSeq);
+          const minted = Date.now();
           session.messages = messages.map((m, i) => {
             const split = m.role === "user" ? splitAtlasContext(m.content) : null;
             return {
-              id: `msg-${Date.now()}-${i}`,
+              id: m.id ?? `msg-${minted}-${i}`,
               role: m.role,
               content: m.content,
               // Keep the agent's own id and outcome when the caller has
@@ -1446,7 +1490,16 @@ export const useChatStore = create<ChatState & ChatActions>()(
                 duration: null,
                 ...(tc.startedAt !== undefined ? { startedAt: tc.startedAt } : {}),
                 ...(tc.endedAt !== undefined ? { endedAt: tc.endedAt } : {}),
+                // What the live path keeps (`toChatToolCall`). Dropped here, an
+                // edit reported as a diff reopened as a bare "Edit", and a
+                // child's calls fell back into its parent's stream (audit #97).
+                contentBlocks: tc.contentBlocks,
+                locations: tc.locations,
+                parentToolCallId: tc.parentToolCallId ?? undefined,
               })),
+              // A thought reopened as an empty reply without these (audit #6).
+              ...(m.mode ? { mode: m.mode } : {}),
+              ...(m.thinking ? { thinking: m.thinking } : {}),
               fileChanges: [],
               plan: null,
               timestamp: m.timestamp ?? new Date().toISOString(),
@@ -1542,6 +1595,7 @@ export const useChatStore = create<ChatState & ChatActions>()(
         }),
       removeSession: (sessionId) => {
         dropBackendSession(get().sessions[sessionId]);
+        forgetHeld(sessionId);
         set((s) => {
           // pendingPermissions is keyed by acpSessionId, not tab id — resolve
           // before the session entry goes away (a stale list would resurface
@@ -1559,7 +1613,10 @@ export const useChatStore = create<ChatState & ChatActions>()(
         });
       },
       removeSessions: (sessionIds) => {
-        for (const id of sessionIds) dropBackendSession(get().sessions[id]);
+        for (const id of sessionIds) {
+          dropBackendSession(get().sessions[id]);
+          forgetHeld(id);
+        }
         set((s) => {
           for (const id of sessionIds) {
             // Same acpSessionId-keying note as removeSession above.
@@ -1573,7 +1630,9 @@ export const useChatStore = create<ChatState & ChatActions>()(
           }
         });
       },
-      resetSessions: () =>
+      resetSessions: () => {
+        heldForPaint.clear();
+        paintedThrough.clear();
         set((s) => {
           s.sessions = {};
           s.queues = {};
@@ -1581,7 +1640,8 @@ export const useChatStore = create<ChatState & ChatActions>()(
           s.drafts = {};
           s.pendingPermissions = {};
           s.activeSessionId = null;
-        }),
+        });
+      },
       setDraft: (tabId, text) =>
         set((s) => {
           if (text.length === 0) delete s.drafts[tabId];
@@ -1704,6 +1764,7 @@ export const useChatStore = create<ChatState & ChatActions>()(
           }
           const addedToolCalls = new Set<string>();
           for (const env of deltas) {
+            if (holdForPaint(s, env)) continue;
             applyDeltaToDraft(s, env, addedToolCalls, advertised);
           }
         });
@@ -1713,6 +1774,19 @@ export const useChatStore = create<ChatState & ChatActions>()(
         set((s) => {
           const session = s.sessions[tabId];
           if (!session) return;
+          // One agent session, one tab. Every delta goes to the FIRST tab
+          // holding the session (`findTabByAcpSession`), so a second holder
+          // never hears from it again: its status stays wherever it was, a
+          // "running" one forever, and the sidebar, which reads any holder,
+          // said "Working" for a turn that had long finished. The tab binding
+          // now is the one the user is looking at, so the old holder lets go
+          // and becomes a new chat. The agent session itself stays open: it is
+          // this tab's now.
+          for (const [otherId, other] of Object.entries(s.sessions)) {
+            if (otherId !== tabId && other.acpSessionId === acpSessionId) {
+              resetToNewChat(s, otherId);
+            }
+          }
           // A (re)bind points the tab at a DIFFERENT backend session — a
           // freshly spawned SessionActor whose `turn_seq` counter restarts at
           // 1 (turn_seq is not persisted; new / resumed / project-switched
@@ -1726,15 +1800,23 @@ export const useChatStore = create<ChatState & ChatActions>()(
           // composer 'running' forever. Reset the high-water mark (and the
           // previous session's live per-turn scratch) whenever the bound
           // session identity changes.
+          //
+          // The SAME session id gets a fresh counter too: Rust gives every
+          // bind its own record, starting at 0 (`SessionRegistry::bind`), and
+          // a rebind after the agent died or was updated keeps the id. Reset
+          // only on a changed id, the restarted agent's turns (1, 2, ...) all
+          // read as stale behind the old mark, and the tab said "Working"
+          // forever (audit #2). A snapshot read after the bind sets the exact
+          // value back (`hydrateLive`).
+          session.currentTurnSeq = 0;
+          session.turnScratch = undefined;
           if (session.acpSessionId !== acpSessionId) {
-            session.currentTurnSeq = 0;
             session.livePlan = undefined;
             // Per backend session, like the plan: the snapshot for the
             // session being bound re-seeds them (`hydrateSessionSnapshot`),
             // and without this a resumed chat would show the previous
             // binding's children until its own first delta.
             session.subagents = undefined;
-            session.turnScratch = undefined;
             // Usage is per backend session; a different one starts from
             // nothing (its cached context gauge is restored by
             // `replaceMessages`, keyed on the new id).
@@ -1788,6 +1870,7 @@ export const useChatStore = create<ChatState & ChatActions>()(
       applyAgentDelta: (env) => {
         const advertised: AdvertisedOptions[] = [];
         set((s) => {
+          if (holdForPaint(s, env)) return;
           applyDeltaToDraft(s, env, new Set(), advertised);
         });
         advertised.forEach(cacheAdvertisedOptions);
@@ -2026,6 +2109,89 @@ function dropBackendSession(session: ChatSession | undefined): void {
   void agents.dropSession(session.acpAgentId, session.acpSessionId).catch(() => {});
 }
 
+/**
+ * Make `tabId` an empty new chat: no transcript, no binding, nothing pending.
+ * The agent session it was bound to is left running: whoever cleared the tab
+ * either has another tab taking that session or drops it themselves.
+ */
+function resetToNewChat(s: ChatDraft, tabId: string): void {
+  const session = s.sessions[tabId];
+  if (session) {
+    session.messages = [];
+    session.tasks = [];
+    session.status = "idle";
+    session.inflightToolIds = undefined;
+    session.acpAgentId = undefined;
+    session.acpSessionId = undefined;
+    forgetSessionUsage(session);
+    session.title = UNTITLED_SESSION;
+    session.firstUserContent = undefined;
+    session.userMessageCount = 0;
+    // Reset the turn-identity high-water mark + live per-turn scratch
+    // so the next bound session's fresh turn_seq (which restarts at 1)
+    // isn't rejected as stale by `isStaleTurn` (see `setAcpBinding`).
+    session.currentTurnSeq = 0;
+    session.livePlan = undefined;
+    // The transcript these belonged to is gone with `messages`;
+    // leaving them would hang the old chat's children off the new
+    // one's first message.
+    session.subagents = undefined;
+    session.turnScratch = undefined;
+    // Commands belong to the ACP session being dropped; the next
+    // binding re-advertises its own list.
+    session.availableCommands = undefined;
+    // The advertised knobs go with it, for the same reason. Reseeded
+    // from this agent's cache rather than blanked, so the Options pill
+    // keeps rendering the right list across a clear instead of
+    // dropping to a spinner for something we already know.
+    session.acpConfigOptions = loadCachedAcpConfigOptions(session.agentType) ?? undefined;
+    // The tab no longer points at the session being resumed, so the
+    // send gate must drop with it. A resume that gets superseded
+    // (New chat / another sidebar click) bails WITHOUT clearing its own
+    // flag — deliberately, so it can't un-gate the resume that replaced
+    // it — which makes this the single place the flag is guaranteed to
+    // reset. Leaving it set would silently queue every future send in
+    // this tab forever.
+    session.resumePending = false;
+    // Another conversation is taking the tab: the saved one is no
+    // longer what it should load when shown.
+    session.pendingRestore = undefined;
+    // A first message still waiting on the old bind belongs to the
+    // conversation being dropped, exactly like the queue below.
+    session.pendingSend = undefined;
+    session.unrestoredModeId = undefined;
+    session.bindCwd = undefined;
+    // A load the tab was waiting on belongs to the conversation being
+    // dropped, and the load superseded by this reset bails without clearing
+    // it. Left set, the fresh chat sat on the skeleton forever, and every
+    // delta of the session it bound next was held for a paint that would
+    // never come (audit #3).
+    session.transcriptLoading = false;
+    // What the dropped session's agent last said about itself, and the
+    // per-turn state of that session. Kept, a fresh chat wore the dead
+    // agent's Restart banner, and its first send respawned the agent to
+    // reload a session the new chat never had (audit #51).
+    session.disconnected = undefined;
+    session.updatedTo = undefined;
+    session.bindError = undefined;
+    session.stopping = undefined;
+    session.held = undefined;
+    session.retryStatus = undefined;
+    session.sleptMidTurn = undefined;
+    session.compacting = undefined;
+    session.pendingElicitation = undefined;
+    session.justSentMessageId = undefined;
+  }
+  delete s.queues[tabId];
+  delete s.queueIds[tabId];
+  forgetHeld(tabId);
+  // Whatever load was on its way into the tab is the old conversation's: it
+  // must not paint or bind over the new chat. Covers a session taken by
+  // another tab (`setAcpBinding`), whose own load would otherwise take the
+  // session back when it lands (audit #47).
+  invalidateLoad(tabId);
+}
+
 function isStaleTurn(session: ChatSession, turnSeq: number | undefined): boolean {
   if (!turnSeq) return false;
   return turnSeq < (session.currentTurnSeq ?? 0);
@@ -2132,7 +2298,8 @@ function applyDeltaToDraft(
         const label =
           env.stop_reason === "end_turn"
             ? "(no response — the agent ended its turn without output)"
-            : `(no response — stop_reason: ${env.stop_reason})`;
+            : (stopReasonNotice(env.stop_reason) ??
+              `(no response — stop_reason: ${env.stop_reason})`);
         session.messages.push(makeAssistantTextMessage(label));
       } else if (responded) {
         // P2.4: an abnormal stop reason has to surface even when output DID
@@ -2171,8 +2338,12 @@ function applyDeltaToDraft(
           if (m.role === "assistant" && !m.model) m.model = producingModel;
         }
       }
-      session.status =
-        env.stop_reason === "end_turn" || env.stop_reason === "cancelled" ? "idle" : "error";
+      // Every stop reason ACP defines is a way for a turn to END, not to
+      // fail: a token limit, the request cap and a refusal settle idle with a
+      // notice saying what happened. Read as errors, they flashed the session
+      // "Failed" in the sidebar and recorded the turn as failed (audit #20).
+      // A reason ACP does not define is not guessed at.
+      session.status = NORMAL_STOP_REASONS.has(env.stop_reason) ? "idle" : "error";
       session.stopping = undefined;
       session.retryStatus = undefined;
       session.inflightToolIds = undefined;
@@ -2339,6 +2510,22 @@ function applyDeltaToDraft(
       session.disconnected = true;
       session.stopping = undefined;
       session.retryStatus = undefined;
+      // A process that EXITED had its turn failed first, but one Atlas killed
+      // (another tab's Stop pressed twice, Restart, a start that never
+      // finished) sends no terminal before this notice: its connection, and
+      // with it the turn, is simply gone. End the turn here, or the tab stays
+      // "Working" with a Stop button for a process that no longer exists
+      // (audit #74).
+      if (isBusyAgentStatus(session.status)) {
+        for (const msg of session.messages) {
+          for (const tc of msg.toolCalls) {
+            if (tc.status === "pending" || tc.status === "running") tc.status = "failed";
+          }
+        }
+        session.status = "error";
+        session.inflightToolIds = undefined;
+        delete s.pendingPermissions[env.session_id];
+      }
       recordInterruption(session, "disconnected");
       return;
     }
@@ -2780,6 +2967,9 @@ function applyUserMessage(
 function hydrateLive(s: ChatDraft, tabId: string, live: SnapshotLive): void {
   const session = s.sessions[tabId];
   if (!session) return;
+  // The turn Rust is on, exactly: a live turn's deltas carry it, and a late
+  // terminal of an earlier turn is still refused as stale.
+  if (live.turnSeq !== undefined) session.currentTurnSeq = live.turnSeq;
   if (live.held !== undefined) session.held = live.held || undefined;
   if (live.queue) mirrorQueue(s, tabId, live.queue);
   const acp = session.acpSessionId;

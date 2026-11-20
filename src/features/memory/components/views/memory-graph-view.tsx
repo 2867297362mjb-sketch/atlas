@@ -13,6 +13,7 @@ import {
   ListTree,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { downloadPercent, type DownloadProgress } from "@/lib/download-progress";
 import { agentBrandColor } from "@/features/agents/lib/agent-brand";
 import type { MemoryGraphData } from "../../lib/memory-graph-types";
 import { FixWithAgentButton } from "@/features/ask-agent/components/ask-agent-button";
@@ -36,13 +37,7 @@ export type MemoryGraphViewPhase =
 export interface MemoryGraphViewProps {
   projectOpen: boolean;
   phase: MemoryGraphViewPhase;
-  progress: {
-    file: string;
-    file_index: number;
-    file_count: number;
-    received: number;
-    total: number;
-  } | null;
+  progress: DownloadProgress | null;
   error: string | null;
   graph: MemoryGraphData | null;
   docCount: number;
@@ -105,13 +100,7 @@ export function MemoryGraphView({
   }
 
   if (phase === "downloading") {
-    const pct = progress
-      ? Math.round(
-          ((progress.file_index + (progress.total ? progress.received / progress.total : 0)) /
-            Math.max(1, progress.file_count)) *
-            100,
-        )
-      : 0;
+    const pct = progress ? downloadPercent(progress) : 0;
     return (
       <Notice icon={<Loader2 size={18} className="animate-spin" />} title="Downloading model…">
         <div className="flex w-[320px] max-w-full flex-col gap-2 pt-1">

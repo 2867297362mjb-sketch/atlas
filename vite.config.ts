@@ -150,6 +150,9 @@ export default defineConfig(() => ({
       // otherwise trigger a "new dependencies optimized → reloading"
       // cycle and dump in-progress state.
       "pixi.js",
+      // Its CSP-safe builders, which `src/lib/pixi-app.ts` installs; listed so
+      // the first graph open does not cost a re-optimise and reload either.
+      "pixi.js/unsafe-eval",
       "matter-js",
       // Pre-bundle the PDF stack so first open of a PDF tab doesn't trigger
       // Vite's "new dependencies optimized → reloading" cycle.

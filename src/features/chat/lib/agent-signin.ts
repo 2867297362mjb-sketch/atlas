@@ -235,6 +235,10 @@ export type BindFailureAction =
   | "signed-in-but-refused"
   /** Say nothing: the composer is already explaining this one. */
   | "silent"
+  /** The native agent, refused because the user is signed out of Atlas. Not a
+   *  failure to report: nothing is broken, and Atlas's own sign-in is the fix.
+   *  Silent for an automatic bind; a sign-in offer when a send is waiting. */
+  | "atlas-sign-in"
   /** Not an auth problem (or not an agent we can sign in): show the message. */
   | "report";
 
@@ -248,6 +252,25 @@ export type BindFailureAction =
  *  contract test to silence a toast. `agent-signin.test.ts` guards the parity.
  */
 const NO_MODELS_TOKENS = ["has no models to offer"];
+
+/** Substring tokens for "the native agent could not start because the user is
+ *  signed out of Atlas" — its model list needs an Atlas token and there is
+ *  none. MUST stay in sync with `AuthFailure::NoCredential`'s reason in
+ *  `src-tauri/src/commands/agents.rs`; `agent-signin.test.ts` guards it. */
+const SIGNED_OUT_TOKENS = ["not signed in to atlas"];
+
+/** The native agent was refused for want of an Atlas sign-in — the user is
+ *  signed out, not having a failure. */
+export function isNativeSignedOut(agentType: string | undefined, err: unknown): boolean {
+  if (!agentType || catalogEntry(agentType)?.kind !== "native") return false;
+  return isAtlasSignedOut(err);
+}
+
+/** The failure is "signed out of Atlas", whoever reported it. */
+export function isAtlasSignedOut(err: unknown): boolean {
+  const message = errInfo(err).message.toLowerCase();
+  return SIGNED_OUT_TOKENS.some((token) => message.includes(token));
+}
 
 /** Decide how to handle a bind failure.
  *
@@ -265,6 +288,7 @@ export function bindFailureAction(opts: {
 }): BindFailureAction {
   const { agentType, err, alreadyAttempted } = opts;
   if (isNativeWithoutModels(agentType, err)) return "silent";
+  if (isNativeSignedOut(agentType, err)) return "atlas-sign-in";
   if (!agentType || !canSignIn(agentType) || !isAuthError(err)) return "report";
   return alreadyAttempted ? "signed-in-but-refused" : "sign-in";
 }

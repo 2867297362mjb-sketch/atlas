@@ -31,7 +31,21 @@
  * (or no longer) registered is a no-op, so the double-destroy the graph
  * components can produce — the unmount cleanup and the resolved `init()`
  * promise both firing — costs nothing.
+ *
+ * Because every Application comes through here, this module is also what lets
+ * pixi run under the app's content-security policy. Pixi 8 builds its shader
+ * and uniform-upload functions with `new Function`, and a renderer's
+ * constructor checks for that first: where `eval` is refused, it throws
+ * "Current environment does not allow unsafe-eval". The CSP in
+ * `src-tauri/tauri.conf.json` allows only `'wasm-unsafe-eval'`, so in the
+ * shipped app every `init()` rejected and both graphs drew their ruler over an
+ * empty canvas, while `bun run dev` (a browser tab with no CSP) drew them fine.
+ * `pixi.js/unsafe-eval` swaps those builders for eval-free ones. Allowing
+ * `'unsafe-eval'` in the CSP instead would hand `eval` to every script in the
+ * app. `tests/pixi-csp-contract.test.ts` keeps the import here and every
+ * Application coming through this module.
  */
+import "pixi.js/unsafe-eval";
 import type { Application } from "pixi.js";
 
 /**

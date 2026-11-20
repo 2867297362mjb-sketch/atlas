@@ -100,7 +100,11 @@ export const agents = {
   refreshCatalog: (force = true) => invoke<AgentCatalog>("agents_catalog_refresh", { force }),
   listRunning: () => invoke<AgentInfo[]>("agents_list_running"),
   spawn: (pluginId: string) => invoke<AgentInfo>("agents_spawn", { pluginId }),
-  kill: (agentId: AgentId) => invoke<void>("agents_kill", { agentId }),
+  /** Kill an agent's process. With `sessionId` (a Stop pressed on that
+   *  session), only while that session is still open on it: a late kill
+   *  cannot take down the process that replaced the one it meant. */
+  kill: (agentId: AgentId, sessionId?: AcpSessionId) =>
+    invoke<void>("agents_kill", { agentId, sessionId }),
   /** Kill by PLUGIN id — the way out of a connect that never finished. A
    *  session-less bind (spawn / `session/new` still in flight) has no
    *  `agent_id` to hand `kill`, so this drops whatever connection the manager
@@ -292,8 +296,17 @@ export const listenAuthRunProgress = (
 export const listenAuthEnvUpdated = (handler: () => void): Promise<UnlistenFn> =>
   listen("atlas:byok-env-updated", () => handler());
 
+/** One event, or a frame's worth of deltas as an array: Rust sends a delta on
+ *  its own when the channel has been quiet for a frame, and batches the rest
+ *  (`BroadcastMiddleware` in `agents.rs`). Handed on one at a time, in order. */
 export const listenAgents = (handler: (env: AgentStreamEvent) => void): Promise<UnlistenFn> =>
-  listen<AgentStreamEvent>("atlas:agents", (e) => handler(e.payload));
+  listen<AgentStreamEvent | AgentStreamEvent[]>("atlas:agents", (e) => {
+    if (Array.isArray(e.payload)) {
+      for (const env of e.payload) handler(env);
+    } else {
+      handler(e.payload);
+    }
+  });
 
 /** Fires whenever how-an-agent-launches changes: discovery finished, the
  *  manifest refreshed, an install/uninstall, a settings toggle, or a

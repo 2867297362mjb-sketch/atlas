@@ -29,6 +29,7 @@ import { bumpLoadToken, isLoadStale } from "./load-tokens";
 import { ResumeError, resumeThreadFast } from "./resume-session";
 import { applyModeOnResume, holdUnrestoredMode } from "./resume-mode";
 import { snapshotLive } from "./snapshot-message";
+import { clearKeepingUnsent } from "./unsent-text";
 import { AGENT_TYPE_BY_SIDEBAR, type SidebarAgent } from "./sidebar-agents";
 
 export interface OpenableThread {
@@ -47,12 +48,16 @@ function freshTabId(): string {
   return `chat-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 }
 
-/** The tab that already shows `sessionId`, if one is open. */
+/** The tab that already shows `sessionId`, if one is open. A saved tab that
+ *  has not loaded it yet counts (`ChatSession.pendingRestore`): focusing that
+ *  tab is what loads it, and loading it into a second tab would show one
+ *  session twice. */
 export function tabShowingSession(sessionId: string): string | null {
   if (!sessionId) return null;
   const openTabIds = new Set(useLayoutStore.getState().tabs.map((t) => t.id));
   for (const [tabId, session] of Object.entries(useChatStore.getState().sessions)) {
-    if (session.acpSessionId === sessionId && openTabIds.has(tabId)) return tabId;
+    if (!openTabIds.has(tabId)) continue;
+    if (session.acpSessionId === sessionId || session.pendingRestore === sessionId) return tabId;
   }
   return null;
 }
@@ -91,27 +96,7 @@ export async function openThread(
   const layout = useLayoutStore.getState();
   const chat = useChatStore.getState();
   const { addTab, setActiveTab } = layout.actions;
-  const {
-    replaceMessages,
-    setAcpBinding,
-    setAcpModels,
-    setAcpConfigOptions,
-    setAcpAvailableCommands,
-    setSessionAgentType,
-    clearSession,
-    setSessionTitle,
-    setTranscriptLoading,
-    setResumePending,
-    createSession,
-    hydrateSessionSnapshot,
-  } = chat.actions;
-
-  // The agent that ran this session, from the row — not the tab's current
-  // pick. Opening a Codex session into a Claude tab resumed it through the
-  // wrong process.
-  const agentType = AGENT_TYPE_BY_SIDEBAR[thread.agent] ?? thread.agent;
-  const pluginId = pluginIdForAgent(agentType);
-  const cwd = thread.cwd || thread.projectPath;
+  const { createSession } = chat.actions;
 
   const idleChat = (tabId: string | null | undefined): tabId is string =>
     !!tabId &&
@@ -132,11 +117,53 @@ export async function openThread(
       dirty: false,
       data: {},
     });
-    createSession(targetTabId, agentType);
+    createSession(targetTabId, agentTypeOf(thread));
   }
   setActiveTab(targetTabId);
 
-  clearSession(targetTabId);
+  await loadThreadIntoTab(targetTabId, thread);
+}
+
+/** The agent that ran a session, from its row — not the tab's current pick.
+ *  Opening a Codex session into a Claude tab resumed it through the wrong
+ *  process. */
+function agentTypeOf(thread: OpenableThread) {
+  return AGENT_TYPE_BY_SIDEBAR[thread.agent] ?? thread.agent;
+}
+
+/**
+ * Put `thread` into chat tab `targetTabId`: the optimistic bind, the skeleton, the
+ * agent reopening the session, one paint, and then everything the snapshot
+ * carries. Answers whether the session is now in the tab.
+ *
+ * `keep`: the tab holds an empty session of its own and is getting its saved
+ * conversation back (`restore-tab-session.ts`), so there is no other
+ * conversation to clear out of it, and what is queued in it is meant for the
+ * session being loaded.
+ */
+export async function loadThreadIntoTab(
+  targetTabId: string,
+  thread: OpenableThread,
+  opts: { keep?: boolean } = {},
+): Promise<boolean> {
+  const {
+    replaceMessages,
+    setAcpBinding,
+    setAcpModels,
+    setAcpConfigOptions,
+    setAcpAvailableCommands,
+    setSessionAgentType,
+    clearSession,
+    setSessionTitle,
+    setTranscriptLoading,
+    setResumePending,
+    hydrateSessionSnapshot,
+  } = useChatStore.getState().actions;
+  const agentType = agentTypeOf(thread);
+  const pluginId = pluginIdForAgent(agentType);
+  const cwd = thread.cwd || thread.projectPath;
+
+  if (!opts.keep) clearSession(targetTabId);
   setSessionAgentType(targetTabId, agentType);
   setSessionTitle(targetTabId, thread.title.slice(0, 40));
   const cachedAgent = getAgentSync(pluginId);
@@ -152,7 +179,7 @@ export async function openThread(
   const isStale = () => isLoadStale(targetTabId, token);
 
   await Promise.resolve();
-  if (isStale()) return;
+  if (isStale()) return false;
 
   let resumed;
   try {
@@ -161,13 +188,14 @@ export async function openThread(
       cwd,
       sessionId: thread.sessionId || null,
       cb: {
-        paint: (msgs) => replaceMessages(targetTabId, msgs),
+        paint: (msgs, asOfSeq) => replaceMessages(targetTabId, msgs, asOfSeq),
         onPainted: () => setTranscriptLoading(targetTabId, false),
+        onOpened: (key) => setAcpBinding(targetTabId, key.agent_id, key.session_id, cwd),
         isStale,
       },
     });
   } catch (err) {
-    if (isStale()) return;
+    if (isStale()) return false;
     setResumePending(targetTabId, false);
     setTranscriptLoading(targetTabId, false);
     const stage = err instanceof ResumeError ? err.stage : "resume";
@@ -177,24 +205,29 @@ export async function openThread(
       // since the mode was never applied, hold sends until a pick.
       holdUnrestoredMode(targetTabId);
       toast.error(`Couldn't load session: ${msg}`);
+      return true;
     } else {
       // Roll the optimistic binding back: a tab bound to a session the backend
       // never opened is stranded (the chat panel's bind effect skips a tab that
-      // already has a binding). The history row is untouched.
+      // already has a binding). The history row is untouched. What the user
+      // sent while it loaded goes back to the composer, not with the reset.
       console.warn("resume failed:", err);
-      clearSession(targetTabId);
-      toast.error(`Couldn't resume this session: ${msg.slice(0, 120)}`);
+      const kept = clearKeepingUnsent(targetTabId);
+      toast.error(
+        `Couldn't resume this session: ${msg.slice(0, 120)}` +
+          (kept ? " What you sent is back in the composer." : ""),
+      );
     }
-    return;
+    return false;
   }
-  if (isStale()) return;
+  if (isStale()) return false;
 
   const { key, snapshot } = resumed;
   setAcpBinding(targetTabId, key.agent_id, key.session_id, cwd);
   // Before the send gate opens: `setResumePending(false)` releases a queued
   // prompt, and a mode applied after it can lose the race to the first turn.
   await applyModeOnResume(targetTabId, key, snapshot);
-  if (isStale()) return;
+  if (isStale()) return false;
   setResumePending(targetTabId, false);
   if (resumed.resumedWithoutHistory) {
     toast.info("This agent can't replay past messages — it won't remember what's above.");
@@ -220,4 +253,5 @@ export async function openThread(
     agentTypeFromPluginId(snapshot.plugin_id),
   );
   setTranscriptLoading(targetTabId, false);
+  return true;
 }

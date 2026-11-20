@@ -1343,16 +1343,68 @@
   box-shadow: var(--inset-highlight);
 }
 
-/* Set by use-transcript-scroll on the content element for the life of a
-   fling. Hover during a scroll is pure waste — each row that passes under a
-   resting pointer invalidates its whole subtree (`group-hover` compiles to
+/* The transcript's hover shield, shown by use-transcript-scroll for the life
+   of a fling. Hover during a scroll is pure waste — each row that passes under
+   a resting pointer invalidates its whole subtree (`group-hover` compiles to
    `:where(.group):hover *`, and the user row's action bar uses it), several
-   times a second, in the frames the tile deadline can least afford. With the
-   content inert the scroller is the hit target, so wheel and momentum keep
-   flowing; nothing below can be hovered or clicked until the gesture goes
-   quiet (~200ms). */
-[data-scroll-hot] {
-  pointer-events: none;
+   times a second, in the frames the tile deadline can least afford. The shield
+   is the hit target instead, so nothing below can be hovered or clicked until
+   the gesture goes quiet (~200ms); it sits inside the scroller, so wheel and
+   momentum keep scrolling it.
+
+   Zero height and sticky at the top of the content, so it never moves a row;
+   its box is the viewport-tall `::before`, clipped by the scroller like
+   everything else in it. It replaced `pointer-events: none` on the content:
+   that property inherits, so toggling it restyled every mounted row, twice a
+   fling. Showing this restyles one element. */
+.atlas-scroll-shield {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  height: 0;
+}
+.atlas-scroll-shield[hidden] {
+  display: none;
+}
+.atlas-scroll-shield::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 100vh;
+}
+
+/* The transcript's "Scroll to bottom" pill (`JumpToBottomPill` in
+   @tryatlas/design). Its hover set the background to `element-hover`, which is
+   an alpha overlay (4% of the foreground), in place of the card it sits on: the
+   pill floats over the transcript, so on hover it went see-through and the
+   text behind showed in it. The card stays the background here and the tint is
+   laid over it as an image. Unlayered on purpose, so it outranks the utility
+   it corrects. Remove once the package draws its hover this way. */
+button.atlas-pill-in[title="Jump to latest"]:hover {
+  background-color: var(--card);
+  background-image: linear-gradient(var(--element-hover), var(--element-hover));
+}
+
+/* A run of turns the transcript window swapped out (use-transcript-window):
+   an empty block exactly as tall as they measured. */
+.atlas-row-gap {
+  contain: strict;
+}
+
+/* WebKitGTK: the transcript's top edge is a tint, not a blur. GradualBlur
+   stacks five live `backdrop-filter` layers over the scroller, which the
+   compositor re-samples on every frame the content moves, and a long
+   transcript moves on every frame of a fling (WebKitGTK 2.54.0–2.54.1 made
+   backdrop filters far worse still). The tint layer GradualBlur draws under
+   the blur stays, so the header keeps its backing. The variant belongs in
+   `@tryatlas/design` (ADR-0027); until it has one, this reaches the layers by
+   their place: the edge treatment after the transcript's scroller, whose
+   layers carry their filter inline. */
+html.platform-linux .transcript-scroller ~ [aria-hidden] > [style*="backdrop-filter"] {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
 /* Toast descriptions — sonner ships a light-theme colour we never overrode.
@@ -1480,31 +1532,49 @@
   overflow-wrap: anywhere;
 }
 
-/* Two-button toasts (a notification's actions ride sonner's `action` and
-   `cancel` slots) put the buttons on their own row. Sonner lays the icon,
-   text and buttons out in one flex row, so two buttons took ~150px and left
-   the title and body a narrow column that wrapped every few words. Here the
-   text claims the whole first row beside the icon and the buttons wrap below
-   it, right-aligned: sonner gives every button an auto start margin
-   (`--toast-button-margin-start`), which on a row of their own splits the
-   free space between them, so only the first (`cancel`) keeps it. One button
-   is narrow enough to stay inline. Same (0,4,0)+ prefix as the description
-   rule above, for the same import-order reason. */
-[data-sonner-toaster] [data-sonner-toast][data-styled="true"]:has([data-cancel]) {
+/* Toast layout: the glyph pinned top-left, the text taking the full width
+   beside it, and the buttons in a footer row below. Sonner lays the icon,
+   text and buttons out in one vertically-centred flex row, so every button
+   (copy, "Fix with agent", an action) ate the text's width: an error's cause
+   wrapped every three words, with the glyph floating halfway down it.
+
+   `flex-start` pins the glyph to the first line of the title. A toast with a
+   footer — any action button, or an error, whose copy button always shows —
+   wraps: the text's basis claims the whole first row beside the glyph, so
+   everything after it (`order` puts copy and fix before the actions) drops to
+   a second row, right-aligned by `justify-content` (the first row is full, so
+   it doesn't move). Sonner gives every button an auto start margin
+   (`--toast-button-margin-start`), which on a row of their own would split the
+   free space between them; it is zeroed here. A toast with no footer keeps its
+   hover-only copy button inline, where it adds no empty row.
+
+   Same (0,4,0)+ prefix as the description rule above, for the same
+   import-order reason. */
+[data-sonner-toaster] [data-sonner-toast][data-styled="true"] {
+  align-items: flex-start;
+}
+[data-sonner-toaster]
+  [data-sonner-toast][data-styled="true"]:is([data-type="error"], :has([data-button])) {
   flex-wrap: wrap;
+  justify-content: flex-end;
   row-gap: 10px;
 }
-[data-sonner-toaster] [data-sonner-toast][data-styled="true"]:has([data-cancel]) [data-content] {
-  flex-basis: calc(100% - 32px);
-}
-[data-sonner-toaster] [data-sonner-toast][data-styled="true"]:has([data-cancel]) [data-action] {
-  margin-left: 0;
-}
-
 [data-sonner-toaster]
-  [data-sonner-toast][data-styled="true"]:has([data-cancel]):has([data-toast-copy])
+  [data-sonner-toast][data-styled="true"]:is([data-type="error"], :has([data-button]))
   [data-content] {
-  flex-basis: calc(100% - 60px);
+  flex: 1 1 calc(100% - 32px);
+  min-width: 0;
+}
+[data-sonner-toaster]
+  [data-sonner-toast][data-styled="true"]:is([data-type="error"], :has([data-button]))
+  [data-button] {
+  margin-left: 0;
+  margin-right: 0;
+}
+[data-sonner-toaster]
+  [data-sonner-toast][data-styled="true"]:is([data-type="error"], :has([data-button]))
+  :is([data-toast-copy], [data-toast-fix]) {
+  align-self: center;
 }
 
 /* The close button (`<Toaster closeButton>`): a small round X that only shows

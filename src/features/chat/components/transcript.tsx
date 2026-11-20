@@ -33,11 +33,13 @@
 import {
   Fragment,
   forwardRef,
+  memo,
   useCallback,
   useImperativeHandle,
   useMemo,
   useRef,
   useState,
+  type ComponentProps,
   type ReactElement,
 } from "react";
 import { isBusyAgentStatus, type ChatMessage } from "@/types/agent";
@@ -62,9 +64,88 @@ import { TranscriptRowItem, TranscriptView } from "@tryatlas/design/session";
 import { DesktopTranscriptProvider } from "./transcript-rows";
 import { ResponseSelectionActions } from "./response-selection-actions";
 import { TurnRail } from "./turn-rail";
+import { RenderBoundary } from "@/components/render-boundary";
 
 /** Shared with the composer — see `switchableAgentOf`. */
 const switchable = switchableAgentOf;
+
+/**
+ * A row as the list mounts it, memoised. `TranscriptRowItem` is not, and the
+ * list hands it session facts by row id (`canRetryRowId`, …), so every one of
+ * them changing (a send flips three) re-rendered every mounted row. Here each
+ * row is given only what concerns it: an unrelated row's props are identical
+ * and React skips it.
+ */
+const MountedRow = memo(function MountedRow(props: ComponentProps<typeof TranscriptRowItem>) {
+  // One row that cannot be drawn costs that row, not the window: what an agent
+  // sends is free-form, and a row that threw used to reach only the app's root
+  // boundary (audit #94). Keyed on the row object, which is replaced when its
+  // content changes, so the next delta to the row tries again. The fallback
+  // keeps the row's id, which scrolling and jumps find rows by.
+  return (
+    <RenderBoundary
+      name="transcript-row"
+      resetKey={props.row}
+      fallback={
+        <div data-row-id={props.row.id} className="px-3 py-1 text-xs text-muted-foreground">
+          Couldn't show this step.
+        </div>
+      }
+    >
+      <TranscriptRowItem {...props} />
+    </RenderBoundary>
+  );
+});
+
+/** The facts one row reads, narrowed to it. */
+function rowFacts(
+  row: Row,
+  justSentMessageId: string | undefined,
+  canRetryRowId: string | undefined,
+  canBranchRowId: string | undefined,
+  canContinue: boolean,
+) {
+  switch (row.kind) {
+    case RowKind.User:
+      return {
+        justSentMessageId: row.id === `u:${justSentMessageId}` ? justSentMessageId : undefined,
+        canRetryRowId: row.id === canRetryRowId ? canRetryRowId : undefined,
+        canBranchRowId: undefined,
+        canContinue: false,
+      };
+    case RowKind.Prose:
+      return {
+        justSentMessageId: undefined,
+        canRetryRowId: undefined,
+        canBranchRowId: row.id === canBranchRowId ? canBranchRowId : undefined,
+        canContinue: false,
+      };
+    case RowKind.TurnFooter:
+      return {
+        justSentMessageId: undefined,
+        canRetryRowId: undefined,
+        canBranchRowId:
+          row.responseRowId !== undefined && row.responseRowId === canBranchRowId
+            ? canBranchRowId
+            : undefined,
+        canContinue: false,
+      };
+    case RowKind.Interruption:
+      return {
+        justSentMessageId: undefined,
+        canRetryRowId,
+        canBranchRowId: undefined,
+        canContinue,
+      };
+    default:
+      return {
+        justSentMessageId: undefined,
+        canRetryRowId: undefined,
+        canBranchRowId: undefined,
+        canContinue: false,
+      };
+  }
+}
 
 export interface TranscriptHandle {
   scrollToBottom: () => void;
@@ -128,6 +209,7 @@ export const Transcript = forwardRef<TranscriptHandle, TranscriptProps>(function
 ) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+  const shieldRef = useRef<HTMLDivElement>(null);
   const cacheKey = `${tabId}:${acpSessionId}`;
   const pinScopeKey = pinScope(tabId, acpSessionId);
   // The project root paths in this session resolve against: the one the
@@ -280,8 +362,11 @@ export const Transcript = forwardRef<TranscriptHandle, TranscriptProps>(function
   const working = isStreaming && (!lastTurn || lastTurn.role !== "assistant");
 
   const {
-    setStartIndex,
+    reveal,
     safeStart,
+    gapAt,
+    windowKey,
+    rowsInGap,
     more,
     onScroll,
     pendingAnchorRef,
@@ -291,7 +376,10 @@ export const Transcript = forwardRef<TranscriptHandle, TranscriptProps>(function
   } = useTranscriptWindow({
     scrollRef,
     contentRef,
+    shieldRef,
     rows,
+    segments: projection.segments,
+    turnInProgress,
     live,
     cacheKey,
     topInset,
@@ -319,7 +407,7 @@ export const Transcript = forwardRef<TranscriptHandle, TranscriptProps>(function
       projection,
       rows,
       scrollRef,
-      setStartIndex,
+      reveal,
       setExpandedTurns,
       pendingAnchorRef,
       pendingHighlightRef,
@@ -356,7 +444,9 @@ export const Transcript = forwardRef<TranscriptHandle, TranscriptProps>(function
   //
   // The cache is dropped whole when anything else a row reads changes. Every
   // one of those is stable by construction (the callbacks, `pinScopeKey`) or
-  // changes at most once per turn.
+  // changes at most once per turn, and each row is memoised on the facts that
+  // concern it (`MountedRow`), so rebuilding the list re-renders only the rows
+  // whose facts moved.
   const canRetryRowId = canRetry ? lastUserRowId : undefined;
   const canBranchRowId = canBranch ? latestResponseId : undefined;
   const renderRows = useCallback(
@@ -367,18 +457,15 @@ export const Transcript = forwardRef<TranscriptHandle, TranscriptProps>(function
           // (`user-row-actions.tsx`), which is hidden until the row is hovered.
           // The fling hover-suspension in `use-transcript-scroll.ts` keeps hover
           // styles from firing as rows pass under a resting pointer mid-scroll.
-          <TranscriptRowItem
+          <MountedRow
             key={row.id}
             row={row}
             agentLabel={agentLabel}
-            justSentMessageId={entranceMessageId}
             // Absolute position in the thread, so the newest messages — the
             // ones on screen after a history load — are parsed first. An
             // index within the window would shift as the window grows.
             priority={segment.offset + from + i}
-            canRetryRowId={canRetryRowId}
-            canBranchRowId={canBranchRowId}
-            canContinue={canContinue}
+            {...rowFacts(row, entranceMessageId, canRetryRowId, canBranchRowId, canContinue)}
           />
         ))}
       </Fragment>
@@ -389,9 +476,33 @@ export const Transcript = forwardRef<TranscriptHandle, TranscriptProps>(function
     () => ({ render: renderRows, held: new WeakMap<Segment, ReactElement>() }),
     [renderRows],
   );
+  // The hover shield (`use-transcript-scroll.ts`): first in the content so it
+  // sits at the top of the scrolled document, hidden until a fling. One
+  // element for the life of the transcript.
+  const shield = useMemo(
+    () => <div key="scroll-shield" ref={shieldRef} className="atlas-scroll-shield" hidden />,
+    [],
+  );
   const rowViews = useMemo(() => {
-    const views: ReactElement[] = [];
-    for (const segment of projection.segments) {
+    const views: ReactElement[] = [shield];
+    const segments = projection.segments;
+    for (let s = 0; s < segments.length; s++) {
+      // Turns the window swapped out: one spacer as tall as they measured.
+      const gap = gapAt.get(s);
+      if (gap) {
+        views.push(
+          <div
+            key={gap.key}
+            className="atlas-row-gap"
+            data-gap={gap.key}
+            aria-hidden
+            style={{ height: gap.height }}
+          />,
+        );
+        s = gap.to - 1;
+        continue;
+      }
+      const segment = segments[s];
       const end = segment.offset + segment.rows.length;
       // Above the window, or a turn that projected to nothing.
       if (end <= safeStart || segment.rows.length === 0) continue;
@@ -409,7 +520,7 @@ export const Transcript = forwardRef<TranscriptHandle, TranscriptProps>(function
       views.push(view);
     }
     return views;
-  }, [projection, safeStart, segmentViews]);
+  }, [projection, safeStart, segmentViews, gapAt, shield]);
 
   return (
     <DesktopTranscriptProvider
@@ -444,7 +555,8 @@ export const Transcript = forwardRef<TranscriptHandle, TranscriptProps>(function
               scrollRef={scrollRef}
               contentRef={contentRef}
               topInset={topInset}
-              windowStart={safeStart}
+              windowKey={windowKey}
+              rowsInGap={rowsInGap}
               getPreview={getTurnRailPreview}
               onSelect={selectTurnRailItem}
             />

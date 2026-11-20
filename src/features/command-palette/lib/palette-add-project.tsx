@@ -2,9 +2,12 @@
 //
 //   - New project: the field is the name; it goes in `~/.atlas/projects`,
 //     with a Git repository, optionally published as a private GitHub one.
-//   - Local folder: the field is a path (`~/…`) and the list is its folders.
-//     Enter steps into one, ⌘Enter adds the folder typed; "Open in Finder"
-//     is the native picker.
+//   - Local folder: first the locations — home and the drives or volumes
+//     (Windows drive letters, macOS `/Volumes`, Linux `/media`, `/mnt`),
+//     which `..` from home never reaches. Picking one opens the folder
+//     browser there: the field is a path (`~/…`) and the list is its
+//     folders. Enter steps into one, ⌘Enter adds the folder typed, `..` at a
+//     root goes back to the locations; "Open in Finder" is the native picker.
 //   - Git URL / GitHub repository: the field is the URL or `owner/repo`;
 //     Enter clones it into `~/.atlas/projects` and adds it.
 //   - GitHub setup: when the GitHub CLI is missing or signed out, the GitHub
@@ -22,13 +25,18 @@ import {
   ArrowLeftToLine,
   Check,
   CornerLeftUp,
+  Disc,
   Download,
   Folder,
   FolderGit2,
   FolderPlus,
+  HardDrive,
+  House,
   Link,
   LogIn,
+  Network,
   RefreshCw,
+  Usb,
   type LucideIcon,
 } from "lucide-react";
 import { GithubIcon } from "@/components/brand-marks";
@@ -39,6 +47,8 @@ import { pickAndAddProject } from "@/features/projects/lib/pick-project";
 import {
   projectSources,
   type BrowseListing,
+  type BrowseLocation,
+  type LocationKind,
   type ProjectSourcesInfo,
 } from "@/features/projects/lib/project-sources-api";
 import { openCommandTerminal } from "@/features/terminal/lib/open-command-terminal";
@@ -51,6 +61,7 @@ import { Icon } from "@tryatlas/design";
 
 export const ADD_PROJECT_VIEW = "add-project";
 export const NEW_PROJECT_VIEW = "add-project:new";
+const LOCATIONS_VIEW = "add-project:locations";
 const BROWSE_VIEW = "add-project:browse";
 const GIT_URL_VIEW = "add-project:git-url";
 const GITHUB_VIEW = "add-project:github";
@@ -71,6 +82,9 @@ export interface AddProjectStep {
   footerTrailing?: ReactNode;
   onSubmit?: (opts: { mod: boolean }) => void;
   disabled?: boolean;
+  /** The field searches the rows (sources, locations), rather than being the
+   *  step's own input (a path, a name, a URL). */
+  filtersRows?: boolean;
 }
 
 const icon = (glyph: LucideIcon) => <Icon icon={glyph} size="lg" />;
@@ -117,22 +131,60 @@ function Checkbox({ checked }: { checked: boolean }) {
   );
 }
 
-/** `~/a/b/` → its folder part (`~/a/b/`) and the name being typed after it. */
-function splitBrowseQuery(query: string): { dir: string; filter: string } {
-  const slash = query.lastIndexOf("/");
+/** The last path separator in `path`: `/`, or `\` as Windows paths type it. */
+function lastSeparator(path: string): number {
+  return Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+}
+
+/** `~/a/b/` (or `F:\a\b\`) → its folder part (`~/a/b/`) and the name being
+ *  typed after it. A bare drive (`F:`) is that drive's root. */
+export function splitBrowseQuery(query: string): { dir: string; filter: string } {
+  if (/^[a-zA-Z]:$/.test(query)) return { dir: `${query}\\`, filter: "" };
+  const slash = lastSeparator(query);
   if (slash === -1) return { dir: "~/", filter: query };
   return { dir: query.slice(0, slash + 1), filter: query.slice(slash + 1) };
 }
 
 /** The folder above `dir` (`~/a/b/` → `~/a/`), in the form the user typed. */
-function parentQuery(dir: string, listing: BrowseListing | null): string | null {
-  const trimmed = dir.replace(/\/+$/, "");
+export function parentQuery(dir: string, listing: BrowseListing | null): string | null {
+  const trimmed = dir.replace(/[\\/]+$/, "");
   if (trimmed === "~" || trimmed === "") {
-    return listing?.parent ? `${listing.parent.replace(/\/+$/, "")}/` : null;
+    return listing?.parent ? `${listing.parent.replace(/[\\/]+$/, "")}/` : null;
   }
-  const cut = trimmed.lastIndexOf("/");
+  const cut = lastSeparator(trimmed);
   return cut === -1 ? null : trimmed.slice(0, cut + 1) || "/";
 }
+
+/** What ⌘Enter adds: the folder the field names. A name typed after the last
+ *  separator is part of it, so a folder that is not listed is refused when it
+ *  is resolved rather than swapped for the folder being listed. */
+export function browseTarget(query: string): string {
+  const { dir, filter } = splitBrowseQuery(query);
+  return filter ? `${dir}${filter}` : dir;
+}
+
+/** Where the folder browser opens for a location, in the form it is typed. */
+export function locationQuery(location: BrowseLocation): string {
+  return location.kind === "home" ? "~/" : location.path;
+}
+
+const LOCATION_ICON: Record<LocationKind, LucideIcon> = {
+  home: House,
+  root: HardDrive,
+  drive: HardDrive,
+  removable: Usb,
+  network: Network,
+  optical: Disc,
+};
+
+const LOCATION_LABEL: Record<LocationKind, string> = {
+  home: "Your home folder",
+  root: "The filesystem root",
+  drive: "Local disk",
+  removable: "Removable",
+  network: "Network drive",
+  optical: "Optical drive",
+};
 
 export function useAddProjectFlow(input: {
   /** The view on screen (its `value`). */
@@ -152,6 +204,8 @@ export function useAddProjectFlow(input: {
   const [githubPrivate, setGithubPrivate] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [listing, setListing] = useState<BrowseListing | null>(null);
+  // `null` until the first answer, so "none found" is not shown as "finding".
+  const [locations, setLocations] = useState<BrowseLocation[] | null>(null);
 
   const refreshInfo = () => {
     setChecking(true);
@@ -189,6 +243,21 @@ export function useAddProjectFlow(input: {
       live = false;
     };
   }, [browseDir]);
+
+  // Home and the drives, asked each time the location list opens: a USB disk
+  // may have been plugged in since.
+  const choosingLocation = view === LOCATIONS_VIEW;
+  useEffect(() => {
+    if (!choosingLocation) return;
+    let live = true;
+    projectSources
+      .locations()
+      .then((next) => live && setLocations(next))
+      .catch(() => live && setLocations([]));
+    return () => {
+      live = false;
+    };
+  }, [choosingLocation]);
 
   const ghReady = info?.gh === "ready";
 
@@ -273,7 +342,7 @@ export function useAddProjectFlow(input: {
               "source:local",
               "Local folder",
               FolderPlus,
-              () => pushView({ value: BROWSE_VIEW, groups: [], initialQuery: "~/" }),
+              () => pushView({ value: LOCATIONS_VIEW, groups: [] }),
               { description: "Browse a folder on disk", keepOpen: true },
             ),
             action(
@@ -293,6 +362,7 @@ export function useAddProjectFlow(input: {
       placeholder: "Search sources…",
       emptyMessage: "No matching source.",
       footerActionLabel: "Select",
+      filtersRows: true,
     };
   };
 
@@ -370,15 +440,17 @@ export function useAddProjectFlow(input: {
         const bp = b.toLowerCase().startsWith(needle) ? 0 : 1;
         return ap - bp;
       });
-    // ⌘Enter adds the folder the field names: a typed name that is one of
-    // the listed folders, else the folder being listed.
-    const exact = folders.find((name) => name === filter);
-    const target = exact ? `${dir}${exact}` : dir;
-    const add = () => finishAdd(target);
+    const add = () => finishAdd(browseTarget(query));
     const items: CommandPaletteActionItem[] = [];
-    if (parent !== null && !filter) {
+    if (!filter) {
+      // Above a filesystem root is the location list, the step before this.
       items.push(
-        action("browse:..", "..", CornerLeftUp, () => setQuery(parent), { keepOpen: true }),
+        parent !== null
+          ? action("browse:..", "..", CornerLeftUp, () => setQuery(parent), { keepOpen: true })
+          : action("browse:..", "..", CornerLeftUp, popView, {
+              description: "Locations",
+              keepOpen: true,
+            }),
       );
     }
     for (const name of folders) {
@@ -394,24 +466,64 @@ export function useAddProjectFlow(input: {
       emptyMessage: listing ? "No folders here." : "That folder cannot be read.",
       footerActionLabel: "Open",
       endAddon: <StepAction label="Add" keys={`${MOD} Enter`} onRun={add} />,
-      footerTrailing: (
-        <button
-          type="button"
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={() => {
-            onClose();
-            void pickAndAddProject();
-          }}
-          className="cursor-pointer text-sm font-medium text-muted-foreground hover:text-foreground"
-        >
-          {isMac ? "Open in Finder" : "Open folder…"}
-        </button>
-      ),
+      footerTrailing: openFolderButton,
       onSubmit: ({ mod }) => {
         if (mod) add();
       },
     };
   };
+
+  /** "Local folder": home and the drives or volumes first; picking one opens
+   *  the folder browser there. */
+  const locationsStep = (): AddProjectStep => ({
+    groups: [
+      {
+        value: "locations",
+        label: "Locations",
+        items: (locations ?? []).map((location) =>
+          action(
+            `location:${location.path}`,
+            location.name,
+            LOCATION_ICON[location.kind],
+            () =>
+              pushView({ value: BROWSE_VIEW, groups: [], initialQuery: locationQuery(location) }),
+            {
+              description:
+                location.kind === "home"
+                  ? location.path
+                  : `${LOCATION_LABEL[location.kind]} · ${location.path}`,
+              searchTerms: [location.path],
+              keepOpen: true,
+            },
+          ),
+        ),
+      },
+    ],
+    placeholder: "Search locations…",
+    emptyMessage:
+      locations === null
+        ? "Finding drives…"
+        : locations.length > 0
+          ? "No matching location."
+          : "No locations found. Use the folder picker below.",
+    footerActionLabel: "Open",
+    footerTrailing: openFolderButton,
+    filtersRows: true,
+  });
+
+  const openFolderButton = (
+    <button
+      type="button"
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={() => {
+        onClose();
+        void pickAndAddProject();
+      }}
+      className="cursor-pointer text-sm font-medium text-muted-foreground hover:text-foreground"
+    >
+      {isMac ? "Open in Finder" : "Open folder…"}
+    </button>
+  );
 
   const finishAdd = (path: string) => {
     finish(`Adding ${path}…`, async () => {
@@ -517,6 +629,8 @@ export function useAddProjectFlow(input: {
         return sources();
       case NEW_PROJECT_VIEW:
         return newProject();
+      case LOCATIONS_VIEW:
+        return locationsStep();
       case BROWSE_VIEW:
         return browse();
       case GIT_URL_VIEW:

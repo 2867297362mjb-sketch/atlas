@@ -1134,3 +1134,50 @@ fn a_replay_ends_when_told_and_live_entries_after_it_are_timed() {
     assert!(thread.entry_time_approximate(1));
     assert!(!thread.entry_time_approximate(2));
 }
+
+/// An agent with no client message ids (every external ACP agent: only the
+/// native one takes Atlas's ids) that echoes the prompt back, as ACP allows,
+/// had the echo appended to the prompt: "fix the bugfix the bug" in the
+/// thread, the history and a reopened session (audit #5).
+#[tokio::test]
+async fn an_echoed_prompt_is_not_doubled_without_client_ids() {
+    let (mut thread, _events, _conn) = new_thread();
+
+    thread.push_user_prompt(None, vec![text_block("fix the bug")]);
+    thread
+        .handle_session_update(user_chunk("fix the bug", None))
+        .unwrap();
+
+    assert_eq!(user_messages(&thread), vec!["fix the bug"]);
+}
+
+/// The same echo streamed in pieces, as an agent streams anything.
+#[tokio::test]
+async fn an_echo_streamed_in_pieces_is_not_doubled() {
+    let (mut thread, _events, _conn) = new_thread();
+
+    thread.push_user_prompt(None, vec![text_block("fix the bug")]);
+    for piece in ["fix ", "the ", "bug"] {
+        thread
+            .handle_session_update(user_chunk(piece, None))
+            .unwrap();
+    }
+
+    assert_eq!(user_messages(&thread), vec!["fix the bug"]);
+}
+
+/// A turn may end with no output at all. The next prompt is a message of its
+/// own; it was glued onto the last one: "first promptsecond prompt"
+/// (audit #24).
+#[tokio::test]
+async fn a_prompt_after_a_silent_turn_is_its_own_message() {
+    let (mut thread, _events, _conn) = new_thread();
+
+    thread.push_user_prompt(None, vec![text_block("first prompt")]);
+    thread.push_user_prompt(None, vec![text_block("second prompt")]);
+
+    assert_eq!(
+        user_messages(&thread),
+        vec!["first prompt", "second prompt"]
+    );
+}

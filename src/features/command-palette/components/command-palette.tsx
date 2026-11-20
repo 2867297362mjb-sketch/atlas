@@ -602,9 +602,9 @@ function OpenCommandPalette(props: {
 
   const rootGroups = buildRootGroups({ actionItems, recentSessionItems, extraGroups });
   const activeGroups = addProjectStep?.groups ?? currentView?.groups ?? rootGroups;
-  // The flow's steps past the source list run on the field's text, not a
-  // search over their rows.
-  const filtersRows = !addProjectStep || currentView?.value === ADD_PROJECT_VIEW;
+  // The flow's steps search their rows (sources, locations) or run on the
+  // field's text (a path, a name, a URL), as each says.
+  const filtersRows = !addProjectStep || addProjectStep.filtersRows === true;
   const displayedGroups = filtersRows
     ? filterCommandPaletteGroups({
         activeGroups,

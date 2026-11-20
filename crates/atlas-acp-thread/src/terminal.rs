@@ -346,8 +346,8 @@ pub enum TerminalAppend {
 
 /// Killing the child on drop is the only thing that covers an ABRUPT teardown.
 ///
-/// The tidy path is already safe — `terminal/release` kills before it drops
-/// (`atlas-agent-servers/src/handlers.rs`) — but a session closed with a build
+/// The tidy path is already safe — `terminal/release` kills before it lets go
+/// ([`TerminalRegistry::release`]) — but a session closed with a build
 /// still running never reaches it: `close_session` drops the last
 /// `AcpThreadHandle`, which drops the `TerminalRegistry`, which drops us. And
 /// nothing below here saves it. `portable-pty`'s unix child is a plain
@@ -390,6 +390,19 @@ pub fn exit_status_from_command(exit: CommandExit) -> acp::TerminalExitStatus {
 #[derive(Default)]
 pub struct TerminalRegistry {
     terminals: IndexMap<acp::TerminalId, AcpTerminal>,
+    /// Terminals the agent released while a tool call was showing them.
+    ///
+    /// ACP: after `terminal/release` the id "can no longer be used with other
+    /// `terminal/*` methods, but tool calls that already contain it, continue
+    /// to display its output". So a released terminal leaves `terminals` —
+    /// [`Self::get`] and everything that answers the agent stop finding it —
+    /// and is kept here, killed, for [`Self::shown`] to read (#27). Dropping
+    /// it instead blanked the output of the very tool call that ran it.
+    ///
+    /// Uncapped for the reason `terminals` is, and only ever holds terminals
+    /// a tool call shows — the rest are dropped on release — so it costs what
+    /// the transcript already shows.
+    released: IndexMap<acp::TerminalId, AcpTerminal>,
     /// Insertion-ordered so eviction can be oldest-first. A `HashMap` would
     /// leave "which id has been waiting longest" unanswerable, and the id that
     /// has waited longest is exactly the one least likely to ever be claimed.
@@ -437,6 +450,32 @@ impl TerminalRegistry {
         self.take_pending_output(id);
         self.pending_exit.shift_remove(id);
         self.terminals.shift_remove(id)
+    }
+
+    /// A terminal as a tool call shows it: one still in use, or one the agent
+    /// released while a tool call was showing it. Only for display — `get` is
+    /// the lookup for anything that answers the agent, and a released id
+    /// names no terminal there.
+    pub fn shown(&self, id: &acp::TerminalId) -> Option<&AcpTerminal> {
+        self.terminals.get(id).or_else(|| self.released.get(id))
+    }
+
+    /// `terminal/release`: kill the command and retire the id, so no
+    /// `terminal/*` request can name it again. With `keep_shown`, what it
+    /// printed and how it ended stay readable through [`Self::shown`] for the
+    /// tool calls showing it. `false` when the id names no terminal in use.
+    pub fn release(&mut self, id: &acp::TerminalId, keep_shown: bool) -> bool {
+        let Some(terminal) = self.remove(id) else {
+            return false;
+        };
+        // A released terminal has nobody left to read its output, so a command
+        // still running would leak for the life of the connection. A
+        // display-only terminal has no process of ours, and its kill says so.
+        let _ = terminal.kill();
+        if keep_shown {
+            self.released.insert(id.clone(), terminal);
+        }
+        true
     }
 
     /// Take an id's parked chunks, keeping the byte accounting straight.
@@ -548,6 +587,10 @@ impl TerminalRegistry {
                     acp_terminal.set_exit_status(status);
                 }
 
+                // An agent's own ids can come round again (display-only
+                // terminals are named by the agent); the new terminal is the
+                // one the id shows from here on.
+                self.released.shift_remove(&terminal_id);
                 self.terminals.insert(terminal_id, acp_terminal);
             }
             TerminalProviderEvent::Output { terminal_id, data } => {

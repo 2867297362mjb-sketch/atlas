@@ -3,6 +3,7 @@ import { pluginIdForAgent } from "@/types/agent";
 import { useAppStore } from "@/features/app/stores/app-store";
 import { useChatStore } from "../stores/chat-store";
 import { agents, ensureAgent } from "./agents-api";
+import { resumeThread, threadHistory } from "./history-api";
 import { projectPathForTab } from "./tab-project";
 import { applyModeOnResume, holdUnrestoredMode } from "./resume-mode";
 import { snapshotMessageToWire } from "./snapshot-message";
@@ -13,9 +14,10 @@ import { snapshotMessageToWire } from "./snapshot-message";
 const rebindsInFlight = new Map<string, Promise<boolean>>();
 
 /** Rebind a session whose agent process died: respawn the plugin (its spawn
- *  cache was reset on disconnect) and RESUME the same session id where the
- *  transcript kind supports it (Claude JSONL, the native engine's own) — falling
- *  back to a fresh session if the resume fails. Never runs unprompted: only
+ *  cache was reset on disconnect) and reopen the same session id with
+ *  whichever of `session/load` / `session/resume` the agent supports
+ *  (`reopen`) — starting over, and saying so in the chat, only when it can do
+ *  neither. Never runs unprompted: only
  *  the next Send or the explicit Restart affordance calls this (no silent
  *  auto-restart loops). */
 export function rebindDisconnectedSession(tabId: string): Promise<boolean> {
@@ -43,21 +45,25 @@ async function respawnAndRebind(tabId: string): Promise<boolean> {
       "/";
     let key: SessionKey;
     let loaded = false;
-    if (sess.acpSessionId) {
-      try {
-        key = await agents.loadSession(agent.agent_id, sess.acpSessionId, cwd);
-        loaded = true;
-      } catch (err) {
-        console.warn("resume after disconnect failed; starting fresh:", err);
-        key = (await agents.newSession(agent.agent_id, cwd)).key;
-      }
+    let startedOver = false;
+    const reopened = sess.acpSessionId
+      ? await reopen(agent.agent_id, sess.acpSessionId, cwd)
+      : null;
+    if (reopened) {
+      key = reopened.key;
+      loaded = reopened.replayed;
     } else {
       key = (await agents.newSession(agent.agent_id, cwd)).key;
+      // Said in the chat, not only logged: the conversation above stays on
+      // screen, and the agent now remembers none of it.
+      startedOver = !!sess.acpSessionId;
     }
-    // `session/load` replays the whole conversation, and each replayed
-    // message arrives as an append — onto a tab that is still showing it, so
-    // every earlier message came back a second time. Repaint from the
-    // reloaded thread, as opening a history row does (`resume-session.ts`).
+    // `session/load` replays the whole conversation into the thread. The
+    // stream does not announce that replay (`attach_settled` in Rust): it is
+    // history, and this repaint from the reloaded thread is how the tab takes
+    // it, as opening a history row does (`resume-session.ts`). Each replayed
+    // message used to arrive as an append as well, onto a tab still showing
+    // it, so every earlier message came back a second time.
     // An agent that resumed without replaying hands back an empty thread;
     // then what is on screen is the record, and stays.
     if (loaded) {
@@ -93,9 +99,49 @@ async function respawnAndRebind(tabId: string): Promise<boolean> {
     const actions = useChatStore.getState().actions;
     actions.setAcpBinding(tabId, agent.agent_id, key.session_id, cwd);
     actions.setDisconnected(tabId, false);
+    if (startedOver) {
+      actions.addMessage(
+        tabId,
+        "assistant",
+        "(the agent could not reopen this conversation after it restarted — it starts over from here and does not remember the messages above)",
+      );
+    }
     return true;
   } catch (err) {
     console.warn("agent restart failed:", err);
     return false;
+  }
+}
+
+/**
+ * Open `sessionId` on the restarted agent, keeping its context: through its
+ * thread when it has one, which the backend opens with `session/load` or
+ * `session/resume`, whichever the agent advertised (as opening a history row
+ * does), else with `session/load`. Null when neither can: the caller starts
+ * over, and says so.
+ *
+ * `session/load` alone, with a quiet new session on any failure, left a
+ * resume-only agent (or a load that timed out) with the old conversation on
+ * screen and none of it in the agent's context (audit #4).
+ */
+async function reopen(
+  agentId: string,
+  sessionId: string,
+  cwd: string,
+): Promise<{ key: SessionKey; replayed: boolean } | null> {
+  try {
+    const row = (await threadHistory()).find((r) => r.sessionId === sessionId);
+    if (row) {
+      const resumed = await resumeThread(row.threadId);
+      return { key: resumed.key, replayed: !resumed.resumedWithoutHistory };
+    }
+  } catch (err) {
+    console.warn("reopening the session through its thread failed:", err);
+  }
+  try {
+    return { key: await agents.loadSession(agentId, sessionId, cwd), replayed: true };
+  } catch (err) {
+    console.warn("reopening the session failed; starting over:", err);
+    return null;
   }
 }
