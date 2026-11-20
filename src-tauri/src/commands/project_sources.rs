@@ -188,6 +188,196 @@ pub async fn project_browse(path: String) -> Result<BrowseListing, String> {
     .map_err(|e| e.to_string())?
 }
 
+/// What a place the folder browser can start from is, for its icon and label.
+/// Each OS builds only some of these (`Root` is Unix's, `Network` and
+/// `Optical` are Windows's), so the rest are dead code on any one target.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub enum LocationKind {
+    Home,
+    /// The filesystem root (`/`). Windows has none; its roots are drives.
+    Root,
+    /// A fixed disk: a Windows drive letter, or a volume macOS or Linux mounts.
+    Drive,
+    Removable,
+    Network,
+    Optical,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowseLocation {
+    pub name: String,
+    /// Absolute, ending in a separator, so the palette can list it as typed.
+    pub path: String,
+    pub kind: LocationKind,
+}
+
+/// The places the folder browser offers above a folder's contents: home, then
+/// the disks and volumes, which `..` cannot reach from home (`F:\` is not
+/// above `C:\Users\you`, nor `/Volumes/USB` above `/Users/you`).
+#[tauri::command]
+pub async fn project_locations() -> Result<Vec<BrowseLocation>, String> {
+    tokio::task::spawn_blocking(|| {
+        let mut out = Vec::new();
+        if let Some(home) = dirs::home_dir() {
+            out.push(BrowseLocation {
+                name: "Home".into(),
+                path: with_separator(&home),
+                kind: LocationKind::Home,
+            });
+        }
+        out.extend(volumes());
+        out
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+fn with_separator(path: &Path) -> String {
+    let s = path.to_string_lossy().into_owned();
+    if s.ends_with(std::path::MAIN_SEPARATOR) {
+        s
+    } else {
+        format!("{s}{}", std::path::MAIN_SEPARATOR)
+    }
+}
+
+/// The drive letters set in a `GetLogicalDrives` mask (bit 0 is `A:`).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn drive_letters(mask: u32) -> impl Iterator<Item = char> {
+    (0..26u8)
+        .filter(move |bit| mask & (1 << bit) != 0)
+        .map(|bit| char::from(b'A' + bit))
+}
+
+/// Every drive letter, typed from `GetDriveTypeW`. Neither call touches the
+/// disk, so a disconnected network drive or an empty card reader costs
+/// nothing here; it fails only when it is listed.
+#[cfg(windows)]
+fn volumes() -> Vec<BrowseLocation> {
+    use windows::core::HSTRING;
+    use windows::Win32::Storage::FileSystem::{GetDriveTypeW, GetLogicalDrives};
+    // `GetDriveTypeW` answers, as the `DRIVE_*` constants.
+    const NO_ROOT_DIR: u32 = 1;
+    const REMOVABLE: u32 = 2;
+    const REMOTE: u32 = 4;
+    const CDROM: u32 = 5;
+
+    // SAFETY: no arguments; answers a bitmask, 0 on failure.
+    let mask = unsafe { GetLogicalDrives() };
+    drive_letters(mask)
+        .filter_map(|letter| {
+            let path = format!("{letter}:\\");
+            // SAFETY: a valid, NUL-terminated root path that outlives the call.
+            let kind = match unsafe { GetDriveTypeW(&HSTRING::from(path.as_str())) } {
+                NO_ROOT_DIR => return None,
+                REMOVABLE => LocationKind::Removable,
+                REMOTE => LocationKind::Network,
+                CDROM => LocationKind::Optical,
+                _ => LocationKind::Drive,
+            };
+            Some(BrowseLocation {
+                name: format!("{letter}:"),
+                path,
+                kind,
+            })
+        })
+        .collect()
+}
+
+/// `/`, then what macOS mounts in `/Volumes` (the startup disk is a symlink
+/// there to `/`, already offered).
+#[cfg(target_os = "macos")]
+fn volumes() -> Vec<BrowseLocation> {
+    let mut out = vec![root()];
+    out.extend(
+        subfolders(Path::new("/Volumes"))
+            .into_iter()
+            .filter(|path| !path.is_symlink())
+            .map(|path| volume(&path, LocationKind::Drive)),
+    );
+    out
+}
+
+/// `/`, then the folders the common desktops and tools mount disks in:
+/// udisks2 (`/run/media/$USER`, `/media/$USER`), older or hand-made mounts
+/// (`/media/*`, `/mnt/*`, which is also WSL's `/mnt/c`).
+#[cfg(all(unix, not(target_os = "macos")))]
+fn volumes() -> Vec<BrowseLocation> {
+    let user = std::env::var("USER").ok().or_else(|| {
+        dirs::home_dir().and_then(|h| h.file_name().map(|n| n.to_string_lossy().into_owned()))
+    });
+    let mut parents = Vec::new();
+    if let Some(user) = &user {
+        parents.push((
+            PathBuf::from("/run/media").join(user),
+            LocationKind::Removable,
+        ));
+        parents.push((PathBuf::from("/media").join(user), LocationKind::Removable));
+    }
+    parents.push((PathBuf::from("/media"), LocationKind::Removable));
+    parents.push((PathBuf::from("/mnt"), LocationKind::Drive));
+
+    let mut out = vec![root()];
+    let mut seen = std::collections::HashSet::new();
+    for (parent, kind) in parents {
+        for path in subfolders(&parent) {
+            // `/media/$USER` is a parent above, not a disk.
+            let is_user_dir = parent == Path::new("/media")
+                && user
+                    .as_deref()
+                    .is_some_and(|u| path.file_name() == Some(OsStr::new(u)));
+            if !is_user_dir && seen.insert(path.clone()) {
+                out.push(volume(&path, kind));
+            }
+        }
+    }
+    out
+}
+
+#[cfg(not(any(windows, unix)))]
+fn volumes() -> Vec<BrowseLocation> {
+    Vec::new()
+}
+
+#[cfg(unix)]
+fn root() -> BrowseLocation {
+    BrowseLocation {
+        name: "/".into(),
+        path: "/".into(),
+        kind: LocationKind::Root,
+    }
+}
+
+#[cfg(unix)]
+fn volume(path: &Path, kind: LocationKind) -> BrowseLocation {
+    BrowseLocation {
+        name: path.file_name().map_or_else(
+            || path.to_string_lossy().into_owned(),
+            |n| n.to_string_lossy().into_owned(),
+        ),
+        path: with_separator(path),
+        kind,
+    }
+}
+
+/// The folders directly in `dir`, sorted; none when it cannot be read.
+#[cfg(unix)]
+fn subfolders(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut out: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .collect();
+    out.sort();
+    out
+}
+
 fn git(dir: &Path, args: &[&str]) -> Result<(), String> {
     let out = atlas_git::GitCommand::new(dir, args)
         .output()
@@ -390,6 +580,26 @@ mod tests {
         );
         assert_eq!(github_clone_url("a/b/c"), None);
         assert_eq!(github_clone_url("a b/c"), None);
+    }
+
+    #[test]
+    fn drive_letters_follow_the_mask() {
+        // A:, C:, F:, Z:
+        let mask = 1 | (1 << 2) | (1 << 5) | (1 << 25);
+        assert_eq!(drive_letters(mask).collect::<String>(), "ACFZ");
+        assert_eq!(drive_letters(0).count(), 0);
+    }
+
+    #[test]
+    fn locations_start_at_home() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let locations = rt.block_on(project_locations()).unwrap();
+        assert_eq!(locations.first().map(|l| l.kind), Some(LocationKind::Home));
+        assert!(locations
+            .iter()
+            .all(|l| l.path.ends_with(std::path::MAIN_SEPARATOR)));
     }
 
     #[test]
