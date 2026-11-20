@@ -873,6 +873,7 @@ pub fn run() {
             commands::project_icon::project_icon,
             commands::project_sources::project_sources_info,
             commands::project_sources::project_browse,
+            commands::project_sources::project_locations,
             commands::project_sources::project_create,
             commands::project_sources::project_clone,
             commands::project_settings::get_project_settings,
