@@ -239,7 +239,7 @@ Nobody bumps versions or writes the changelog by hand. A bot, [release-please](h
 1. Every push to `main` (a promotion, a hotfix) updates the release PR: the next version number (from the titles, see the table above) and the changelog.
 2. When you want to ship, review the release PR and merge it. That is the whole decision.
 3. Merging it tags `alpha-X.Y.Z`, publishes the GitHub release with the changelog as its notes, and `.github/workflows/release.yml` builds the installers and attaches them.
-4. One step is still by hand: point the PostHog remote-config keys at the new installers (see **Releasing** below). That is what makes installed apps offer the update, so it happens only after someone has tried the build.
+4. The last job, `announce`, points the PostHog remote-config keys at the new installers (see **Releasing** below). That is what makes installed apps offer the update, so it waits for an approval on the `release` environment: try the build from the GitHub release first, then approve.
 
 **Every release gets a new number.** The auto-updater only offers a version strictly newer than the installed one, so two builds shipped as the same number can't update into each other.
 
@@ -295,9 +295,9 @@ Sometimes a shipped version needs a fix while `dev` holds work that isn't ready 
               │
      ┌────────┼──────────────────────┬──────────────────────┐
      ▼        ▼                      ▼                      ▼
-   Linux    macOS DMGs             Windows MSI             (by hand, after a try-out)
-   always   when MACOS_RELEASE     when WINDOWS_RELEASE    PostHog remote config:
-            = true                 = true                  version + installer URLs
+   Linux    macOS DMGs             Windows MSI             then, after an approval:
+   always   when MACOS_RELEASE     when WINDOWS_RELEASE    PostHog remote config
+            = true                 = true                  (version + installer URLs)
 ```
 
 - **Linux** (`release-linux.yml`): x86-64 and aarch64 on Ubuntu 22.04 (the glibc floor). It packages a tarball, AppImage, deb, rpm and, on x86-64, an Arch package. It then **verifies** them with `scripts/verify-linux-release.sh`: the binary loads within the floor, every package installs and starts on clean Debian, Ubuntu, Fedora and Arch containers, and the GUI comes up under Xvfb. Only then does it attest, sign and attach them. A pull request that touches a release input runs the same build and verification without publishing.
@@ -305,7 +305,7 @@ Sometimes a shipped version needs a fix while `dev` holds work that isn't ready 
 - **Windows**: the x64 MSI from `bun run build:app:win`, unsigned for now, once `WINDOWS_RELEASE` is `true`.
 - Every build needs the `POSTHOG_KEY` secret. Without it the app has no telemetry key, and so no update checks.
 
-Then, by hand, after trying the build: set the PostHog remote-config payloads `version`, `uri_mac_arm`, `uri_mac_intel`, `uri_win_intel` (direct installer URLs), and `uri_linux_x86_64` and `uri_linux_aarch64` (the release page). Run the by-hand matrix in `docs/qa/linux-smoke-matrix.md`. Supported distros, what each package needs and how signing works are in `docs/reference/linux-support.md`.
+Then the `announce` job sets the PostHog remote-config payloads: `uri_mac_arm`, `uri_mac_intel`, `uri_win_intel` (direct installer URLs), `uri_linux_x86_64` and `uri_linux_aarch64` (the release page), and `version` last. It moves a platform's key only when that platform's build succeeded, and it waits for an approval on the `release` environment, so install the build from the GitHub release before approving it. It needs the `POSTHOG_PERSONAL_API_KEY` secret (a PostHog personal API key with `feature_flag:write`) and the `POSTHOG_PROJECT_ID` variable, plus `POSTHOG_API_HOST` when the project is not on `https://us.posthog.com`; without `POSTHOG_PROJECT_ID` it is skipped and the keys are set by hand. Run the by-hand matrix in `docs/qa/linux-smoke-matrix.md`. Supported distros, what each package needs and how signing works are in `docs/reference/linux-support.md`.
 
 ### Versioning
 
