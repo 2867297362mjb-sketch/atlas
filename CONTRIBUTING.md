@@ -75,7 +75,7 @@ bun run doctor   # checks your toolchain against the pins, with a fix hint for e
 bun run dev:app
 ```
 
-`bun run doctor` is quick and changes nothing: it compares Node, Bun and Rust with `mise.toml` and `rust-toolchain.toml`, checks the Xcode tools and git hooks, and warns about optional pieces (Docker, `cargo-sweep`) and an oversized `target/`. `dev:app` also runs `scripts/target-gc.sh` before it starts, so `target/` is tidied without `ci:local`; it only acts after a Rust upgrade or once a week, and a failure never blocks dev.
+`bun run doctor` is quick and changes nothing: it compares Node, Bun and Rust with `mise.toml` and `rust-toolchain.toml`, checks the Xcode tools and git hooks, and warns about optional pieces (`cargo-sweep`, and Docker when `ATLAS_CI_LINUX` asks for the container) and an oversized `target/`. `dev:app` also runs `scripts/target-gc.sh` before it starts, so `target/` is tidied without `ci:local`; it only acts after a Rust upgrade or once a week, and a failure never blocks dev.
 
 The repo commits shared VS Code settings in `.vscode/` (oxc as the formatter with format on save, rust-analyzer on its own target dir so it does not fight `dev:app` for the build lock) and recommends the matching extensions; `.editorconfig` covers other editors.
 
@@ -274,14 +274,14 @@ Sometimes a shipped version needs a fix while `dev` holds work that isn't ready 
 
 ### What lives where
 
-| Name                    | What it is                                                     | Lives for              |
-| ----------------------- | -------------------------------------------------------------- | ---------------------- |
-| `dev`                   | The integration branch: every PR lands here                    | forever                |
-| `main`                  | Default branch: what's released, plus a promotion on its way   | forever                |
-| `<you>/<short-slug>`    | One issue's worth of work, PR into `dev`                       | days; deleted on merge |
-| `hotfix/<short-slug>`   | A fix for what's released, PR into `main`                      | days; deleted on merge |
-| `release-please--…`     | The bot's release PR branch; don't push to it                  | until the release      |
-| `alpha-X.Y.Z` (tag)     | A release                                                      | forever                |
+| Name                  | What it is                                                   | Lives for              |
+| --------------------- | ------------------------------------------------------------ | ---------------------- |
+| `dev`                 | The integration branch: every PR lands here                  | forever                |
+| `main`                | Default branch: what's released, plus a promotion on its way | forever                |
+| `<you>/<short-slug>`  | One issue's worth of work, PR into `dev`                     | days; deleted on merge |
+| `hotfix/<short-slug>` | A fix for what's released, PR into `main`                    | days; deleted on merge |
+| `release-please--…`   | The bot's release PR branch; don't push to it                | until the release      |
+| `alpha-X.Y.Z` (tag)   | A release                                                    | forever                |
 
 ## Releasing
 
@@ -345,23 +345,43 @@ bun run ci:local                      # the jobs CI would run for this branch
 bun run ci:local --all                # every job
 bun run ci:local atlas-git frontend   # chosen jobs, by the names CI shows
 bun run ci:local --list               # what it would run, without running it
-bun run ci:local --linux              # every Linux job in the container, not just the ones that need it
-bun run ci:local --native             # no container at all
+bun run ci:local --linux              # every Linux job in a Linux container
+bun run ci:local --native             # no container, whatever ATLAS_CI_LINUX says
 bun run ci:local --shell              # a shell in that container
+bun run ci:local --clean              # delete the container's images and volumes
 ```
 
-Jobs run on your machine, except:
+Every job runs on your machine, except:
 
 - **A job CI runs on macOS** (the app) is skipped on any other OS.
-- **The app's Linux and Windows compile checks** run only on their own OS. On a
-  Mac the Linux one goes to the container.
-- **The jobs that need Linux itself** go to a container built from
-  `scripts/ci-linux/Dockerfile`, with Rust, Bun and Node at the pinned versions.
-  That means `atlas-native-agent`, whose suites drive the engine's sandbox, and
-  the app's Linux compile check. On Linux the sandbox is bubblewrap, landlock
-  and seccomp; on a Mac it's seatbelt, which allows what landlock denies, so a
-  macOS run passes where Linux fails. The container starts only when the plan
-  includes one of these jobs.
+- **The app's Linux and Windows compile checks** run only on their own OS, or
+  in the Linux container when you ask for it.
+
+**The Linux container is opt-in.** Where Linux jobs run is a setting, never a
+guess from whether Docker happens to be running, so the same command always
+does the same thing. A flag sets it for one run; `ATLAS_CI_LINUX` sets it for
+your machine. Export it from your shell profile, or, if mise is activated in
+your shell, put it in the gitignored `mise.local.toml`, which mise loads on
+`cd`:
+
+```toml
+[env]
+ATLAS_CI_LINUX = "needed"
+```
+
+| `ATLAS_CI_LINUX` | Linux jobs                                                                   |
+| ---------------- | ---------------------------------------------------------------------------- |
+| `native` (unset) | all on your machine; the app's Linux compile check is skipped                |
+| `needed`         | the ones that need Linux itself in the container, only when the plan has one |
+| `all`            | every one in the container (what `--linux` does)                             |
+
+The jobs that need Linux itself are `atlas-native-agent`, whose suites drive
+the engine's sandbox, and the app's Linux compile check. On Linux the sandbox
+is bubblewrap, landlock and seccomp; on a Mac it's seatbelt, which allows what
+landlock denies, so a macOS run can pass where Linux fails. Under `native` the
+summary names those jobs, and CI is what checks their Linux behaviour. A mode
+that wants the container stops with an error when no runtime is running; it
+never falls back to your machine.
 
 Code that only _compiles_ on Linux needs no container. Crates flagged `cross` in
 `.github/ci-crates.json` have no C in their dependency tree. When their Linux
@@ -371,9 +391,8 @@ job runs on a Mac, each clippy step is repeated with
 for Windows. Both targets' standard libraries come from rust-toolchain.toml's
 `targets`, which `rustup toolchain install` adds.
 
-With no container runtime running, the jobs that need Linux run on your machine
-instead (the app's Linux check is skipped), and the summary names what went
-untested. The container's target dir, cargo registry and a Linux `node_modules`
+The container is built from `scripts/ci-linux/Dockerfile`, with Rust, Bun and
+Node at the pinned versions. Its target dir, cargo registry and a Linux `node_modules`
 live in Docker volumes, so only the first run is cold. Your checkout's own
 `node_modules` and `dist/` are left alone.
 
@@ -398,10 +417,11 @@ live in Docker volumes, so only the first run is cold. Your checkout's own
 
 Volumes are named `atlas-ci-<hash>-*`. The build cache (`-cache`) is one per
 clone, shared by its worktrees, so a new worktree starts warm; `-node-modules`
-and `-dist` are per checkout. `docker volume rm` them to start cold. A deleted
-worktree leaves its small per-checkout volumes behind, and a Rust or Bun pin
-change leaves the old `atlas-ci-linux:*` image; `ci:local` prints the
-`docker image rm` for that.
+and `-dist` are per checkout. Each volume is labelled with the checkout it
+belongs to, and a container run deletes the volumes of checkouts that no longer
+exist (a removed worktree). A new image, after a Rust or Bun pin change,
+replaces the old `atlas-ci-linux:*` one. `bun run ci:local --clean` deletes all
+of it, to start cold or to get the disk back.
 
 **Disk.** Stable cargo never deletes anything from `target/`; left alone it
 reached 67 GB, more than half of it unusable. `bun run ci:local` runs

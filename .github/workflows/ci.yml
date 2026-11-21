@@ -466,9 +466,9 @@ jobs:
     # `release-build: true` additionally builds the crate with its release
     # profile (see the step).
     #
-    # `sandbox: true` installs bubblewrap (see the step). `ci:local` also runs
-    # these crates in its Linux container by default, since only a Linux
-    # kernel can exercise the sandbox.
+    # `sandbox: true` installs bubblewrap (see the step). `ci:local` runs
+    # these crates in its Linux container when asked (ATLAS_CI_LINUX=needed,
+    # or --linux), since only a Linux kernel can exercise the sandbox.
     #
     # `cross: true` marks the crates whose dependency tree builds no C, so
     # they can be clippy'd for another OS from any machine (see the Windows

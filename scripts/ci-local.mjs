@@ -9,8 +9,13 @@
  *   bun run ci:local frontend atlas-git  just these jobs (names as CI shows them)
  *   bun run ci:local --list              the jobs, without running anything
  *   bun run ci:local --linux             every one of CI's Linux jobs in a Linux container
- *   bun run ci:local --native            no container, even for the jobs that need Linux
+ *   bun run ci:local --native            no container, whatever ATLAS_CI_LINUX says
  *   bun run ci:local --shell             a shell in that container
+ *   bun run ci:local --clean             delete the container's images and volumes
+ *
+ * Where the Linux jobs run (this machine or the container) is a setting, never
+ * a guess from whether Docker is up: scripts/ci-placement.mjs has the modes
+ * and the order they are read in. The default is this machine.
  *
  * The jobs and their commands are read out of `.github/workflows/ci.yml` at
  * run time, never copied: every `run:` step of every job, with the crate
@@ -39,11 +44,13 @@
  *     applying them here would rebuild your whole target/ under a second
  *     profile and lose incremental builds.
  *   - the OS, mostly. Jobs run on this machine, with three exceptions:
- *       - The jobs that need Linux itself (`needsLinux`) go to the Linux
- *         container below, when a Docker-compatible runtime is up.
+ *       - Linux jobs go to the Linux container below when the Linux mode
+ *         says so (scripts/ci-placement.mjs): the ones that need Linux
+ *         itself (`needsLinux`) under `needed`, all of them under `all`.
  *       - A job CI runs on macOS (the app) is skipped on any other OS.
  *       - The app's Linux and Windows compile checks (OS_BOUND) run only on
- *         their own OS; on a Mac the Linux one goes to the container.
+ *         their own OS; on a Mac the Linux one goes to the container when
+ *         the mode sends it there, and is skipped otherwise.
  *
  * Which Linux bugs a Mac can catch. Over five weeks of CI history (360 failed
  * Linux-runner jobs, Aug 28 - Oct 4 2026), almost every failure would have
@@ -61,19 +68,27 @@
  *     is bubblewrap, landlock and seccomp there and seatbelt on a Mac. The
  *     macOS sandbox lets through what landlock denies, so its tests passed
  *     here and failed in CI. No Mac-side check can stand in for a Linux
- *     kernel, so these jobs (`needsLinux`) run in the container, and only when
- *     the plan includes them: a change that does not reach the engine never
- *     starts it. The app's Linux compile check is in the same set, because
- *     src-tauri's GTK and WebKit headers exist only in a Linux userland.
+ *     kernel. These jobs (`needsLinux`) are the ones the container is for;
+ *     the app's Linux compile check is in the same set, because src-tauri's
+ *     GTK and WebKit headers exist only in a Linux userland. By default they
+ *     run here (the app's Linux check is skipped) and the summary names them,
+ *     leaving their Linux behaviour to CI. ATLAS_CI_LINUX=needed sends them
+ *     to the container, and only when the plan includes them: a change that
+ *     does not reach the engine never starts it.
  *
  * The container is built from scripts/ci-linux/Dockerfile. Its target dir
  * cannot share the host's, so it lives in a volume with the cargo registry;
  * later runs are incremental, and every worktree of a clone shares that one
  * volume, so a new worktree starts warm. A Linux `node_modules` and `dist/`
- * are kept per checkout. With no runtime running, the jobs that need Linux
- * run here instead (the app's Linux check is skipped) and the summary says
- * what that left untested. `--native` asks for that outright; `--linux` runs
- * every Linux job in the container, the full replica of CI's runners.
+ * are kept per checkout. A mode that wants the container and finds no runtime
+ * stops the run rather than falling back to this machine, so a container run
+ * never quietly becomes a native one.
+ *
+ * What the container leaves behind, it removes. Building a new image deletes
+ * the ones from older pins but the newest of them. Every volume carries the `atlas.ci-linux` label
+ * and the checkout it belongs to, and a container run deletes the volumes of
+ * checkouts that no longer exist (a removed worktree). `--clean` deletes all
+ * of it, unlabelled volumes from before the labels included.
  *
  *   - Any Docker-compatible runtime: `docker` by default, ATLAS_CI_DOCKER to
  *     name another (`podman`). OrbStack, Docker Desktop and Colima all serve
@@ -95,7 +110,7 @@
  *     the job ends (or the run is interrupted). Steps of one job share its
  *     filesystem, `/tmp` and leftover processes included, exactly as they
  *     share a runner in CI; nothing outside the volumes reaches the next job.
- *   - Two lanes. The jobs left on this machine (the macOS app, and by default
+ *   - Two lanes. The jobs left on this machine (the macOS app, and under `needed`
  *     every crate but the sandbox one) run alongside
  *     the container's, which still run one after another. The two never share
  *     a target dir, so neither waits on the other's cargo lock and nothing is
@@ -107,7 +122,7 @@
 
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { closeSync, openSync, readFileSync, writeSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -118,6 +133,7 @@ import {
   plan,
   readCrateMatrix,
 } from "./ci-affected.mjs";
+import { hostOs, linuxMode, needsLinux, placement } from "./ci-placement.mjs";
 
 if (typeof Bun === "undefined") {
   console.error("ci-local: run this with bun (`bun run ci:local`); it parses ci.yml with Bun.YAML");
@@ -126,17 +142,7 @@ if (typeof Bun === "undefined") {
 
 /** Jobs that plan or gate other jobs rather than check anything. */
 const NOT_CHECKS = new Set(["changes", "ci-ok"]);
-/** Jobs that compile for their runner's OS. Anywhere else they would repeat
- *  the macOS `app` job's check under the wrong `cfg`, so they run only there
- *  (or, for Linux, in the container). */
-const OS_BOUND = new Set(["app-linux", "app-windows"]);
-const HOST_OS = { darwin: "macos", win32: "windows" }[process.platform] ?? process.platform;
-
-/** Linux jobs no other OS can stand in for (see the docblock): the crates
- *  whose suites run the engine's sandbox, and the app's Linux compile. */
-function needsLinux(job) {
-  return Boolean(job.flags.sandbox) || job.id === "app-linux";
-}
+const HOST_OS = hostOs();
 
 /** The Rust target triple CI's runner for this job builds for. */
 function linuxTriple(job) {
@@ -332,22 +338,34 @@ function ensureImage() {
     console.error("ci-local: building the Linux image failed");
     process.exit(1);
   }
+  removeStaleImages(tag);
+  return tag;
+}
+
+/**
+ * After building `current`, delete the images from older pins, keeping the
+ * newest of them: a worktree on the previous pin (a branch from before a Rust
+ * bump) keeps its image instead of each checkout rebuilding over the other's.
+ * One `image rm` per image and never `-f`, so an image a running job uses is
+ * refused rather than pulled out from under it (Podman's `-f` would kill it).
+ */
+function removeStaleImages(current) {
+  const created = (t) =>
+    Date.parse(docker(["image", "inspect", "--format", "{{.Created}}", t]).stdout);
   const stale = docker([
     "image",
     "ls",
     "--filter",
-    "label=atlas.ci-linux=1",
+    `label=${LABEL}=1`,
     "--format",
     "{{.Repository}}:{{.Tag}}",
   ])
     .stdout.split("\n")
-    .filter((t) => t && t !== tag);
-  if (stale.length) {
-    console.log(
-      `ci-local: older images from previous pins remain: ${DOCKER} image rm ${stale.join(" ")}`,
-    );
-  }
-  return tag;
+    .filter((t) => t && t !== current)
+    .sort((a, b) => created(b) - created(a))
+    .slice(1);
+  const removed = stale.filter((t) => docker(["image", "rm", t]).status === 0);
+  if (removed.length) console.log(`ci-local: removed images from older pins: ${removed.join(" ")}`);
 }
 
 /** `docker info`, parsed, or null when no runtime answers. */
@@ -357,11 +375,83 @@ function runtimeInfo() {
   return { info: JSON.parse(r.stdout) };
 }
 
-/** Everything a `docker run` for this checkout needs; exits if no runtime. */
-function containerContext(probe = runtimeInfo()) {
+/** The label on every image and volume ci-local creates. */
+const LABEL = "atlas.ci-linux";
+/** The label naming the checkout a volume belongs to. */
+const OWNER_LABEL = `${LABEL}.checkout`;
+
+/**
+ * Create `name` labelled with the checkout it belongs to, unless it exists.
+ * `docker run -v` would create it too, but bare, and a bare volume outlives
+ * its checkout with nothing left to say whose it was.
+ */
+function ensureVolume(name, owner) {
+  if (docker(["volume", "inspect", name]).status === 0) return;
+  docker(["volume", "create", "--label", `${LABEL}=1`, "--label", `${OWNER_LABEL}=${owner}`, name]);
+}
+
+/** Delete the labelled volumes whose checkout is gone (a removed worktree). */
+function pruneOrphanVolumes() {
+  const names = docker(["volume", "ls", "-q", "--filter", `label=${OWNER_LABEL}`])
+    .stdout?.split("\n")
+    .filter(Boolean);
+  if (!names?.length) return;
+  // One at a time: a multi-name `volume inspect` fails whole on Podman when
+  // one volume vanished since the listing. Both answer the same JSON shape.
+  const owner = (name) => {
+    const r = docker(["volume", "inspect", name]);
+    return r.status === 0 ? JSON.parse(r.stdout)[0]?.Labels?.[OWNER_LABEL] : undefined;
+  };
+  const orphans = names.filter((n) => {
+    const checkout = owner(n);
+    return checkout !== undefined && !existsSync(checkout);
+  });
+  const removed = orphans.filter((n) => docker(["volume", "rm", n]).status === 0);
+  if (removed.length) {
+    console.log(`ci-local: removed volumes of deleted checkouts: ${removed.join(" ")}`);
+  }
+}
+
+/**
+ * `--clean`: every image and volume ci-local has made, from any checkout. The
+ * name match catches the volumes made before they carried the label.
+ */
+function clean() {
+  const probe = runtimeInfo();
+  if (!probe.info) {
+    console.error(`ci-local: --clean needs the container runtime running (\`${DOCKER}\`).`);
+    process.exit(2);
+  }
+  const list = (args) => docker(args).stdout?.split("\n").filter(Boolean) ?? [];
+  const images = list(["image", "ls", "-q", "--filter", `label=${LABEL}=1`]);
+  const volumes = [
+    ...new Set([
+      ...list(["volume", "ls", "-q", "--filter", `label=${LABEL}=1`]),
+      ...list(["volume", "ls", "-q"]).filter((v) => v.startsWith("atlas-ci-")),
+    ]),
+  ];
+  // Never `-f`: Podman's would first kill any container still using one.
+  // What a running job holds stays, and the count says so.
+  const gone = (kind, ids) => ids.filter((id) => docker([kind, "rm", id]).status === 0).length;
+  const img = gone("image", [...new Set(images)]);
+  const vol = gone("volume", volumes);
+  const kept = images.length - img + (volumes.length - vol);
+  console.log(
+    `ci-local: removed ${img} image(s) and ${vol} volume(s)` +
+      (kept ? `; ${kept} still in use by a running job, left alone` : ""),
+  );
+}
+
+/**
+ * Everything a `docker run` for this checkout needs. Exits if no runtime
+ * answers; `why` says what asked for the container, `hint` any way out.
+ */
+function containerContext(why, hint = "") {
+  const probe = runtimeInfo();
   if (!probe.info) {
     console.error(
-      `ci-local: the Linux container needs a running Docker-compatible runtime (\`${DOCKER}\`; ATLAS_CI_DOCKER names another).\n${probe.error}`,
+      `ci-local: ${why} needs a running Docker-compatible runtime (\`${DOCKER}\`; ATLAS_CI_DOCKER names another).` +
+        ` Start one${hint}.\n${probe.error}`,
     );
     process.exit(2);
   }
@@ -397,6 +487,10 @@ function containerContext(probe = runtimeInfo()) {
   const volFor = (p) => `atlas-ci-${createHash("sha256").update(p).digest("hex").slice(0, 8)}`;
   const mainCheckout = path.basename(gitCommon) === ".git" ? path.dirname(gitCommon) : gitCommon;
   const vol = volFor(REPO_ROOT);
+  pruneOrphanVolumes();
+  ensureVolume(`${volFor(mainCheckout)}-cache`, mainCheckout);
+  ensureVolume(`${vol}-node-modules`, REPO_ROOT);
+  ensureVolume(`${vol}-dist`, REPO_ROOT);
   mounts.push(
     `${volFor(mainCheckout)}-cache:/cache`,
     `${vol}-node-modules:${root}/node_modules`,
@@ -495,20 +589,6 @@ function run(cmd, args, opts) {
 }
 
 /**
- * Where a job runs: in the container, on this machine, or not at all. `mode`
- * is "all" (`--linux`), "native" (`--native`) or "auto"; `runtime` says
- * whether a container runtime answered.
- */
-function placement(job, mode, runtime) {
-  if (job.os === "linux" && HOST_OS !== "linux" && runtime) {
-    if (mode === "all" || (mode === "auto" && needsLinux(job))) return "container";
-  }
-  if (job.os === "linux" && HOST_OS === "linux" && mode === "all") return "container";
-  if ((job.os === "macos" || OS_BOUND.has(job.id)) && job.os !== HOST_OS) return "skip";
-  return "native";
-}
-
-/**
  * A Linux job run on another OS: after each clippy step, the same step for
  * CI's Linux target, for crates whose tree allows it (see the docblock).
  */
@@ -530,13 +610,16 @@ function withLinuxTargetClippy(job) {
 }
 
 async function main(argv) {
-  const mode = argv.includes("--linux") ? "all" : argv.includes("--native") ? "native" : "auto";
-  if (argv.includes("--linux") && argv.includes("--native")) {
-    console.error("ci-local: --linux and --native contradict each other");
+  let mode, source;
+  try {
+    ({ mode, source } = linuxMode(argv, process.env));
+  } catch (e) {
+    console.error(`ci-local: ${e.message}`);
     process.exit(2);
   }
+  if (argv.includes("--clean")) return clean();
   if (argv.includes("--shell")) {
-    const ctx = containerContext();
+    const ctx = containerContext("--shell");
     process.exit(spawnSync(DOCKER, shellArgs(ctx), { stdio: "inherit" }).status ?? 1);
   }
 
@@ -562,17 +645,13 @@ async function main(argv) {
   const rank = { frontend: 0, e2e: 1, crates: 1, "engine-dialect": 2, "app-linux": 3, app: 4 };
   jobs.sort((a, b) => (rank[a.id] ?? 1) - (rank[b.id] ?? 1));
 
-  // Ask for a runtime only when a job would use one, so a plan with nothing
-  // that needs Linux never touches Docker.
-  const wantsContainer = jobs.some(
-    (j) => placement(j, mode, true) === "container" && placement(j, mode, false) !== "container",
-  );
-  const probe = wantsContainer && mode !== "native" ? runtimeInfo() : null;
-  if (mode === "all" && wantsContainer && !probe?.info) containerContext(probe); // exits
+  // Placement is settled before Docker is asked anything, so a plan with no
+  // container job never touches it, and `--list` shows what a run will do.
   for (const j of jobs) {
-    j.where = placement(j, mode, Boolean(probe?.info));
+    j.where = placement(j, HOST_OS, mode);
     withLinuxTargetClippy(j);
   }
+  console.log(`ci-local: Linux mode \`${mode}\` (from ${source})`);
 
   if (argv.includes("--list")) {
     for (const j of jobs) {
@@ -592,7 +671,10 @@ async function main(argv) {
 
   const native = jobs.some((j) => j.where === "native");
   const ctx = jobs.some((j) => j.where === "container")
-    ? containerContext(probe ?? runtimeInfo())
+    ? containerContext(
+        `Linux mode \`${mode}\` (from ${source})`,
+        ", or run without the container (--native)",
+      )
     : null;
   if (native) checkVersions();
   if (ctx) {
@@ -648,13 +730,10 @@ async function main(argv) {
     (j) => HOST_OS !== "linux" && needsLinux(j) && j.where !== "container",
   );
   if (untested.length) {
-    const why =
-      mode === "native"
-        ? "--native was passed"
-        : `no container runtime answered (${probe?.error || "not running"})`;
     console.log(
-      `\n  Not run on Linux, because ${why}: ${untested.map((j) => j.name).join(", ")}. ` +
-        "Their Linux-only behaviour (the engine's sandbox, the app's GTK build) is untested until CI runs them.",
+      `\n  Not run on Linux (Linux mode \`${mode}\`, from ${source}): ${untested.map((j) => j.name).join(", ")}. ` +
+        "Their Linux-only behaviour (the engine's sandbox, the app's GTK build) is untested until CI runs them; " +
+        "ATLAS_CI_LINUX=needed or --linux runs them in the container.",
     );
   }
   process.exit(failures ? 1 : 0);

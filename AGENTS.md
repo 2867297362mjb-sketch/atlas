@@ -52,11 +52,9 @@ bun run test            # vitest, everything
 bun run test:contracts  # just tests/ — what the pre-commit hook runs
 cargo check --workspace
 bun run test:rust       # a SUBSET of CI; the script's header lists what it omits
-bun run ci:local        # what CI would run for this branch, as CI runs it (clippy included)
-                        # — the jobs that need Linux (the engine sandbox, the app's
-                        #   GTK build) go to a Docker container (any Docker-compatible
-                        #   runtime; CONTRIBUTING.md) when the plan includes them;
-                        #   --native skips it
+bun run ci:local        # what CI would run for this branch, as CI runs it (clippy included),
+                        # all on this machine. A Linux container is opt-in, never
+                        # automatic: --linux, or ATLAS_CI_LINUX (scripts/ci-placement.mjs)
 ```
 
 **How hard to test depends on where the work is:**
@@ -67,12 +65,11 @@ bun run ci:local        # what CI would run for this branch, as CI runs it (clip
   Never `--workspace`, never the container.
 - **Before submitting a PR — heavy. This is "done" for a PR.** `bun run ci:local`: every job CI would
   plan for the branch, natively, plus Linux-target clippy for the
-  crates flagged `cross`. Only the jobs that need Linux itself (the sandbox
-  crate's suites, the app's GTK compile) go to the container, and only when the
-  plan includes them. A red job here is a red job in CI; fix it before opening
-  the PR. The app's Windows compile check (`app-windows`) is the one job that
-  runs only in CI. `--linux` is the full container replica, for when you
-  suspect the Ubuntu userland itself. It plans against the merge base with
+  crates flagged `cross`. A red job here is a red job in CI; fix it before opening
+  the PR. Two things only CI judges: the app's Linux and Windows compile checks
+  (`app-linux`, `app-windows`), and the sandbox crate's Linux behaviour, whose
+  suites run here under seatbelt. Don't start Docker to cover them unless asked;
+  `--linux` is the container replica, for when you suspect Linux itself. It plans against the merge base with
   the branch's upstream, so a branch that tracks its own remote plans almost
   nothing: pass the PR's base, `bun run ci:local --base origin/dev`.
 
@@ -298,7 +295,7 @@ needs none, so a green macOS run proves nothing about it. On Linux the app binar
 that helper: `run_engine_helper_if_asked` dispatches the arg0 alias that
 `crates/atlas-native-agent/src/linux_sandbox.rs` installs. Lose either half and every
 sandboxed command is refused before it runs, with the turn ending normally. `bun run
-ci:local atlas-native-agent` runs that job in a container; CI's Linux jobs are the
+ci:local --linux atlas-native-agent` runs that job in a container; CI's Linux jobs are the
 authority, and `release-linux.yml`'s `Verify` is the authority on the shipped packages.
 Two more cost nothing on macOS and most of a core on Linux: inotify reports _reads_ as
 events, so every watcher drops `EventKind::Access` first (`src-tauri/src/fs_events.rs`,

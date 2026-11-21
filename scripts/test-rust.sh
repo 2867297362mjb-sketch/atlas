@@ -19,7 +19,7 @@ fi
 #   - atlas-kb-server, which is workspace-excluded and compiled at runtime by
 #     `knowledge_export`; CI tests it and builds its release profile.
 #   - Linux-only paths (the engine's bubblewrap sandbox in engine_turn.rs):
-#     a Mac run cannot exercise them. `bun run ci:local atlas-native-agent` runs
+#     a Mac run cannot exercise them. `bun run ci:local --linux atlas-native-agent` runs
 #     that job in a Linux container.
 #   - the frontend (`bun run test` and friends).
 #
