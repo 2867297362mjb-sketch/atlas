@@ -86,6 +86,13 @@ jobs:
   # docs/reference/linux-support.md, when 22.04 runners are retired.
   build-linux:
     name: Build Linux packages (${{ matrix.arch }})
+    # The dry run is for pull requests that change a release input. The
+    # promotion PR (head `dev`) and the back-merge PR (head `main`) only
+    # carry changes whose own PRs already ran it, and the release build runs
+    # the same build and `Verify` again before anything is published.
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.head_ref != 'dev' && github.head_ref != 'main')
     strategy:
       fail-fast: false
       matrix:
