@@ -32,6 +32,8 @@ Thumbs.db
 # Environment
 .env
 .env.local
+# Per-machine mise overrides (e.g. ATLAS_CI_LINUX; see CONTRIBUTING.md)
+mise.local.toml
 
 .claude/
 .atlas/

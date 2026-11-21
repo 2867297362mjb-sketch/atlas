@@ -2,7 +2,9 @@
 /**
  * `bun run doctor`: checks the machine against what the repo pins and prints one
  * line per check, with a fix hint when it fails. Exits non-zero only when a
- * REQUIRED check fails; optional ones (Docker, cargo-sweep, target/ size) warn.
+ * REQUIRED check fails; optional ones (cargo-sweep, target/ size, Docker) warn.
+ * Docker is checked only when ATLAS_CI_LINUX sends ci:local's Linux jobs to the
+ * container (scripts/ci-placement.mjs); by default nothing here needs it.
  *
  * Plain Node, no dependencies, every external command under a short timeout so
  * the whole run stays fast.
@@ -11,6 +13,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { linuxMode } from "./ci-placement.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (f) => readFileSync(join(root, f), "utf8");
@@ -91,12 +94,20 @@ check(
   "cargo install cargo-sweep",
 );
 
-check(
-  run("docker", ["info"], 3000) !== null,
-  false,
-  "docker reachable (optional: only for the Linux jobs in ci:local)",
-  "start Docker Desktop or OrbStack",
-);
+let ciLinux = null;
+try {
+  ciLinux = linuxMode([], process.env);
+} catch (e) {
+  report("warn", `ci:local: ${e.message}`, "unset it, or set one of the listed values");
+}
+if (ciLinux && ciLinux.mode !== "native") {
+  check(
+    run(process.env.ATLAS_CI_DOCKER || "docker", ["info"], 3000) !== null,
+    false,
+    `container runtime reachable (${ciLinux.source} sends ci:local's Linux jobs to a container)`,
+    "start Docker Desktop or OrbStack, or unset ATLAS_CI_LINUX",
+  );
+}
 
 const targetDir = join(root, "target");
 if (existsSync(targetDir)) {
