@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/tryatlas/atlas/compare/alpha-0.5.0...alpha-0.5.1) (2026-11-21)
+
+
+### Chores
+
+* release 0.5.1 ([fa78009](https://github.com/tryatlas/atlas/commit/fa780097172632f512cc09ba75d9c5811c5f6ce4))
+
 ## [0.5.0](https://github.com/tryatlas/atlas/compare/alpha-0.4.1...alpha-0.5.0) (2026-11-20)
 
 
