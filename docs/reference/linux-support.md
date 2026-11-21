@@ -31,7 +31,7 @@ binary does.
 | Debian                                   | 12             | deb                                |
 | Fedora                                   | 36             | rpm                                |
 | RHEL, Rocky, Alma                        | 10             | rpm                                |
-| Arch, Manjaro, EndeavourOS               | rolling        | Arch package or AUR `tryatlas-bin` |
+| Arch, Manjaro, EndeavourOS               | rolling        | Arch package                       |
 | anything else meeting the two conditions |                | AppImage or tarball                |
 
 Both x86-64 and aarch64 are built. Ubuntu 20.04, Debian 11 and RHEL 8 are not supported:
@@ -117,7 +117,7 @@ is set, that architecture is told nothing. The link is accepted only on the proj
 own GitHub releases or `tryatlas.cc`.
 
 How the update is then installed depends on the package: the deb, rpm and Arch package
-by downloading the new one (or `yay -S tryatlas-bin` for the AUR), the AppImage and
+by downloading the new one, the AppImage and
 tarball by replacing the file.
 
 ## Signing
@@ -132,18 +132,21 @@ Every release carries two kinds of integrity evidence.
   gh attestation verify tryatlas_0.4.2_amd64.deb --repo tryatlas/atlas
   ```
 
-- **GPG signatures**, once the release key exists. `scripts/linux/sign-release.sh` signs
-  each rpm in place and writes `SHA256SUMS.txt.asc`, a detached signature over the
-  checksum file, which covers every other artifact. The public key ships beside them as
-  `atlas-release-signing-key.asc`. Until the key exists, the publish job skips both and
-  leaves a warning titled "Linux release unsigned" on the run.
+- **GPG-signed rpms**, once the release key exists. `scripts/linux/sign-release.sh`
+  signs each rpm in place; the public key ships on the release as
+  `atlas-release-signing-key.asc`. Until the key exists, the publish job skips signing
+  and leaves a warning titled "Linux release unsigned" on the run.
 
-To check a download against the signed checksums:
+- **Checksums.** GitHub shows each release file's sha256 beside it on the release
+  page. The job still writes `SHA256SUMS.txt` and signs it (`SHA256SUMS.txt.asc`), but
+  keeps both, with the AUR `PKGBUILD`, as the run's `linux-checksums-and-pkgbuild`
+  artifact rather than on the release.
+
+To check an rpm's signature:
 
 ```bash
-gpg --import atlas-release-signing-key.asc
-gpg --verify SHA256SUMS.txt.asc SHA256SUMS.txt
-sha256sum --ignore-missing -c SHA256SUMS.txt
+sudo rpm --import atlas-release-signing-key.asc
+rpm --checksig tryatlas-0.5.0-1.x86_64.rpm
 ```
 
 A key published beside the files it signs proves only that they were not changed after

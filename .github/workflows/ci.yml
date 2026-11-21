@@ -103,12 +103,33 @@ jobs:
     # Skipping is cache-safe. sccache keys are content hashes, so an unchanged
     # crate's objects are already in the cache from the run that last built
     # it, and rust-cache keys off the lockfile, which is a global input.
+    #
+    # One more way to run nothing: the exact tree under test already passed
+    # (`tested` below). A release moves the same code through several refs,
+    # and each used to rerun the whole suite on it: the promotion PR (dev
+    # into main) and its merge commit on main, the release PR's merge commit
+    # (its tree is the release branch's, which a full manual run just
+    # passed), and the back-merge PR into dev and its push. With `tested`
+    # set, every planned job is skipped, `frontend` too, and `ci-ok` reports
+    # success. A run counts as proof only if it covered everything it was
+    # shown: a manual or scheduled run (always full), a push to main, or the
+    # promotion PR, the only pull request whose head is `dev` or `main`. A
+    # feature PR or a push to dev plans a subset, so it never counts for a
+    # tree. It does count for its own merge: the push that merges a PR is
+    # skipped when the PR's run tested that exact merge (see the step).
     name: plan
     runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      # To list this workflow's earlier runs.
+      actions: read
     outputs:
+      tested: ${{ steps.tested.outputs.tested }}
       app: ${{ steps.plan.outputs.app }}
       engine-dialect: ${{ steps.plan.outputs.engine-dialect }}
-      crates: ${{ steps.plan.outputs.crates }}
+      # Never empty: an unplanned run must still give the crates matrix an
+      # empty list, not a blank `fromJSON` input.
+      crates: ${{ steps.plan.outputs.crates || '[]' }}
       e2e: ${{ steps.plan.outputs.e2e }}
       cache-write: ${{ steps.cache.outputs.write }}
     steps:
@@ -116,8 +137,57 @@ jobs:
         with:
           # A push's `before` can be any number of commits back.
           fetch-depth: 0
+      - name: Already tested?
+        id: tested
+        if: github.event_name == 'push' || github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # HEAD is the commit under test: the pushed commit, or a PR's merge.
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          proofs="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?status=success&per_page=100" \
+            --jq '.workflow_runs[]
+              | select(.event == "workflow_dispatch" or .event == "schedule"
+                  or (.event == "push" and .head_branch == "main")
+                  or (.event == "pull_request" and (.head_branch == "dev" or .head_branch == "main")))
+              | "\(.head_sha) \(.html_url)"' || true)"
+          while read -r sha url; do
+            [ -n "$sha" ] || continue
+            if [ "$(git rev-parse -q --verify "$sha^{tree}" 2>/dev/null)" = "$tree" ]; then
+              echo "This tree already passed CI in $url; nothing to run."
+              echo "::notice title=CI skipped::This exact code already passed CI in $url"
+              echo "tested=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done <<<"$proofs"
+          # A merged pull request: its own CI run already tested this merge if
+          # it ran after the branch reached the commit it was merged onto
+          # (HEAD^1). That run planned the same diff a push run would
+          # (HEAD^1..HEAD), so repeating it proves nothing. If the branch moved
+          # after the PR's last run, the merge is new code (two green PRs can
+          # still break together), and this push runs as usual.
+          if [ "$GITHUB_EVENT_NAME" = push ] && git rev-parse -q --verify 'HEAD^2' >/dev/null; then
+            base="$(git rev-parse 'HEAD^1')"
+            head="$(git rev-parse 'HEAD^2')"
+            runs="repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs"
+            # When HEAD^1 reached the branch: the earliest push run on it.
+            based_at="$(gh api "$runs?head_sha=$base&event=push&per_page=100" \
+              --jq '[.workflow_runs[].created_at] | min // empty' || true)"
+            if [ -n "$based_at" ]; then
+              pr_run="$(gh api "$runs?head_sha=$head&event=pull_request&status=success&per_page=100" |
+                jq -r --arg t "$based_at" '[.workflow_runs[] | select(.created_at > $t)] | sort_by(.created_at) | last | .html_url // empty' || true)"
+              if [ -n "$pr_run" ]; then
+                echo "The pull request's CI run tested this exact merge: $pr_run"
+                echo "::notice title=CI skipped::This merge already passed in its pull request's run, $pr_run"
+                echo "tested=true" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            fi
+          fi
+          echo "No earlier run tested this tree; planning as usual."
       - name: Plan
         id: plan
+        if: steps.tested.outputs.tested != 'true'
         env:
           BEFORE: ${{ github.event.before }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
@@ -146,6 +216,9 @@ jobs:
 
   frontend:
     name: frontend
+    # Always runs, unless the plan found this exact tree already tested.
+    needs: changes
+    if: needs.changes.outputs.tested != 'true'
     runs-on: ubuntu-24.04-arm
     env:
       # tests/ci-affected.test.ts runs `cargo metadata`, which reads only
