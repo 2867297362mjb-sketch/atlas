@@ -434,6 +434,24 @@ jobs:
         with:
           subject-path: dist/artifacts/*
 
+      # The release page carries what a user downloads, plus the public key
+      # that checks the rpm signatures. The checksum file, its signature and
+      # the AUR PKGBUILD are kept as a workflow artifact instead: GitHub shows
+      # each asset's sha256 beside it, provenance covers every file, and no
+      # AUR package uses the PKGBUILD.
+      - name: Keep the checksums and the PKGBUILD off the release
+        run: |
+          mkdir -p dist/extras
+          mv dist/artifacts/SHA256SUMS.txt dist/artifacts/PKGBUILD-tryatlas-bin dist/extras/
+          if [ -f dist/artifacts/SHA256SUMS.txt.asc ]; then mv dist/artifacts/SHA256SUMS.txt.asc dist/extras/; fi
+          ls -lh dist/artifacts dist/extras
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-checksums-and-pkgbuild
+          path: dist/extras/
+          retention-days: 90
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
