@@ -156,10 +156,22 @@ jobs:
         if: always()
         run: security delete-keychain "$RUNNER_TEMP/release.keychain-db" || true
 
-  # The x64 MSI, unsigned (Atlas has no Windows code-signing certificate yet),
-  # exactly what `bun run build:app:win` makes locally. Off until the
-  # repository variable WINDOWS_RELEASE=true: without POSTHOG_KEY the
-  # build has no telemetry key, and so no updater.
+  # The x64 MSI, built exactly as `bun run build:app:win` makes it locally,
+  # then signed by SignPath Foundation. Off until the repository variable
+  # WINDOWS_RELEASE=true: without POSTHOG_KEY the build has no telemetry key,
+  # and so no updater.
+  #
+  # Signing. The built MSI is uploaded as a workflow artifact and submitted
+  # to SignPath; SignPath fetches it from GitHub itself, which is how it
+  # verifies the file came from this repository's build. The artifact
+  # configuration (`MSI_installer` in the SignPath project) signs Atlas.exe
+  # inside the MSI, then the MSI. Needs the SIGNPATH_API_TOKEN secret on the
+  # `release` environment (a SignPath CI user that is a submitter on the
+  # policy) and the SIGNPATH_ORGANIZATION_ID variable; without the variable
+  # the MSI ships unsigned. SIGNPATH_SIGNING_POLICY_SLUG picks the policy:
+  # `test-signing` (self-signed, SmartScreen still warns) until the release
+  # certificate is issued, then `release-signing`, where each request waits
+  # for a SignPath approver, hence the long timeout.
   windows:
     name: Windows MSI
     needs: release-please
@@ -168,9 +180,12 @@ jobs:
     environment: release
     permissions:
       contents: write
+      # SignPath downloads the unsigned artifact with this job's token.
+      actions: read
     env:
       TAG: ${{ needs.release-please.outputs.tag }}
       GH_TOKEN: ${{ github.token }}
+      SIGN: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -187,9 +202,38 @@ jobs:
           POSTHOG_KEY: ${{ secrets.POSTHOG_KEY }}
           POSTHOG_HOST: ${{ secrets.POSTHOG_HOST }}
         run: bun run build:app:win
+      - name: Upload the unsigned MSI for SignPath
+        id: unsigned
+        if: env.SIGN == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-msi-unsigned
+          path: target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
+          if-no-files-found: error
+      - name: Sign the MSI (SignPath)
+        if: env.SIGN == 'true'
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'atlas' }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG || 'test-signing' }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG || 'MSI_installer' }}
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: signed-msi
       - name: Attach the MSI to the release
         shell: bash
-        run: gh release upload "$TAG" target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi --clobber
+        run: |
+          set -euo pipefail
+          if [ "$SIGN" = true ]; then
+            msi=(signed-msi/*.msi)
+          else
+            echo "::warning title=Windows release unsigned::SIGNPATH_ORGANIZATION_ID is not set"
+            msi=(target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi)
+          fi
+          gh release upload "$TAG" "${msi[@]}" --clobber
 
   # Tells installed apps the release exists: sets the PostHog feature-flag
   # payloads the updater reads (`telemetry::fetch_remote_config`): `version`,
