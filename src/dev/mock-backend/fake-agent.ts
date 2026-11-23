@@ -738,6 +738,34 @@ export function requestPermissionLongArgs(): Promise<void> {
   });
 }
 
+/** The whole command as the request's title and no input, as the native
+ *  agent sends it — checks the card stays small and scrolls the command
+ *  (`__atlasMock.actions.requestPermissionLongTitle`). */
+export function requestPermissionLongTitle(): Promise<void> {
+  const id = permId();
+  const script = [
+    "python3 - <<'EOF'",
+    "import re",
+    ...Array.from({ length: 40 }, (_, i) => `s = s.replace("before ${i}", "after ${i}")`),
+    'print("patched")',
+    "EOF",
+  ].join("\n");
+  return raisePermission({
+    transcriptCall: tool.run("patch the harness", { id, status: "pending" }),
+    title: script,
+    kind: "execute",
+    rawInput: undefined,
+    options: standardOptions("python3 scripts like this"),
+    result: (allowed) => (allowed ? "patched" : "Rejected by user."),
+    reply: (decision, option) =>
+      decision.kind === "cancelled"
+        ? "Okay — leaving the harness as it is."
+        : option && isAllowKind(option.kind)
+          ? "Patched."
+          : "Understood — I won't patch it.",
+  });
+}
+
 /** ExitPlanMode's two-panel review (`__atlasMock.actions.requestPermissionPlan`). */
 export function requestPermissionPlan(): Promise<void> {
   const id = permId();

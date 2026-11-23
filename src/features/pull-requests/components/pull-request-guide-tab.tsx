@@ -166,7 +166,8 @@ function RunPermission({ run }: { run: Extract<GuideRun, { status: "running" }> 
         <ShieldQuestion aria-hidden className="size-4 shrink-0 text-warning" />
         {run.agentLabel} asks to run something
       </p>
-      <p className="font-mono text-xs break-words whitespace-pre-wrap text-secondary-foreground">
+      {/* Bounded: an agent may send its whole command as the title. */}
+      <p className="max-h-32 overflow-auto font-mono text-xs break-words whitespace-pre-wrap text-secondary-foreground">
         {request.toolCall.title ?? "A tool call"}
       </p>
       {input !== null ? (
