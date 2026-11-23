@@ -11,6 +11,7 @@ import {
   requestElicitationUrl,
   requestPermission,
   requestPermissionLongArgs,
+  requestPermissionLongTitle,
   requestPermissionOutward,
   requestPermissionOutwardMessage,
   requestPermissionOutwardPreparing,
@@ -21,11 +22,13 @@ import {
 } from "../fake-agent";
 
 export const permissionActions = {
-  // `permission-modal.tsx`: a plain command, a long/multi-line one, the
+  // `permission-modal.tsx`: a plain command, a long/multi-line one (as the
+  // input, and as the title), the
   // ExitPlanMode review, Claude's AskUserQuestion bridge (single and
   // multi-question), and the outward action's three cards (ADR-0014).
   requestPermission,
   requestPermissionLongArgs,
+  requestPermissionLongTitle,
   requestPermissionPlan,
   requestPermissionQuestion,
   requestPermissionQuestionMulti,

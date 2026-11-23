@@ -28,7 +28,13 @@ export interface PermissionOptionItem {
 }
 
 export type PermissionCardHeading =
-  | { kind: "tool"; title: string }
+  | {
+      kind: "tool";
+      title: string;
+      /** The title names the call's kind ("a command"), so it reads as part
+       *  of the sentence, not as code. */
+      generic?: boolean;
+    }
   | { kind: "outward"; approval: OutwardApproval }
   | { kind: "preparing"; preparing: OutwardPreparing };
 
@@ -46,8 +52,9 @@ export function PermissionCardView({
   onSelect,
 }: {
   heading: PermissionCardHeading;
-  /** The tool call's input as formatted text, or null for none. Ignored on an
-   *  outward card, which shows the words it will post instead. */
+  /** The tool call's input as formatted text (and its title, when that is
+   *  too long for the headline), or null for none. Ignored on an outward
+   *  card, which shows the words it will post instead. */
   preview: string | null;
   /** The edits the request proposes, from its own diff blocks. Drawn on a
    *  tool card only, above its input. */
@@ -80,7 +87,12 @@ export function PermissionCardView({
             ) : (
               <div className="text-base font-medium leading-snug text-foreground">
                 The agent wants to run{" "}
-                <span className="font-mono text-foreground">{heading.title}</span>?
+                {heading.generic ? (
+                  heading.title
+                ) : (
+                  <span className="font-mono break-words text-foreground">{heading.title}</span>
+                )}
+                ?
               </div>
             )}
             {queueNote && (
@@ -103,7 +115,13 @@ export function PermissionCardView({
             ))}
             {preview ? (
               <div className="mx-3 mt-2 rounded-md border border-border bg-background px-3 py-2">
-                <pre className="max-h-32 overflow-auto whitespace-pre-wrap font-mono text-xs leading-snug text-secondary-foreground">
+                <pre
+                  data-testid="permission-preview"
+                  // The one part of the card that grows with the request, so
+                  // it is the part that scrolls: the options below stay on
+                  // screen whatever the agent sent.
+                  className="max-h-32 overflow-auto whitespace-pre-wrap font-mono text-xs leading-snug text-secondary-foreground"
+                >
                   {preview}
                 </pre>
               </div>
