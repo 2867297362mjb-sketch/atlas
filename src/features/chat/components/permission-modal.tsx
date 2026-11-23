@@ -16,6 +16,7 @@ import { useChatStore } from "../stores/chat-store";
 import { respondAndPopPermission, type PermissionAnswer } from "../lib/respond-permission";
 import { isChatTabShown } from "../lib/chat-tab-session";
 import { permissionDiffsOf, permissionLocationsOf } from "../lib/permission-diff";
+import { permissionSummaryOf } from "../lib/permission-summary";
 import { useLayoutStore } from "@/features/layout/stores/layout-store";
 import { deepActiveElement } from "@/lib/deep-active-element";
 import { Markdown } from "@/lib/markdown";
@@ -26,7 +27,6 @@ import { ApprovalCardView, type Answer } from "./views/approval-card-view";
 import { PermissionCardView, type PermissionOptionItem } from "./views/permission-card-view";
 import { PlanReviewView } from "./views/plan-review-view";
 import { ComposerDrawer } from "./composer-drawer";
-import type { PendingPermission } from "@/types/acp";
 import { agentMeta } from "@/features/agents/lib/agent-meta";
 import { isRecordingShortcut } from "@/features/keybindings/lib/recording";
 import {
@@ -279,7 +279,9 @@ function PermissionModalImpl({ tabId, onSendMessage }: PermissionModalProps) {
     onSendMessage?.(text);
   };
 
-  const title = current.toolCall.title ?? current.toolCall.kind ?? "Tool call";
+  // The headline and the preview box's text: a title too long for a headline
+  // moves to the box (`permission-summary.ts`).
+  const summary = permissionSummaryOf(current.toolCall);
   const planMarkdown = extractPlanMarkdown(current.toolCall);
   const questions = extractQuestions(current.toolCall);
   const outward = outwardApprovalOf(current.toolCall);
@@ -358,9 +360,9 @@ function PermissionModalImpl({ tabId, onSendMessage }: PermissionModalProps) {
               ? { kind: "preparing", preparing }
               : outward
                 ? { kind: "outward", approval: outward }
-                : { kind: "tool", title }
+                : { kind: "tool", title: summary.title, generic: summary.generic }
           }
-          preview={outward || preparing ? null : previewOf(current.toolCall)}
+          preview={outward || preparing ? null : summary.preview}
           diffs={diffs}
           locations={locations}
           options={optionItems}
@@ -374,21 +376,4 @@ function PermissionModalImpl({ tabId, onSendMessage }: PermissionModalProps) {
       )}
     </div>
   );
-}
-
-/** The tool call's input as the card previews it: pretty JSON, capped at
- *  4,000 characters, or null when the call carries none. */
-function previewOf(tc: PendingPermission["toolCall"]): string | null {
-  const inputValue =
-    (tc as Record<string, unknown>).rawInput ?? (tc as Record<string, unknown>).input;
-  return inputValue !== undefined ? safeStringify(inputValue, 2) : null;
-}
-
-function safeStringify(v: unknown, indent: number): string {
-  try {
-    const s = JSON.stringify(v, null, indent);
-    return s.length > 4000 ? s.slice(0, 4000) + "\n…(truncated)" : s;
-  } catch {
-    return String(v);
-  }
 }
