@@ -260,8 +260,10 @@ Only the Windows installer built by this repository's release workflow
 
 **Team roles**
 
-- Committers and reviewers: [the Atlas maintainers](https://github.com/orgs/tryatlas/people)
-- Approvers: [name or GitHub handle of each person who approves signing requests]
+- Committers and reviewers: [@ahammadnafiz](https://github.com/ahammadnafiz),
+  [@monzim](https://github.com/monzim), [@pacifio](https://github.com/pacifio),
+  [@Ukaykhingmarma28](https://github.com/Ukaykhingmarma28), [@uzayer](https://github.com/uzayer)
+- Approvers: [@pacifio](https://github.com/pacifio)
 
 **Privacy**
 
