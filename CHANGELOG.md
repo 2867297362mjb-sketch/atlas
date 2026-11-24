@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.5.3](https://github.com/tryatlas/atlas/compare/alpha-0.5.1...alpha-0.5.3) (2026-11-23)
+
+
+### Features
+
+* **ci:** ci:local places jobs from a setting, never from whether Docker is up ([#690](https://github.com/tryatlas/atlas/issues/690)) ([19551a3](https://github.com/tryatlas/atlas/commit/19551a30946ae2a12c07240d195076ea56a81f75))
+
+
+### Fixes
+
+* **chat:** keep the permission card small when the title is a whole command ([1ca0656](https://github.com/tryatlas/atlas/commit/1ca0656df646c862f78cc459e00d72707e25700b))
+* **chat:** keep the permission card small, and sign the Windows MSI with SignPath ([#692](https://github.com/tryatlas/atlas/issues/692)) ([c7dbd05](https://github.com/tryatlas/atlas/commit/c7dbd054a76db7c392211f307abd5b87cca7d6ed))
+
+
+### Chores
+
+* release 0.5.3 ([dcbaacd](https://github.com/tryatlas/atlas/commit/dcbaacd841206e8c3f26a92f134f86bc29a00f6c))
+
 ## [0.5.1](https://github.com/tryatlas/atlas/compare/alpha-0.5.0...alpha-0.5.1) (2026-11-21)
 
 
